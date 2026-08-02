@@ -1,0 +1,14 @@
+{
+  "nodeModulesDir": "manual",
+  "compilerOptions": {
+    "checkJs": true,
+    "lib": ["dom", "dom.iterable", "es2022", "deno.ns"],
+    "strict": true
+  },
+  "tasks": {
+    "build": "deno run --allow-read --allow-write --allow-run=npx scripts/build.mjs",
+    "check": "deno check src/app.js scripts/build.mjs src/features/discovery/*.js src/routes/*.js src/startup/*.js worker/*.js companion/*.js tests/*.test.js",
+    "serve": "python3 -m http.server 4173 --directory dist",
+    "test": "deno test --allow-read --allow-write tests/"
+  }
+}

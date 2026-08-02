@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Milestone 3E Podcast Provider Recovery</title>
+  <style>
+    :root{color-scheme:light dark;--paper:#f5f7f4;--ink:#17211e;--muted:#53615c;--line:#b9c8c2;--signal:#126f64;--accent:#a54131;--gold:#9b6a00;--panel:#fff;--soft:#e4eeea;--dark:#15201c}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,sans-serif;letter-spacing:0}main{max-width:1120px;margin:auto;padding:40px 24px 80px}h1,h2{font-family:Georgia,serif}h1{max-width:850px;margin:.12em 0;font-size:clamp(2.25rem,6vw,4.7rem);line-height:1.02}.eyebrow{color:var(--accent);font-weight:800;text-transform:uppercase}.lede{max-width:780px;color:var(--muted);font-size:1.1rem}.notice{margin:28px 0;border-left:6px solid var(--accent);background:var(--soft);padding:18px 20px}.band{border-top:1px solid var(--line);padding:30px 0}.facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;border:1px solid var(--line);background:var(--line)}.fact{background:var(--panel);padding:16px}.fact strong{display:block;margin-top:5px;font-size:1.25rem}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.choice{display:block;min-height:100%;border:1px solid var(--line);border-top:5px solid var(--gold);background:var(--panel);padding:20px;cursor:pointer}.choice:has(input:checked){border-color:var(--signal);border-top-color:var(--signal);box-shadow:0 0 0 2px var(--signal)}.choice input{accent-color:var(--signal)}.choice strong{display:block;margin:10px 0 4px;font-size:1.18rem}.choice p{color:var(--muted)}.tag{display:inline-block;background:var(--soft);padding:3px 7px;font-size:.8rem;font-weight:800}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:12px}th{color:var(--muted)}a{color:var(--signal)}.summary{position:sticky;bottom:12px;border-left:6px solid #e0ba43;background:var(--dark);color:#fff;padding:16px}.summary strong{color:#8ee0d4}@media(max-width:780px){.grid,.facts{grid-template-columns:1fr}.summary{position:static}}@media(prefers-color-scheme:dark){:root{--paper:#101714;--ink:#edf5f1;--muted:#b5c4be;--line:#52615c;--signal:#62c9ba;--accent:#ee8b78;--gold:#d6aa3c;--panel:#17211e;--soft:#26342f;--dark:#edf5f1}.summary{color:#17211e}.summary strong{color:#126f64}}
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Milestone 3E decision gate</p>
+  <h1>Restore podcast discovery without bypassing provider controls</h1>
+  <p class="lede">Podcast Index currently rejects free-email registration. Deeper research found three legitimate alternatives that stay within the current personal-use budget, including one with comparable catalog and search performance.</p>
+  <div class="notice"><strong>Boundary:</strong> no temporary email, masked identity, duplicate account, or undisclosed scraping. The selected route must preserve the shared educational policy and source-rights workflow.</div>
+
+  <section class="band" aria-labelledby="baseline"><h2 id="baseline">Current constraints</h2><div class="facts">
+    <div class="fact"><span>New monthly ceiling</span><strong>USD 15</strong></div>
+    <div class="fact"><span>Required granularity</span><strong>Podcast show or feed</strong></div>
+    <div class="fact"><span>Browser budget</span><strong>No increase</strong></div>
+    <div class="fact"><span>Transcript policy</span><strong>Rights-reviewed later</strong></div>
+  </div></section>
+
+  <section class="band" aria-labelledby="options"><h2 id="options">1. Recovery path</h2><div class="grid">
+    <label class="choice"><input type="radio" name="provider" value="A" checked> <span class="tag">Recommended</span><strong>A. Taddy Free</strong><p>Full-text search across 4M+ podcasts and 200M episodes, explicit RSS URLs, relevance controls, safe mode, and documented feed freshness. Free includes 500 requests/month with no card.</p><p><b>Tradeoff:</b> requires a Taddy key pair and strict creator-removal handling. Pro is $75/month, so this choice stays on Free until a later cost review.</p></label>
+    <label class="choice"><input type="radio" name="provider" value="B"><strong>B. PodKit Free or Starter</strong><p>Normalized show search and RSS feed URLs with 24-hour provider caching. Free includes 500 requests/month; Starter is $15/month for 10,000.</p><p><b>Tradeoff:</b> it is a smaller intermediary that currently combines Apple results with a Podcast Index fallback, rather than maintaining an independent catalog.</p></label>
+    <label class="choice"><input type="radio" name="provider" value="C"><strong>C. Apple plus fyyd</strong><p>Use Apple as the no-key primary directory and fyyd as a best-effort supplemental source. No new credential or dollar cost.</p><p><b>Tradeoff:</b> Apple is limited to about 20 calls/minute and its docs are archived; fyyd publishes no SLA and cannot be authoritative.</p></label>
+  </div></section>
+
+  <section class="band" aria-labelledby="comparison"><h2 id="comparison">Comparison</h2><table>
+    <thead><tr><th>Path</th><th>Coverage and search</th><th>Current cost</th><th>Library evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Taddy Free</td><td>4M+ shows; full-text, exactness/popularity and language/genre filters</td><td>USD 0 for 500 requests/month</td><td>Explicit RSS plus feed-refresh and blocked/private evidence</td></tr>
+      <tr><td>PodKit</td><td>Apple-backed normalized search with Podcast Index fallback</td><td>USD 0 for 500; $15 for 10,000</td><td>Explicit RSS returned; caching allowed</td></tr>
+      <tr><td>Apple + fyyd</td><td>Broad Apple catalog plus best-effort open supplement</td><td>USD 0</td><td>Feed only when explicitly returned; weaker freshness evidence</td></tr>
+    </tbody>
+  </table><p><small>Primary references: <a href="https://taddy.org/developers/podcast-api/search">Taddy search</a>, <a href="https://taddy.org/developers/pricing">Taddy pricing</a>, <a href="https://taddy.org/developers/podcast-api/feed-refresh-details">Taddy freshness</a>, <a href="https://podkitapp.com/podcast-search-api">PodKit search</a>, and <a href="https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/Searching.html">Apple search and limits</a>.</small></p></section>
+
+  <section class="band" aria-labelledby="excluded"><h2 id="excluded">Why other large providers are not shortlisted</h2><table>
+    <thead><tr><th>Provider</th><th>Strength</th><th>Blocking issue</th></tr></thead>
+    <tbody>
+      <tr><td>Podchaser</td><td>6M+ shows and strong enrichment</td><td>$30/month Starter exceeds the current application ceiling</td></tr>
+      <tr><td>Podscan</td><td>Transcript and episode intelligence</td><td>Starts at $100/month and is excessive for show discovery</td></tr>
+      <tr><td>Listen Notes</td><td>Mature search and directory</td><td>Free/Pro terms prohibit the durable server-side storage Library requires</td></tr>
+    </tbody>
+  </table></section>
+
+  <section class="band" aria-labelledby="tests"><h2 id="tests">2. Test gate</h2><label class="choice"><input id="tests-box" type="checkbox" checked><strong>Approve Milestone 3E recovery tests</strong><p>Approves the provider, shared-policy, failure, no-promotional-storage, regression, and fixed-budget tests in <code>TESTS.md</code>. Implementation still waits for your reply.</p></label></section>
+  <div class="summary" role="status" aria-live="polite">Reply: <strong id="answer">Provider A; approve tests</strong></div>
+</main>
+<script>
+  const update=()=>{const provider=document.querySelector('input[name=provider]:checked').value;const tests=document.querySelector('#tests-box').checked?'approve tests':'revise tests';document.querySelector('#answer').textContent=`Provider ${provider}; ${tests}`};document.addEventListener('change',update);update();
+</script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Milestone 3D Central Search Options</title>
+  <style>
+    :root{color-scheme:light dark;--paper:#f7f8f5;--ink:#17211e;--muted:#52615c;--line:#bac9c3;--signal:#126f64;--accent:#a54131;--warm:#9b6a00;--panel:#fff;--soft:#e6efeb}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,sans-serif;letter-spacing:0}main{max-width:1120px;margin:auto;padding:40px 24px 72px}h1,h2{font-family:Georgia,serif}h1{font-size:clamp(2.2rem,6vw,4.8rem);margin:.1em 0}.eyebrow{color:var(--accent);font-weight:800;text-transform:uppercase}.lede{max-width:760px;color:var(--muted);font-size:1.1rem}.band{border-top:1px solid var(--line);padding:28px 0}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.choice{display:block;border:1px solid var(--line);border-top:5px solid var(--warm);background:var(--panel);padding:20px;cursor:pointer}.choice:has(input:checked){border-color:var(--signal);border-top-color:var(--signal);box-shadow:0 0 0 2px var(--signal)}.choice input{accent-color:var(--signal)}.choice strong{display:block;font-size:1.15rem;margin:10px 0}.choice p{color:var(--muted)}.tag{display:inline-block;background:var(--soft);padding:3px 7px;font-size:.8rem;font-weight:800}.facts{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}.fact{background:var(--panel);padding:16px}.fact strong{display:block;font-size:1.35rem}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:12px}th{color:var(--muted)}.summary{position:sticky;bottom:12px;background:var(--ink);color:white;padding:16px;border-left:6px solid #e0ba43}.summary strong{color:#8ee0d4}a{color:var(--signal)}code{font:inherit;font-weight:700}@media(max-width:760px){.grid,.facts{grid-template-columns:1fr}.summary{position:static}}@media(prefers-color-scheme:dark){:root{--paper:#101714;--ink:#eef5f1;--muted:#b5c4be;--line:#52615c;--signal:#62c9ba;--accent:#ee8b78;--warm:#d6aa3c;--panel:#17211e;--soft:#26342f}.summary{background:#eef5f1;color:#17211e}.summary strong{color:#126f64}}
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Milestone 3D decision gate</p>
+  <h1>One search surface, real provider boundaries</h1>
+  <p class="lede">The current platform can search YouTube and parse a known RSS URL. It cannot yet keyword-search the web or a podcast directory. Select the provider stack and result granularity before implementation. No credentials are requested by this page.</p>
+
+  <section class="band" aria-labelledby="baseline"><h2 id="baseline">Budget baseline</h2><div class="facts">
+    <div class="fact"><span>Aggregate raw</span><strong>182,000 B</strong><small>Exact current ceiling</small></div>
+    <div class="fact"><span>Aggregate gzip</span><strong>57,564 B</strong><small>436 B available</small></div>
+    <div class="fact"><span>Safe reclaim</span><strong>Several KB</strong><small>Retire browser RSS parser</small></div>
+    <div class="fact"><span>Current app cost</span><strong>USD 0</strong><small>Within approved Free caps</small></div>
+  </div></section>
+
+  <section class="band" aria-labelledby="providers"><h2 id="providers">1. Live provider stack</h2><div class="grid">
+    <label class="choice"><input type="radio" name="provider" value="A" checked> <span class="tag">Recommended</span><strong>A. Full directories</strong><p>Brave for web documents, Podcast Index for podcast feeds, official YouTube metadata for videos, and optional public Wikimedia search. Best type evidence and podcast precision.</p><p><b>New setup:</b> Brave and Podcast Index credentials.</p></label>
+    <label class="choice"><input type="radio" name="provider" value="B"><strong>B. Lean single index</strong><p>Brave handles web and podcast-oriented queries; YouTube remains official. One fewer provider, but podcast results and type evidence are less precise.</p><p><b>New setup:</b> Brave credential only.</p></label>
+    <label class="choice"><input type="radio" name="provider" value="C"><strong>C. Interface first</strong><p>One search box for YouTube plus add-by-link. No new external provider. Lowest setup, but it does not yet satisfy broad web and podcast search.</p><p><b>New setup:</b> none.</p></label>
+  </div></section>
+
+  <section class="band" aria-labelledby="granularity"><h2 id="granularity">2. Result granularity</h2><div class="grid">
+    <label class="choice"><input type="radio" name="granularity" value="A" checked> <span class="tag">Recommended</span><strong>A. Hybrid source boundary</strong><p>Web publisher/root sources, podcast feeds/channels, and individual educational YouTube videos. This follows the approved Library model and the YouTube transcript exception.</p></label>
+    <label class="choice"><input type="radio" name="granularity" value="B"><strong>B. Provider-native items</strong><p>Articles, posts, podcast episodes, and videos appear directly. More precise discovery, but Library becomes more item-heavy.</p></label>
+    <label class="choice"><input type="radio" name="granularity" value="C"><strong>C. Publisher only</strong><p>Only sites, forum roots, podcast channels, and video channels. Clean Library, but individual educational video approval and transcript upload become indirect.</p></label>
+  </div></section>
+
+  <section class="band" aria-labelledby="cost"><h2 id="cost">Marginal provider cost</h2><table>
+    <thead><tr><th>Provider</th><th>Per central search</th><th>Current marginal model</th><th>Boundary</th></tr></thead>
+    <tbody>
+      <tr><td>Brave Search</td><td>1 request when web is selected</td><td>USD 5 / 1,000 requests with USD 5 monthly credits. First 1,000 eligible requests/month are covered; then USD 0.005/request.</td><td>Metadata and links only</td></tr>
+      <tr><td>Podcast Index</td><td>1 request when podcasts are selected</td><td>No per-request price is published in the reviewed API docs. Credential and terms approval remain a gate; do not model it as guaranteed free.</td><td>Feed/channel metadata</td></tr>
+      <tr><td>YouTube Data API</td><td>1 search plus 1 status read</td><td>No new dollar charge in the approved deployment; bounded by the existing 100-search Pacific-day cap.</td><td>Official metadata, link/embed only</td></tr>
+      <tr><td>Cloudflare Worker</td><td>One authenticated fan-out request</td><td>USD 0 while the existing Free limits continue to pass hosted acceptance.</td><td>Typed aggregation only</td></tr>
+    </tbody>
+  </table><p><small>Sources: <a href="https://brave.com/search/api/">Brave Search API pricing</a>, <a href="https://podcastindex-org.github.io/docs-api/">Podcast Index API docs</a>, and <a href="https://developers.google.com/youtube/v3/docs/search/list">YouTube search documentation</a>.</small></p></section>
+
+  <section class="band"><h2>Fixed implementation choices</h2><ul>
+    <li>One labelled Discover search field with native expandable filters.</li>
+    <li>Default result limit 10; selectable 5, 10, or 20; aggregate limit is applied after canonical deduplication.</li>
+    <li>YouTube query is normalized and augmented on the Worker, then filtered by a versioned educational metadata policy.</li>
+    <li>Library search remains local to saved D1 sources.</li>
+    <li>Reclaim space first. Stop for a measured budget revision if fixed budgets cannot pass without compromise.</li>
+  </ul></section>
+
+  <section class="band"><h2>3. Tests</h2><label class="choice"><input id="tests" type="checkbox" checked><strong>Approve Milestone 3D tests</strong><p>Approves the tests in <code>TESTS.md</code>. Implementation still waits for your reply.</p></label></section>
+  <div class="summary" role="status" aria-live="polite">Reply: <strong id="answer">Provider A; Granularity A; approve tests</strong></div>
+</main>
+<script>
+  const update=()=>{const p=document.querySelector('input[name=provider]:checked').value,g=document.querySelector('input[name=granularity]:checked').value,t=document.querySelector('#tests').checked?'approve tests':'revise tests';document.querySelector('#answer').textContent=`Provider ${p}; Granularity ${g}; ${t}`};document.addEventListener('change',update);update();
+</script>
+</body>
+</html>

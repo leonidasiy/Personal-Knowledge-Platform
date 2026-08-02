@@ -1,0 +1,94 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "resonance-discovery",
+  "main": "worker/cloudflare-entry.mjs",
+  "compatibility_date": "2026-07-21",
+  "compatibility_flags": [
+    "global_fetch_strictly_public",
+    "nodejs_compat"
+  ],
+  "browser": {
+    "binding": "SOURCE_BROWSER",
+    "remote": true
+  },
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api",
+      "/api/*"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  },
+  "vars": {
+    "ALLOWED_ORIGIN": "https://resonance-discovery.lirenleonidas.workers.dev",
+    "ACCESS_ISSUER": "https://lirenleonidas.cloudflareaccess.com",
+    "ACCESS_AUDIENCE": "eb67c4c5c651b3dbd48843095f1822ea4cca055d028bf48e991872915a415087",
+    "ACCESS_OWNER_EMAIL": "lirenleonidas@gmail.com",
+    "ACCESS_OWNER_ID": "personal-owner-v1",
+    "TRANSCRIPT_LANGUAGES": "en",
+    "YOUTUBE_SEARCH_DAILY_LIMIT": "100",
+    "YOUTUBE_GENERAL_DAILY_LIMIT": "10000",
+    "SOURCE_INGESTION_POLICY_VERSION": "bounded-source-v1",
+    "SOURCE_BROWSER_ACCOUNT_SCOPE": "resonance-browser-run-free-v1",
+    "SOURCE_MANUAL_MAX_BYTES": "2097152",
+    "SOURCE_MANUAL_MAX_CHARACTERS": "1000000",
+    "SOURCE_MANUAL_MEDIA_TYPES": "text/plain,text/vtt",
+    "SOURCE_R2_ACCOUNT_SCOPE": "resonance-r2-free-v1",
+    "SOURCE_R2_STORED_BYTES_LIMIT": "8589934592",
+    "SOURCE_R2_CLASS_A_MONTHLY_LIMIT": "100000",
+    "SOURCE_R2_CLASS_B_MONTHLY_LIMIT": "1000000",
+    "SOURCE_R2_OBSERVATION_MAX_AGE_MS": "86400000"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "YOUTUBE_QUOTA_LEDGER",
+        "class_name": "YouTubeQuotaDurableObject"
+      },
+      {
+        "name": "TRANSCRIPT_AUTHORIZATION_LEDGER",
+        "class_name": "PublisherTranscriptAuthorizationDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "youtube-quota-sqlite-v1",
+      "new_sqlite_classes": [
+        "YouTubeQuotaDurableObject"
+      ]
+    },
+    {
+      "tag": "publisher-transcript-authorization-sqlite-v1",
+      "new_sqlite_classes": [
+        "PublisherTranscriptAuthorizationDurableObject"
+      ]
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "SOURCE_LIBRARY_DB",
+      "database_name": "resonance-source-library",
+      "database_id": "a5996f69-07e4-4a15-a41e-282133571d0a",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SOURCE_CONTENT_BUCKET",
+      "bucket_name": "resonance-source-content"
+    }
+  ]
+  // Configure ALLOWED_ORIGIN, ACCESS_ISSUER, ACCESS_AUDIENCE,
+  // ACCESS_OWNER_EMAIL, ACCESS_OWNER_ID, TRANSCRIPT_LANGUAGES, and the
+  // server-only YOUTUBE_API_KEY, BRAVE_SEARCH_API_KEY, TADDY_USER_ID, and
+  // TADDY_API_KEY secrets in Cloudflare.
+  // Bind a private R2 bucket as SOURCE_CONTENT_BUCKET only when manual material
+  // storage is activated; no public bucket URL is used.
+}

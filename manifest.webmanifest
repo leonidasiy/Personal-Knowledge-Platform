@@ -1,0 +1,25 @@
+{
+  "name": "Resonance Learning",
+  "short_name": "Resonance",
+  "description": "A private adaptive learning workspace.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f6f3",
+  "theme_color": "#176a61",
+  "icons": [
+    {
+      "src": "./assets/icon-192.webp",
+      "sizes": "192x192",
+      "type": "image/webp",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./assets/icon-512.webp",
+      "sizes": "512x512",
+      "type": "image/webp",
+      "purpose": "any maskable"
+    }
+  ]
+}

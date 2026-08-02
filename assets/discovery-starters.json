@@ -1,0 +1,90 @@
+{
+  "source": {
+    "sourceId": "resonance-starter-music-v1",
+    "authoritativeIdentity": "resonance-attributed-starter-music-v1",
+    "identityEvidence": [
+      {
+        "reference": "https://learningmusic.ableton.com/",
+        "provenance": "Ableton Learning Music publisher resource"
+      },
+      {
+        "reference": "https://learningsynths.ableton.com/",
+        "provenance": "Ableton Learning Synths publisher resource"
+      },
+      {
+        "reference": "https://viva.pressbooks.pub/openmusictheory/",
+        "provenance": "Open Music Theory publisher resource"
+      },
+      {
+        "reference": "https://www.musictheory.net/lessons",
+        "provenance": "musictheory.net publisher resource"
+      }
+    ],
+    "adapterId": "bundled-attributed-starters",
+    "adapterVersion": "v1",
+    "submittedUrl": "https://learningmusic.ableton.com/",
+    "canonicalUrl": "https://learningmusic.ableton.com/"
+  },
+  "items": [
+    {
+      "itemId": "ableton-learning-music",
+      "identityEvidence": [
+        {
+          "reference": "https://learningmusic.ableton.com/",
+          "provenance": "Ableton Learning Music publisher resource"
+        }
+      ],
+      "title": "Make beats, melodies, basslines and song structures",
+      "canonicalUrl": "https://learningmusic.ableton.com/",
+      "contentDigest": "ableton-learning-music:link-metadata-v1",
+      "publisherLabel": "Ableton Learning Music",
+      "publishedAt": null,
+      "podcast": null
+    },
+    {
+      "itemId": "ableton-learning-synths",
+      "identityEvidence": [
+        {
+          "reference": "https://learningsynths.ableton.com/",
+          "provenance": "Ableton Learning Synths publisher resource"
+        }
+      ],
+      "title": "Explore synthesis by shaping sound",
+      "canonicalUrl": "https://learningsynths.ableton.com/",
+      "contentDigest": "ableton-learning-synths:link-metadata-v1",
+      "publisherLabel": "Ableton Learning Synths",
+      "publishedAt": null,
+      "podcast": null
+    },
+    {
+      "itemId": "open-music-theory",
+      "identityEvidence": [
+        {
+          "reference": "https://viva.pressbooks.pub/openmusictheory/",
+          "provenance": "Open Music Theory publisher resource"
+        }
+      ],
+      "title": "Open Music Theory",
+      "canonicalUrl": "https://viva.pressbooks.pub/openmusictheory/",
+      "contentDigest": "open-music-theory:link-metadata-v1",
+      "publisherLabel": "Open Music Theory",
+      "publishedAt": null,
+      "podcast": null
+    },
+    {
+      "itemId": "musictheory-net-lessons",
+      "identityEvidence": [
+        {
+          "reference": "https://www.musictheory.net/lessons",
+          "provenance": "musictheory.net publisher resource"
+        }
+      ],
+      "title": "Music theory lessons and exercises",
+      "canonicalUrl": "https://www.musictheory.net/lessons",
+      "contentDigest": "musictheory-net-lessons:link-metadata-v1",
+      "publisherLabel": "musictheory.net",
+      "publishedAt": null,
+      "podcast": null
+    }
+  ]
+}

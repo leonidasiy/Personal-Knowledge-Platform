@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f6f3" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="A private adaptive learning workspace for music knowledge."
+    />
+    <link
+      rel="manifest"
+      href="./manifest.webmanifest"
+      crossorigin="use-credentials"
+    />
+    <link rel="icon" href="./assets/icon-192.webp" type="image/webp" />
+    <link rel="stylesheet" href="./src/styles.css" />
+    <title>Resonance Learning</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to learning content</a>
+    <div id="app"></div>
+    <noscript>Resonance requires JavaScript to run its local learning
+      workspace.</noscript>
+    <script id="experience-presets" type="application/json">
+      {
+        "visualThemes": [
+          {
+            "id": "studio-signal",
+            "label": "Studio Signal",
+            "source": "frontend-customization-options.html approved 2026-07-20"
+          },
+          {
+            "id": "collection-index",
+            "label": "Collection Index",
+            "source": "frontend-customization-options.html approved 2026-07-20"
+          },
+          {
+            "id": "learning-pulse",
+            "label": "Learning Pulse",
+            "source": "frontend-customization-options.html approved 2026-07-20"
+          }
+        ],
+        "layouts": [
+          {
+            "id": "guided-stack",
+            "label": "Guided Stack",
+            "source": "frontend-customization-options.html approved 2026-07-20"
+          },
+          {
+            "id": "split-desk",
+            "label": "Split Desk",
+            "source": "frontend-customization-options.html approved 2026-07-20"
+          },
+          {
+            "id": "compact-index",
+            "label": "Compact Index",
+            "source": "frontend-customization-options.html approved 2026-07-20"
+          }
+        ]
+      }
+    </script>
+    <script id="app-copy" type="application/json">
+      {
+        "dailyTargetsCreate": "Daily targets could not be created.",
+        "savedTargetsHidden": "Saved targets are hidden. Reload.",
+        "savedSetHidden": "The saved set is hidden. Reload.",
+        "starterUnavailable": "Starter recommendations could not be opened.",
+        "discoveryUnavailable": "Saved discovery data could not be opened.",
+        "reviewRouteUnavailable": "Recall could not open. Refresh the route to try again.",
+        "libraryRouteUnavailable": "The collection could not open. Refresh the route to try again.",
+        "recallRuntimeUnavailable": "Review scheduling could not open. Refresh the route to try again.",
+        "preferenceNotSaved": "No preference was saved.",
+        "preferenceSaveFailed": "The preference could not be saved.",
+        "studySaved": "Study status saved.",
+        "answerSavedReload": "Answer saved. Reload to show it.",
+        "promptOutsideRecall": "This prompt is outside today's recall.",
+        "exported": "Local data exported.",
+        "exportFailed": "Local data could not be exported.",
+        "eraseFailed": "Local data could not be erased.",
+        "targetsSaved": "Learning targets saved for the next set.",
+        "finishRecall": "Finish recall before adding another set.",
+        "soundsUnavailable": "Interface sounds were unavailable and turned off.",
+        "feedExpired": "This feed expired. Start a new session.",
+        "feedUnavailable": "This feed is no longer available.",
+        "pageSizeUnsupported": "This feed page size is unsupported.",
+        "cursorInvalid": "This page cursor is invalid. Start again.",
+        "feedOwnerMismatch": "This feed belongs to another user.",
+        "pageMismatch": "This page does not match this feed.",
+        "lessonUnavailable": "A feed lesson is no longer available.",
+        "feedOpenFailed": "The feed could not be opened.",
+        "storageUnavailable": "Browser storage is unavailable. Check privacy settings.",
+        "learningDataUnavailable": "Learning data could not be opened.",
+        "offlineMiss": "This page is not offline. Reconnect and open it.",
+        "offlineUpgrade": "Offline update failed. Reconnect and reload.",
+        "offlineFailed": "Offline access failed. Reconnect and reload.",
+        "settingsRead": "Display settings cannot be read.",
+        "settingsWrite": "The display setting could not be saved.",
+        "settingsReset": "Display settings could not reset.",
+        "settingsInvalid": "Saved display settings are invalid.",
+        "openingApp": "<main class=\"loading-screen\" aria-busy=\"true\" aria-label=\"Loading learning data\"><span class=\"brand-mark\" aria-hidden=\"true\">R</span><p>Opening the feed...</p></main>",
+        "discoverFailed": "<section class=\"discover-route wide-view state-panel\" aria-labelledby=\"discover-title\"><p class=\"eyebrow\">Public sources</p><h1 id=\"discover-title\">Discover</h1><p>Discovery could not open.</p></section>",
+        "reviewOpening": "<section class=\"wide-view state-panel\" aria-busy=\"true\"><h1 id=\"review-title\">Review</h1><p>Opening recall...</p></section>",
+        "libraryOpening": "<section class=\"wide-view state-panel\" aria-busy=\"true\"><h1 id=\"library-title\">Library</h1><p>Opening collection...</p></section>",
+        "discoverMarkup": {
+          "route": "<section class=\"discover-route wide-view\" aria-labelledby=\"discover-title\" data-discovery-state=\"{{state}}\" data-discover-page=\"{{page}}\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Public sources</p><h1 id=\"discover-title\">Discover</h1></div></div>{{body}}</section>",
+          "controls": "<div class=\"discover-controls\"><form data-discovery-search-form><label for=\"discover-query\">Find a learning source</label><div class=\"discover-search-row\"><input id=\"discover-query\" name=\"query\" type=\"search\" autocomplete=\"off\" value=\"{{query}}\" placeholder=\"Try vocal technique, orchestration, or synthesis\" required{{disabled}}><button class=\"button primary\" type=\"submit\"{{disabled}}>Search</button></div><details class=\"discover-filters\"><summary>Filters</summary><fieldset><legend>Source types</legend><div class=\"discover-filter-options\">{{providerFilters}}</div></fieldset><label>Results<select name=\"limit\"{{disabled}}>{{limitOptions}}</select></label></details></form></div>",
+          "missingDetail": "<aside class=\"discover-detail state-panel\" role=\"status\" aria-labelledby=\"discover-detail-title\"><h2 id=\"discover-detail-title\">Item unavailable</h2><p>This result is no longer visible.</p><a class=\"button secondary\" href=\"#discover\">Back to results</a></aside>",
+          "selectDetail": "<aside class=\"discover-detail state-panel\" aria-labelledby=\"discover-detail-title\"><h2 id=\"discover-detail-title\">Select a result</h2><p>Inspect its provenance, rights, and evidence.</p></aside>",
+          "evidenceBoundary": "</dl><p class=\"discover-evidence-boundary\">Evidence only. No quiz has been generated from this item.</p>",
+          "statePanel": "<section class=\"state-panel\" {{attributes}} aria-labelledby=\"discover-state-title\"><h2 id=\"discover-state-title\">{{title}}</h2><p>{{message}}</p>{{action}}</section>",
+          "results": "<section class=\"discover-results\" aria-labelledby=\"discover-results-title\"><div class=\"discover-results-heading\"><h2 id=\"discover-results-title\">Results</h2><p>{{count}} shown</p></div><ol aria-label=\"Discovery results\">{{rows}}</ol></section>",
+          "resultRow": "<li><a href=\"#discover/item/{{urlId}}\" data-discovery-item-id=\"{{itemId}}\" {{selected}}><span>{{source}}</span><strong>{{title}}</strong><span>{{observed}}</span><span>Evidence: {{evidence}}</span></a></li>",
+          "youtubeConnected": "<div><span>YouTube API Services</span><p role=\"status\">YouTube search enabled. Resonance stores official result metadata for no more than 30 days. Delete YouTube metadata from Settings or erase local data.</p><p><a href=\"https://www.youtube.com/t/terms\" target=\"_blank\" rel=\"noopener noreferrer\">YouTube Terms of Service</a> · <a href=\"https://policies.google.com/privacy\" target=\"_blank\" rel=\"noopener noreferrer\">Google Privacy Policy</a> · <a href=\"https://security.google.com/settings/security/permissions\" target=\"_blank\" rel=\"noopener noreferrer\">Google security settings</a></p></div>",
+          "youtubeDisconnected": "<form data-youtube-policy-accept><span>YouTube API Services</span><p>Resonance uses official YouTube metadata and links only, retains metadata for no more than 30 days, and never downloads YouTube media, captions, or transcripts. You can delete YouTube metadata from Settings or erase local data. Support contact: the account owner configured for this private deployment.</p><label><input name=\"youtube-policy\" type=\"checkbox\" required> I accept the <a href=\"https://www.youtube.com/t/terms\" target=\"_blank\" rel=\"noopener noreferrer\">YouTube Terms of Service</a> and acknowledge the <a href=\"https://policies.google.com/privacy\" target=\"_blank\" rel=\"noopener noreferrer\">Google Privacy Policy</a> and <a href=\"https://security.google.com/settings/security/permissions\" target=\"_blank\" rel=\"noopener noreferrer\">Google security settings</a>.</label><button class=\"button secondary\" type=\"submit\"{{disabled}}>Enable YouTube search</button></form>",
+          "youtubeUnavailable": "<div><span>YouTube API Services</span><p role=\"status\">YouTube policy preference is unavailable. YouTube search remains disabled.</p></div>",
+          "failureMessages": {
+            "default": "Discovery could not complete the request.",
+            "YouTubeCredentialMissing": "YouTube search is not configured for this deployment.",
+            "YouTubePolicyAcceptanceRequired": "Accept the YouTube API Services policy before searching.",
+            "YouTubeCredentialRejected": "The YouTube service credential was rejected. Contact the deployment owner.",
+            "YouTubeSearchQuotaExceeded": "Today's YouTube search limit is reached. Try tomorrow.",
+            "YouTubeGeneralQuotaExceeded": "Today's YouTube result-detail limit is reached. Try tomorrow.",
+            "YouTubeProviderQuotaExceeded": "YouTube's project quota is reached. Try tomorrow.",
+            "YouTubeUpstreamUnavailable": "YouTube is temporarily unavailable. Try again later.",
+            "DiscoveryGatewayUnauthenticated": "Sign in to discovery and retry.",
+            "DiscoveryGatewayUnauthorized": "This account cannot use discovery.",
+            "DiscoveryGatewayRateLimited": "Discovery reached its limit. Try later.",
+            "DiscoveryGatewayTimedOut": "The source timed out. Try again.",
+            "DiscoverySourceProtocolUnsupported": "That source address is not allowed.",
+            "DiscoveryDestinationForbidden": "That source address is not allowed.",
+            "DiscoveryRedirectLimitExceeded": "That source exceeds the limit.",
+            "DiscoveryPayloadTooLarge": "That source exceeds the limit.",
+            "DiscoveryLimitExceeded": "That source exceeds the limit.",
+            "DiscoveryXmlMalformed": "That address is not a supported feed.",
+            "DiscoveryFormatUnsupported": "That address is not a supported feed.",
+            "DiscoveryFeedMetadataMissing": "That address is not a supported feed.",
+            "DiscoveryPodcastMetadataMalformed": "That address is not a supported feed.",
+            "DiscoveryRuntimeRecordInvalid": "Saved discovery data is invalid.",
+            "DiscoveryStarterInventoryInvalid": "Starter recommendations could not be opened."
+          },
+          "youtubeSource": {
+            "sourceId": "youtube-data-api-v3",
+            "adapterId": "youtube-data-api",
+            "adapterVersion": "youtube-data-api-v3-search-status-v1",
+            "authoritativeIdentity": "youtube-data-api-v3",
+            "identityEvidence": [{
+              "reference": "https://developers.google.com/youtube/v3/docs/search/list",
+              "provenance": "Official YouTube Data API v3 search contract"
+            }],
+            "canonicalUrl": "https://www.youtube.com/"
+          },
+          "sourceUnavailable": "<button class=\"button primary\" type=\"button\" disabled {{description}}>{{label}} link unavailable</button>",
+          "sourceLink": "<a class=\"button primary\" href=\"{{url}}\" target=\"_blank\" rel=\"noopener noreferrer\" aria-label=\"{{action}}: {{title}} (new tab)\">{{action}}</a>",
+          "detail": "<aside class=\"discover-detail\" aria-labelledby=\"discover-detail-title\" data-selected-item-id=\"{{itemId}}\"><a class=\"discover-back-link\" href=\"#discover\">Back to results</a><p class=\"eyebrow\">Evidence review</p><h2 id=\"discover-detail-title\">{{title}}</h2><p>{{sourceLabel}}</p><dl class=\"discover-provenance\"><div><dt>Observed</dt><dd>{{observed}}</dd></div><div><dt>Rights</dt><dd>{{rights}}</dd></div><div><dt>Provenance</dt><dd>{{provenance}}</dd></div><div><dt>Evidence status</dt><dd>{{evidence}}</dd></div>{{podcast}}{{boundary}}<div class=\"discover-actions\" aria-label=\"Source action\">{{sourceAction}}</div></aside>",
+          "youtubePolicy": "<p>Resonance does not download YouTube video, audio, captions, or transcripts. After watching the video, you may add it with a transcript you are permitted to store and use for learning.</p>",
+          "manualUpload": "<details><summary>Upload my permitted transcript</summary><form data-discovery-upload=\"{{itemId}}\"><label>Interest area<select name=\"interest-area\" {{areaDisabled}}>{{areas}}</select></label><label>Transcript file<input name=\"transcript\" type=\"file\" accept=\".txt,.vtt,text/plain,text/vtt\" required></label><label><input name=\"rights-attestation\" type=\"checkbox\" required> I confirm I am permitted to store this transcript and transform it into private learning material.</label><button class=\"button secondary\" type=\"submit\" {{submitDisabled}}>{{submitLabel}}</button></form></details>",
+          "decisionActions": "<div class=\"discover-actions\" aria-label=\"Library decision\"><form data-discovery-approve=\"{{itemId}}\"><label>Interest area<select name=\"interest-area\" {{areaDisabled}}>{{areas}}</select></label><button class=\"button secondary\" type=\"submit\" {{submitDisabled}}>{{submitLabel}}</button></form><button class=\"button danger\" type=\"button\" data-discovery-reject=\"{{itemId}}\" {{rejectDisabled}}>Reject</button>{{unavailable}}</div>",
+          "sourceAreaRequired": "Select a configured interest area before adding this source.",
+          "sourceAlreadyAdded": "Source is already in your Library.",
+          "sourceAdded": "Source added to your Library.",
+          "uploadRequired": "Choose an interest area, transcript, and rights confirmation before uploading.",
+          "uploadReadFailed": "The source was added, but the transcript file could not be read.",
+          "uploadStoreFailed": "The source was added, but the transcript could not be stored. You can retry from the source workflow.",
+          "uploadStored": "Source added. Your transcript is stored privately and ready for later processing; no lesson or quiz has been generated yet.",
+          "sourceRejected": "Source rejected and hidden from ordinary discovery results.",
+          "enterDiscoveryValue": "Enter a discovery value.",
+          "sourceReconnect": "Reconnect to the private source service. No decision was saved.",
+          "sourceSignIn": "Sign in through the private source service, then try again.",
+          "sourceAreaMissing": "That interest area is no longer available. Reload Discovery.",
+          "sourceDecisionFailed": "The Library decision could not be saved."
+        }
+      }
+    </script>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>

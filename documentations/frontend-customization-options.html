@@ -1,0 +1,1525 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Resonance Theme and Layout Gate</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #edf0ed;
+      --surface: #ffffff;
+      --surface-subtle: #f5f7f5;
+      --ink: #18211e;
+      --muted: #52605a;
+      --line: #bdc8c3;
+      --action: #176a61;
+      --action-strong: #10554e;
+      --action-text: #ffffff;
+      --focus: #075fca;
+      --coral: #a84636;
+      --gold: #966500;
+      --success: #176a61;
+      --success-soft: #d7ebe5;
+      --shadow: 0 12px 30px #18211e1f;
+      --radius: 6px;
+      font-family:
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--page);
+      scroll-behavior: smooth;
+    }
+
+    body {
+      min-width: 320px;
+      margin: 0;
+      color: var(--ink);
+      background: var(--page);
+      line-height: 1.5;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+      cursor: pointer;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    a:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 3px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+      overflow-wrap: anywhere;
+    }
+
+    h1,
+    h2 {
+      font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+      font-size: 2.4rem;
+      line-height: 1.08;
+    }
+
+    h2 {
+      margin-bottom: 12px;
+      font-size: 1.65rem;
+      line-height: 1.2;
+    }
+
+    h3 {
+      margin-bottom: 6px;
+      font-size: 1.05rem;
+    }
+
+    .shell {
+      width: min(1240px, calc(100% - 32px));
+      margin-inline: auto;
+    }
+
+    .page-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 0.48fr);
+      gap: 40px;
+      align-items: end;
+      padding: 44px 0 28px;
+    }
+
+    .eyebrow {
+      margin-bottom: 6px;
+      color: var(--coral);
+      font-size: 0.76rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .lede,
+    .muted {
+      color: var(--muted);
+    }
+
+    .lede {
+      max-width: 760px;
+      margin-bottom: 0;
+      font-size: 1.04rem;
+    }
+
+    .fixed-contract {
+      padding-left: 18px;
+      border-left: 4px solid var(--action);
+    }
+
+    .fixed-contract strong,
+    .fixed-contract span {
+      display: block;
+    }
+
+    .fixed-contract span {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .decision-bar {
+      position: sticky;
+      z-index: 20;
+      top: 10px;
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 24px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fffffffa;
+      box-shadow: var(--shadow);
+    }
+
+    .control-group {
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    .control-label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .segmented button {
+      min-height: 44px;
+      padding: 7px 10px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      color: var(--muted);
+      background: var(--surface-subtle);
+      font-size: 0.83rem;
+      font-weight: 750;
+    }
+
+    .segmented button:last-child {
+      border-right: 0;
+    }
+
+    .segmented button[aria-pressed="true"] {
+      color: var(--action-text);
+      background: var(--action);
+    }
+
+    .appearance-control {
+      display: flex;
+      gap: 8px;
+    }
+
+    .appearance-control button {
+      min-width: 72px;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--surface-subtle);
+      font-weight: 750;
+    }
+
+    .appearance-control button[aria-pressed="true"] {
+      border-color: var(--action);
+      color: var(--action);
+      background: var(--surface);
+    }
+
+    .preview-wrap {
+      margin-bottom: 38px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .preview-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 58px;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-subtle);
+    }
+
+    .surface-tabs {
+      display: flex;
+      gap: 4px;
+    }
+
+    .surface-tabs button {
+      min-height: 44px;
+      padding: 8px 14px;
+      border: 0;
+      border-bottom: 3px solid transparent;
+      color: var(--muted);
+      background: transparent;
+      font-weight: 780;
+    }
+
+    .surface-tabs button[aria-pressed="true"] {
+      border-color: var(--action);
+      color: var(--ink);
+    }
+
+    .preview-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .sound-control {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-height: 44px;
+      cursor: pointer;
+    }
+
+    .sound-control input {
+      width: 20px;
+      height: 20px;
+      accent-color: var(--action);
+    }
+
+    .preview {
+      --p-canvas: #f4f6f3;
+      --p-surface: #ffffff;
+      --p-subtle: #e8eeeb;
+      --p-text: #18211e;
+      --p-muted: #53605a;
+      --p-line: #c1ccc7;
+      --p-action: #176a61;
+      --p-action-strong: #10554e;
+      --p-action-text: #ffffff;
+      --p-signal-1: #176a61;
+      --p-signal-2: #a84636;
+      --p-signal-3: #966500;
+      --p-success: #176a61;
+      --p-success-soft: #d7ebe5;
+      --p-attention: #f3e5b7;
+      --p-shadow: #18211e1f;
+      min-height: 650px;
+      color: var(--p-text);
+      background: var(--p-canvas);
+      transition: background-color 200ms ease, color 200ms ease;
+    }
+
+    .preview[data-appearance="dark"] {
+      --p-canvas: #151b1a;
+      --p-surface: #202826;
+      --p-subtle: #293431;
+      --p-text: #f2f6f4;
+      --p-muted: #bdc9c3;
+      --p-line: #53615c;
+      --p-action: #77cabe;
+      --p-action-strong: #9edbd2;
+      --p-action-text: #10201e;
+      --p-signal-2: #ff9f8e;
+      --p-success: #77cabe;
+      --p-success-soft: #203f3a;
+      --p-attention: #44391e;
+      --p-shadow: #00000052;
+      color-scheme: dark;
+    }
+
+    .preview[data-theme="collection-index"] {
+      --p-canvas: #f7f5f0;
+      --p-surface: #ffffff;
+      --p-subtle: #ebe8df;
+      --p-text: #171717;
+      --p-muted: #5f5e5a;
+      --p-line: #bcbab3;
+      --p-action: #2456cf;
+      --p-action-strong: #173da0;
+      --p-action-text: #ffffff;
+      --p-signal-1: #2456cf;
+      --p-signal-2: #b33b31;
+      --p-signal-3: #8a6100;
+      --p-success: #176a4b;
+      --p-success-soft: #d8ebdf;
+      --p-attention: #f1e2b3;
+    }
+
+    .preview[data-theme="collection-index"][data-appearance="dark"] {
+      --p-canvas: #171717;
+      --p-surface: #242424;
+      --p-subtle: #30302e;
+      --p-text: #f7f5f0;
+      --p-muted: #c5c2ba;
+      --p-line: #5a5852;
+      --p-action: #8cafff;
+      --p-action-strong: #b4c9ff;
+      --p-action-text: #111a32;
+      --p-signal-2: #ff9a8e;
+      --p-success: #76d3a5;
+      --p-success-soft: #203c2e;
+      --p-attention: #44391e;
+    }
+
+    .preview[data-theme="learning-pulse"] {
+      --p-canvas: #f4f6fb;
+      --p-surface: #ffffff;
+      --p-subtle: #e7ebf5;
+      --p-text: #121a2a;
+      --p-muted: #596176;
+      --p-line: #c3cad9;
+      --p-action: #0068c9;
+      --p-action-strong: #0054a1;
+      --p-action-text: #ffffff;
+      --p-signal-1: #0068c9;
+      --p-signal-2: #c43930;
+      --p-signal-3: #8c6500;
+      --p-success: #13744b;
+      --p-success-soft: #d3ede0;
+      --p-attention: #f6e5a7;
+    }
+
+    .preview[data-theme="learning-pulse"][data-appearance="dark"] {
+      --p-canvas: #121722;
+      --p-surface: #1c2331;
+      --p-subtle: #272f40;
+      --p-text: #f5f7fc;
+      --p-muted: #bec6d7;
+      --p-line: #515b70;
+      --p-action: #79baff;
+      --p-action-strong: #a9d2ff;
+      --p-action-text: #0c1c2e;
+      --p-signal-2: #ff9a8e;
+      --p-success: #79d6a9;
+      --p-success-soft: #203d31;
+      --p-attention: #44391e;
+    }
+
+    .product-header {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      min-height: 62px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--p-line);
+      background: var(--p-surface);
+    }
+
+    .product-brand {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      font-weight: 820;
+    }
+
+    .product-mark {
+      display: grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border-radius: 4px;
+      color: var(--p-action-text);
+      background: var(--p-action);
+    }
+
+    .product-nav {
+      display: flex;
+      gap: 4px;
+    }
+
+    .product-nav span {
+      min-width: 76px;
+      padding: 10px;
+      border-bottom: 2px solid transparent;
+      color: var(--p-muted);
+      text-align: center;
+      font-size: 0.85rem;
+      font-weight: 720;
+    }
+
+    .product-nav span.is-current {
+      border-color: var(--p-action);
+      color: var(--p-text);
+    }
+
+    .preview-status {
+      justify-self: end;
+      color: var(--p-muted);
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+
+    .learning-snapshot {
+      display: grid;
+      grid-template-columns: auto repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      align-items: center;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--p-line);
+      background: var(--p-surface);
+    }
+
+    .snapshot-title strong,
+    .snapshot-title span {
+      display: block;
+    }
+
+    .snapshot-title span {
+      color: var(--p-muted);
+      font-size: 0.72rem;
+    }
+
+    .metric {
+      min-width: 0;
+    }
+
+    .metric-head {
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      color: var(--p-muted);
+      font-size: 0.73rem;
+    }
+
+    .metric-head strong {
+      color: var(--p-text);
+    }
+
+    .metric progress {
+      display: block;
+      width: 100%;
+      height: 7px;
+      margin-top: 6px;
+      border: 0;
+      border-radius: 0;
+      color: var(--p-action);
+      background: var(--p-subtle);
+    }
+
+    .metric progress::-webkit-progress-bar {
+      background: var(--p-subtle);
+    }
+
+    .metric progress::-webkit-progress-value {
+      background: var(--p-action);
+    }
+
+    .metric progress::-moz-progress-bar {
+      background: var(--p-action);
+    }
+
+    .metric-stat {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+    }
+
+    .metric-stat strong {
+      font-size: 1.2rem;
+    }
+
+    .metric-stat span {
+      color: var(--p-muted);
+      font-size: 0.74rem;
+    }
+
+    .workspace {
+      width: min(1080px, calc(100% - 32px));
+      margin-inline: auto;
+      padding: 28px 0 44px;
+    }
+
+    .route-heading {
+      display: flex;
+      gap: 20px;
+      align-items: end;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .route-heading p {
+      margin-bottom: 3px;
+      color: var(--p-signal-2);
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .route-heading h2 {
+      margin: 0;
+      color: var(--p-text);
+      font-size: 1.55rem;
+    }
+
+    .route-heading span {
+      color: var(--p-muted);
+      font-size: 0.82rem;
+    }
+
+    .route-grid {
+      display: grid;
+      gap: 20px;
+    }
+
+    .panel,
+    .context-panel,
+    .queue-panel {
+      border: 1px solid var(--p-line);
+      background: var(--p-surface);
+    }
+
+    .study-panel {
+      overflow: hidden;
+      border-top: 5px solid var(--p-signal-2);
+    }
+
+    .study-media {
+      position: relative;
+      aspect-ratio: 16 / 7;
+      overflow: hidden;
+      border-bottom: 1px solid var(--p-line);
+      background: var(--p-subtle);
+    }
+
+    .study-media img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .media-label {
+      position: absolute;
+      right: 12px;
+      bottom: 12px;
+      margin: 0;
+      padding: 5px 8px;
+      border: 1px solid var(--p-line);
+      color: var(--p-text);
+      background: var(--p-surface);
+      font-size: 0.72rem;
+      font-weight: 780;
+    }
+
+    .study-copy,
+    .review-copy {
+      padding: 20px;
+    }
+
+    .reason {
+      margin-bottom: 8px;
+      color: var(--p-action);
+      font-size: 0.78rem;
+      font-weight: 780;
+    }
+
+    .study-copy h3,
+    .review-copy h3 {
+      margin-bottom: 5px;
+      font-size: 1.3rem;
+    }
+
+    .publisher {
+      margin-bottom: 14px;
+      color: var(--p-muted);
+      font-size: 0.84rem;
+    }
+
+    .study-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid var(--p-line);
+    }
+
+    .button {
+      min-height: 44px;
+      padding: 9px 14px;
+      border: 1px solid var(--p-line);
+      border-radius: 4px;
+      color: var(--p-text);
+      background: var(--p-surface);
+      font-weight: 760;
+    }
+
+    .button.primary {
+      border-color: var(--p-action);
+      color: var(--p-action-text);
+      background: var(--p-action);
+    }
+
+    .button.secondary {
+      border-color: var(--p-action);
+      color: var(--p-action);
+    }
+
+    .study-state {
+      color: var(--p-muted);
+      font-size: 0.8rem;
+    }
+
+    .context-panel,
+    .queue-panel {
+      align-self: start;
+      padding: 18px;
+      border-top: 5px solid var(--p-signal-3);
+    }
+
+    .context-panel p,
+    .queue-panel p {
+      color: var(--p-muted);
+      font-size: 0.84rem;
+    }
+
+    .context-panel p:last-child,
+    .queue-panel p:last-child {
+      margin-bottom: 0;
+    }
+
+    .review-panel {
+      border-top: 5px solid var(--p-signal-1);
+    }
+
+    .quiz-options {
+      display: grid;
+      gap: 8px;
+      margin: 16px 0;
+    }
+
+    .quiz-fieldset {
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    .quiz-options label {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 10px;
+      align-items: center;
+      min-height: 48px;
+      padding: 10px;
+      border: 1px solid var(--p-line);
+      background: var(--p-surface);
+      cursor: pointer;
+    }
+
+    .quiz-options input {
+      width: 19px;
+      height: 19px;
+      accent-color: var(--p-action);
+    }
+
+    .quiz-options label:has(input:checked) {
+      border-color: var(--p-action);
+      background: var(--p-subtle);
+    }
+
+    .review-footer {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .review-footer span {
+      color: var(--p-muted);
+      font-size: 0.8rem;
+    }
+
+    .correct-confirmation {
+      display: none;
+      grid-template-columns: auto 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-top: 14px;
+      padding: 12px;
+      color: var(--p-text);
+      background: var(--p-success-soft);
+      border-left: 4px solid var(--p-success);
+    }
+
+    .correct-confirmation.is-visible {
+      display: grid;
+    }
+
+    .correct-confirmation.is-correct {
+      animation: confirm-answer 280ms ease-out both;
+    }
+
+    .correct-confirmation.is-incorrect {
+      background: var(--p-attention);
+      border-left-color: var(--p-signal-2);
+    }
+
+    .correct-confirmation.is-incorrect .confirmation-mark {
+      border-color: var(--p-signal-2);
+      color: var(--p-signal-2);
+    }
+
+    .confirmation-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border: 2px solid var(--p-success);
+      border-radius: 50%;
+      color: var(--p-success);
+      font-weight: 900;
+    }
+
+    .correct-confirmation strong,
+    .correct-confirmation span {
+      display: block;
+    }
+
+    .correct-confirmation span {
+      color: var(--p-muted);
+      font-size: 0.82rem;
+    }
+
+    .preview[data-layout="guided-stack"] .route-grid {
+      grid-template-columns: minmax(0, 760px);
+      justify-content: center;
+    }
+
+    .preview[data-layout="split-desk"] .route-grid {
+      grid-template-columns: minmax(0, 1.45fr) minmax(250px, 0.75fr);
+    }
+
+    .preview[data-layout="compact-index"] .route-grid {
+      grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
+    }
+
+    .preview[data-layout="compact-index"] .study-panel {
+      display: grid;
+      grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+      grid-column: 1 / -1;
+    }
+
+    .preview[data-layout="compact-index"] .study-media {
+      aspect-ratio: auto;
+      min-height: 250px;
+      border-right: 1px solid var(--p-line);
+      border-bottom: 0;
+    }
+
+    .preview[data-layout="compact-index"] .review-panel {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    .preview[data-layout="compact-index"] .queue-panel {
+      grid-column: 1;
+      grid-row: 1;
+    }
+
+    .preview[data-theme="collection-index"] .panel,
+    .preview[data-theme="collection-index"] .context-panel,
+    .preview[data-theme="collection-index"] .queue-panel {
+      border-width: 2px;
+      border-radius: 0;
+      box-shadow: 6px 6px 0 var(--p-signal-2);
+    }
+
+    .preview[data-theme="collection-index"] .study-copy h3,
+    .preview[data-theme="collection-index"] .review-copy h3 {
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-weight: 860;
+    }
+
+    .preview[data-theme="learning-pulse"] .panel,
+    .preview[data-theme="learning-pulse"] .context-panel,
+    .preview[data-theme="learning-pulse"] .queue-panel {
+      border-radius: 6px;
+      box-shadow: 0 6px 18px var(--p-shadow);
+    }
+
+    .preview[data-theme="learning-pulse"] .button:active {
+      transform: scale(0.97);
+    }
+
+    .surface[hidden] {
+      display: none;
+    }
+
+    .choices-section {
+      padding: 34px 0 8px;
+      border-top: 1px solid var(--line);
+    }
+
+    .choices-intro {
+      max-width: 760px;
+      color: var(--muted);
+    }
+
+    .choice-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .choice-card {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      min-height: 250px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-top: 5px solid var(--choice-signal, var(--action));
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .choice-card p {
+      color: var(--muted);
+    }
+
+    .choice-card ul {
+      margin: 0 0 18px;
+      padding-left: 20px;
+      font-size: 0.88rem;
+    }
+
+    .choice-card li {
+      margin: 5px 0;
+    }
+
+    .choice-card button {
+      min-height: 44px;
+      border: 1px solid var(--action);
+      border-radius: 4px;
+      color: var(--action);
+      background: var(--surface);
+      font-weight: 780;
+    }
+
+    .choice-card button[aria-pressed="true"] {
+      color: var(--action-text);
+      background: var(--action);
+    }
+
+    .choice-card.signal {
+      --choice-signal: #176a61;
+    }
+
+    .choice-card.collection {
+      --choice-signal: #2456cf;
+    }
+
+    .choice-card.pulse {
+      --choice-signal: #c43930;
+    }
+
+    .selection {
+      margin: 36px 0 64px;
+      padding: 24px;
+      border: 2px solid var(--action);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .selection-output {
+      margin: 14px 0 0;
+      padding: 14px;
+      color: var(--ink);
+      background: var(--success-soft);
+      font-weight: 760;
+    }
+
+    @keyframes confirm-answer {
+      from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    @media (max-width: 900px) {
+      .page-header,
+      .decision-bar {
+        grid-template-columns: 1fr;
+      }
+
+      .decision-bar {
+        position: static;
+      }
+
+      .preview[data-layout] .route-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .preview[data-layout="compact-index"] .study-panel,
+      .preview[data-layout="compact-index"] .review-panel,
+      .preview[data-layout="compact-index"] .queue-panel {
+        grid-column: auto;
+        grid-row: auto;
+      }
+
+      .choice-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 680px) {
+      h1 {
+        font-size: 2rem;
+      }
+
+      .product-header {
+        grid-template-columns: 1fr auto;
+      }
+
+      .product-nav {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        justify-content: space-around;
+        border-top: 1px solid var(--p-line);
+        background: var(--p-surface);
+      }
+
+      .product-nav span {
+        flex: 1;
+        min-height: 54px;
+        padding: 16px 6px 10px;
+      }
+
+      .preview-status {
+        grid-column: 2;
+      }
+
+      .learning-snapshot {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .snapshot-title {
+        grid-column: 1 / -1;
+      }
+
+      .metric:last-child {
+        grid-column: 1 / -1;
+      }
+
+      .workspace {
+        width: min(100% - 20px, 640px);
+        padding-bottom: 80px;
+      }
+
+      .preview[data-layout="compact-index"] .study-panel {
+        grid-template-columns: 1fr;
+      }
+
+      .preview[data-layout="compact-index"] .study-media {
+        min-height: 0;
+        aspect-ratio: 16 / 9;
+        border-right: 0;
+        border-bottom: 1px solid var(--p-line);
+      }
+    }
+
+    @media (max-width: 460px) {
+      .shell {
+        width: min(100% - 20px, 1240px);
+      }
+
+      .segmented {
+        grid-template-columns: 1fr;
+      }
+
+      .segmented button {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .segmented button:last-child {
+        border-bottom: 0;
+      }
+
+      .preview-toolbar,
+      .route-heading,
+      .study-actions,
+      .review-footer {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .surface-tabs,
+      .preview-actions {
+        width: 100%;
+      }
+
+      .surface-tabs button {
+        flex: 1;
+      }
+
+      .learning-snapshot {
+        grid-template-columns: 1fr;
+      }
+
+      .snapshot-title,
+      .metric:last-child {
+        grid-column: auto;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="page-header shell">
+    <div>
+      <p class="eyebrow">Milestone 2B revision gate</p>
+      <h1>Choose theme and workspace independently.</h1>
+      <p class="lede">
+        Every combination keeps Feed for study and Review for quizzes. The theme controls visual character; the
+        layout controls information density and workspace composition.
+      </p>
+    </div>
+    <div class="fixed-contract">
+      <strong>Fixed behavior</strong>
+      <span>Feed has no quiz. Review has no study card. Mark studied has no visible countdown.</span>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="decision-bar" aria-label="Live preview choices">
+      <fieldset class="control-group">
+        <legend class="control-label">Visual theme</legend>
+        <div class="segmented" data-theme-controls>
+          <button type="button" data-theme-choice="studio-signal" aria-pressed="true">Studio Signal</button>
+          <button type="button" data-theme-choice="collection-index" aria-pressed="false">Collection Index</button>
+          <button type="button" data-theme-choice="learning-pulse" aria-pressed="false">Learning Pulse</button>
+        </div>
+      </fieldset>
+      <fieldset class="control-group">
+        <legend class="control-label">Workspace layout</legend>
+        <div class="segmented" data-layout-controls>
+          <button type="button" data-layout-choice="guided-stack" aria-pressed="true">Guided Stack</button>
+          <button type="button" data-layout-choice="split-desk" aria-pressed="false">Split Desk</button>
+          <button type="button" data-layout-choice="compact-index" aria-pressed="false">Compact Index</button>
+        </div>
+      </fieldset>
+      <fieldset class="control-group">
+        <legend class="control-label">Preview appearance</legend>
+        <div class="appearance-control">
+          <button type="button" data-appearance-choice="system" aria-pressed="true">System</button>
+          <button type="button" data-appearance-choice="light" aria-pressed="false">Light</button>
+          <button type="button" data-appearance-choice="dark" aria-pressed="false">Dark</button>
+        </div>
+      </fieldset>
+    </section>
+
+    <section class="preview-wrap" aria-label="Interactive learning workspace preview">
+      <div class="preview-toolbar">
+        <div class="surface-tabs" aria-label="Preview route">
+          <button type="button" data-surface-choice="feed" aria-pressed="true">Feed study</button>
+          <button type="button" data-surface-choice="review" aria-pressed="false">Review quiz</button>
+        </div>
+        <div class="preview-actions">
+          <label class="sound-control">
+            <input type="checkbox" data-sound>
+            <span>Preview sounds</span>
+          </label>
+        </div>
+      </div>
+
+      <div
+        class="preview"
+        id="preview"
+        data-theme="studio-signal"
+        data-layout="guided-stack"
+        data-appearance="light"
+      >
+        <header class="product-header">
+          <div class="product-brand"><span class="product-mark">R</span><span>Resonance</span></div>
+          <nav class="product-nav" aria-label="Preview navigation">
+            <span class="is-current" data-preview-nav="feed">Feed</span>
+            <span data-preview-nav="review">Review</span>
+            <span>Library</span>
+          </nav>
+          <span class="preview-status">Local mode</span>
+        </header>
+
+        <section class="learning-snapshot" aria-label="Preview learning snapshot">
+          <div class="snapshot-title">
+            <strong>Learning snapshot</strong>
+            <span>Factual preview data</span>
+          </div>
+          <div class="metric">
+            <div class="metric-head"><span>Shown studied</span><strong data-study-count>2 of 3</strong></div>
+            <progress data-study-progress value="2" max="3" aria-label="2 of 3 shown lessons studied">2 of 3</progress>
+          </div>
+          <div class="metric-stat"><strong data-due-count>2</strong><span>reviews due now</span></div>
+          <div class="metric-stat"><strong data-answer-count>3/4</strong><span>persisted answers correct</span></div>
+        </section>
+
+        <section class="surface" data-surface="feed">
+          <div class="workspace">
+            <div class="route-heading">
+              <div><p>Feed</p><h2 id="preview-title">Study a lesson</h2></div>
+              <span>Quiz-free reading and listening</span>
+            </div>
+            <div class="route-grid">
+              <article class="panel study-panel">
+                <div class="study-media">
+                  <img
+                    src="../assets/filter-spectrum.webp"
+                    alt="Frequency spectrum with a resonant filter peak"
+                    width="1280"
+                    height="721"
+                  >
+                  <p class="media-label">Sound design lesson &middot; 6 min</p>
+                </div>
+                <div class="study-copy">
+                  <p class="reason">New to your learning feed.</p>
+                  <h3>How filter resonance reshapes a sound</h3>
+                  <p class="publisher">Resonance Fixture Studio</p>
+                  <p>
+                    Trace a low-pass filter across a harmonic spectrum and hear why a resonance peak makes the cutoff
+                    frequency more prominent.
+                  </p>
+                  <div class="study-actions">
+                    <button class="button primary" type="button" data-mark-studied>Mark studied</button>
+                    <span class="study-state" data-study-state>No countdown is shown.</span>
+                  </div>
+                </div>
+              </article>
+              <aside class="context-panel">
+                <p class="eyebrow">Why this lesson</p>
+                <h3>Connect timbre to synthesis</h3>
+                <p>Your recent listening makes this a useful next connection.</p>
+                <button class="button secondary" type="button">More like this</button>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <section class="surface" data-surface="review" hidden>
+          <div class="workspace">
+            <div class="route-heading">
+              <div><p>Review</p><h2>Recall what you learned</h2></div>
+              <span data-due-label>2 reviews due now</span>
+            </div>
+            <div class="route-grid">
+              <aside class="queue-panel">
+                <p class="eyebrow">Review queue</p>
+                <h3>Filter resonance</h3>
+                <p>Due now &middot; review 2</p>
+                <p>Suspensions<br><span class="muted">Due later</span></p>
+              </aside>
+              <article class="panel review-panel">
+                <div class="review-copy">
+                  <p class="reason">Active recall</p>
+                  <h3>What does increasing resonance emphasize in a low-pass filter?</h3>
+                  <form data-demo-quiz>
+                    <fieldset class="quiz-fieldset">
+                      <legend class="muted">Choose one answer</legend>
+                      <div class="quiz-options">
+                        <label>
+                          <input type="radio" name="demo-answer" value="correct">
+                          <span>Frequencies close to the cutoff</span>
+                        </label>
+                        <label>
+                          <input type="radio" name="demo-answer" value="incorrect">
+                          <span>Only the lowest possible frequency</span>
+                        </label>
+                        <label>
+                          <input type="radio" name="demo-answer" value="incorrect">
+                          <span>Every harmonic by the same amount</span>
+                        </label>
+                      </div>
+                    </fieldset>
+                    <div class="review-footer">
+                      <button class="button primary" type="submit" data-demo-submit>Check answer</button>
+                      <span>Review 2 &middot; next date set after saving</span>
+                    </div>
+                    <div class="correct-confirmation" data-confirmation aria-live="polite">
+                      <span class="confirmation-mark" aria-hidden="true">OK</span>
+                      <span><strong>Correct</strong><span>Review saved. The next review is scheduled.</span></span>
+                    </div>
+                  </form>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="choices-section" aria-labelledby="theme-title">
+      <p class="eyebrow">Axis one</p>
+      <h2 id="theme-title">Visual theme</h2>
+      <p class="choices-intro">
+        All three themes support System, Light, and Dark appearance modes. Theme changes color, typography emphasis,
+        border treatment, and motion intensity without changing information architecture.
+      </p>
+      <div class="choice-grid">
+        <article class="choice-card signal">
+          <p class="eyebrow">Balanced</p>
+          <h3>Studio Signal</h3>
+          <p>Mineral surfaces with precise teal, coral, and gold signals for sustained focus.</p>
+          <ul><li>Restrained motion</li><li>Best cross-domain fit</li><li>Quietest long-session palette</li></ul>
+          <button type="button" data-card-theme="studio-signal" aria-pressed="true">Select Studio Signal</button>
+        </article>
+        <article class="choice-card collection">
+          <p class="eyebrow">Editorial</p>
+          <h3>Collection Index</h3>
+          <p>Cobalt, tomato, and gold frame artwork and provenance like liner notes or an archive.</p>
+          <ul><li>Strongest source presentation</li><li>Square editorial treatment</li><li>Moderate motion</li></ul>
+          <button type="button" data-card-theme="collection-index" aria-pressed="false">Select Collection Index</button>
+        </article>
+        <article class="choice-card pulse">
+          <p class="eyebrow">Energetic</p>
+          <h3>Learning Pulse</h3>
+          <p>Brighter blue, red, yellow, and green state accents with tactile confirmation.</p>
+          <ul><li>Most visible feedback</li><li>Expressive motion</li><li>No points or streaks</li></ul>
+          <button type="button" data-card-theme="learning-pulse" aria-pressed="false">Select Learning Pulse</button>
+        </article>
+      </div>
+    </section>
+
+    <section class="choices-section" aria-labelledby="layout-title">
+      <p class="eyebrow">Axis two</p>
+      <h2 id="layout-title">Workspace layout</h2>
+      <p class="choices-intro">
+        Every layout keeps Feed and Review as exclusive routes. Layout controls density, supporting rails, and media
+        composition; it never places a quiz inside a study card.
+      </p>
+      <div class="choice-grid">
+        <article class="choice-card">
+          <p class="eyebrow">Recommended</p>
+          <h3>Guided Stack</h3>
+          <p>One focused column on every route, with supporting context placed directly after the main activity.</p>
+          <ul><li>Lowest cognitive load</li><li>Natural mobile behavior</li><li>Best for deep study</li></ul>
+          <button type="button" data-card-layout="guided-stack" aria-pressed="true">Select Guided Stack</button>
+        </article>
+        <article class="choice-card">
+          <p class="eyebrow">Contextual</p>
+          <h3>Split Desk</h3>
+          <p>Main activity plus a supporting context or review-queue rail on wide screens.</p>
+          <ul><li>58/42 desktop workspace</li><li>Rail stacks on mobile</li><li>Best context visibility</li></ul>
+          <button type="button" data-card-layout="split-desk" aria-pressed="false">Select Split Desk</button>
+        </article>
+        <article class="choice-card">
+          <p class="eyebrow">Dense</p>
+          <h3>Compact Index</h3>
+          <p>Horizontal study media and a queue-first review workspace for fast scanning.</p>
+          <ul><li>Highest information density</li><li>Efficient repeated use</li><li>Stacks below tablet width</li></ul>
+          <button type="button" data-card-layout="compact-index" aria-pressed="false">Select Compact Index</button>
+        </article>
+      </div>
+    </section>
+
+    <section class="selection" aria-labelledby="selection-title">
+      <p class="eyebrow">Approval output</p>
+      <h2 id="selection-title">Your current combination</h2>
+      <p>
+        Production settings will persist theme, appearance, layout, and sound independently for the current owner and
+        include them in export and reset.
+      </p>
+      <p class="selection-output" id="selection-output" aria-live="polite">
+        Selected: Studio Signal + Guided Stack + System appearance.
+      </p>
+    </section>
+  </main>
+
+  <script>
+    const preview = document.querySelector("#preview");
+    const selectionOutput = document.querySelector("#selection-output");
+    const soundInput = document.querySelector("[data-sound]");
+    let selectedTheme = "studio-signal";
+    let selectedLayout = "guided-stack";
+    let selectedAppearance = "system";
+    let activeSurface = "feed";
+    let audioContext = null;
+    const systemAppearance = window.matchMedia("(prefers-color-scheme: dark)");
+
+    const labels = {
+      "studio-signal": "Studio Signal",
+      "collection-index": "Collection Index",
+      "learning-pulse": "Learning Pulse",
+      "guided-stack": "Guided Stack",
+      "split-desk": "Split Desk",
+      "compact-index": "Compact Index",
+      system: "System appearance",
+      light: "Light preview",
+      dark: "Dark preview"
+    };
+
+    document.querySelectorAll("[data-theme-choice], [data-card-theme]").forEach((button) => {
+      button.addEventListener("click", () => selectTheme(
+        button.dataset.themeChoice || button.dataset.cardTheme
+      ));
+    });
+
+    document.querySelectorAll("[data-layout-choice], [data-card-layout]").forEach((button) => {
+      button.addEventListener("click", () => selectLayout(
+        button.dataset.layoutChoice || button.dataset.cardLayout
+      ));
+    });
+
+    document.querySelectorAll("[data-appearance-choice]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const choice = button.dataset.appearanceChoice;
+        selectedAppearance = choice === "dark" || choice === "light" ? choice : "system";
+        resolveAppearance();
+        setPressed("[data-appearance-choice]", button);
+        updateOutput();
+        playTone(360, 0.045);
+      });
+    });
+
+    document.querySelectorAll("[data-surface-choice]").forEach((button) => {
+      button.addEventListener("click", () => {
+        activeSurface = button.dataset.surfaceChoice === "review" ? "review" : "feed";
+        document.querySelectorAll("[data-surface]").forEach((surface) => {
+          surface.hidden = surface.dataset.surface !== activeSurface;
+        });
+        document.querySelectorAll("[data-preview-nav]").forEach((item) => {
+          item.classList.toggle("is-current", item.dataset.previewNav === activeSurface);
+        });
+        setPressed("[data-surface-choice]", button);
+        playTone(300, 0.04);
+      });
+    });
+
+    document.querySelector("[data-mark-studied]")?.addEventListener("click", (event) => {
+      event.currentTarget.textContent = "Studied";
+      event.currentTarget.disabled = true;
+      const state = document.querySelector("[data-study-state]");
+      const count = document.querySelector("[data-study-count]");
+      const progress = document.querySelector("[data-study-progress]");
+      if (state) state.textContent = "Study status saved.";
+      if (count) count.textContent = "3 of 3";
+      if (progress) {
+        progress.value = 3;
+        progress.textContent = "3 of 3";
+        progress.setAttribute("aria-label", "3 of 3 shown lessons studied");
+      }
+      playTone(440, 0.06);
+    });
+
+    document.querySelector("[data-demo-quiz]")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const selected = event.currentTarget.querySelector("input:checked");
+      const confirmation = document.querySelector("[data-confirmation]");
+      if (!selected || !confirmation) return;
+      const correct = selected.value === "correct";
+      const answerCount = document.querySelector("[data-answer-count]");
+      const dueCount = document.querySelector("[data-due-count]");
+      const dueLabel = document.querySelector("[data-due-label]");
+      confirmation.classList.remove("is-visible", "is-correct", "is-incorrect");
+      confirmation.querySelector(".confirmation-mark").textContent = correct ? "OK" : "No";
+      confirmation.querySelector("strong").textContent = correct ? "Correct" : "Not yet";
+      confirmation.querySelector("strong + span").textContent = correct
+        ? "Review saved. The next review is scheduled."
+        : "Review saved. Revisit the explanation before the next attempt.";
+      requestAnimationFrame(() => {
+        confirmation.classList.add("is-visible", correct ? "is-correct" : "is-incorrect");
+      });
+      event.currentTarget.querySelectorAll("input, button").forEach((control) => {
+        control.disabled = true;
+      });
+      if (answerCount) answerCount.textContent = correct ? "4/5" : "3/5";
+      if (dueCount) dueCount.textContent = "1";
+      if (dueLabel) dueLabel.textContent = "1 review due now";
+      if (correct) playSequence([523, 659]);
+      else playTone(294, 0.08);
+    });
+
+    systemAppearance.addEventListener?.("change", () => {
+      if (selectedAppearance === "system") resolveAppearance();
+    });
+
+    function selectTheme(value) {
+      if (!labels[value]) return;
+      selectedTheme = value;
+      preview.dataset.theme = selectedTheme;
+      setMatchingPressed("[data-theme-choice]", "themeChoice", value);
+      setMatchingPressed("[data-card-theme]", "cardTheme", value);
+      updateOutput();
+      playTone(330, 0.045);
+    }
+
+    function selectLayout(value) {
+      if (!labels[value]) return;
+      selectedLayout = value;
+      preview.dataset.layout = selectedLayout;
+      setMatchingPressed("[data-layout-choice]", "layoutChoice", value);
+      setMatchingPressed("[data-card-layout]", "cardLayout", value);
+      updateOutput();
+      playTone(392, 0.045);
+    }
+
+    function setPressed(selector, selected) {
+      document.querySelectorAll(selector).forEach((button) => {
+        button.setAttribute("aria-pressed", String(button === selected));
+      });
+    }
+
+    function setMatchingPressed(selector, dataKey, value) {
+      document.querySelectorAll(selector).forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset[dataKey] === value));
+      });
+    }
+
+    function updateOutput() {
+      selectionOutput.textContent =
+        `Selected: ${labels[selectedTheme]} + ${labels[selectedLayout]} + ${labels[selectedAppearance]}.`;
+    }
+
+    function resolveAppearance() {
+      preview.dataset.appearance = selectedAppearance === "system"
+        ? (systemAppearance.matches ? "dark" : "light")
+        : selectedAppearance;
+    }
+
+    function playTone(frequency, duration) {
+      if (!soundInput?.checked) return;
+      try {
+        audioContext ??= new AudioContext();
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        const start = audioContext.currentTime;
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.035, start);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+        oscillator.connect(gain).connect(audioContext.destination);
+        oscillator.start(start);
+        oscillator.stop(start + duration + 0.01);
+      } catch {
+        soundInput.checked = false;
+      }
+    }
+
+    function playSequence(frequencies) {
+      frequencies.forEach((frequency, index) => {
+        setTimeout(() => playTone(frequency, 0.08), index * 75);
+      });
+    }
+
+    resolveAppearance();
+  </script>
+</body>
+</html>

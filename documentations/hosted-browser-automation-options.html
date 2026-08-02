@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hosted Browser Automation Decision</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+    body { margin: 0; background: Canvas; color: CanvasText; }
+    main { max-width: 1040px; margin: 0 auto; padding: 40px 24px 64px; }
+    h1 { font: 700 2.3rem/1.1 Georgia, serif; margin: 8px 0 16px; }
+    h2 { margin-top: 40px; }
+    .eyebrow { color: #a84434; font-weight: 750; text-transform: uppercase; }
+    .summary { max-width: 76ch; font-size: 1.1rem; }
+    .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+    article, section.choice { border: 1px solid color-mix(in srgb, CanvasText 24%, Canvas); border-radius: 6px; padding: 20px; }
+    article.recommended { border-top: 6px solid #167367; }
+    .tag { color: #167367; font-weight: 750; }
+    dt { font-weight: 700; margin-top: 12px; }
+    dd { margin-left: 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px; text-align: left; vertical-align: top; border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); }
+    code { overflow-wrap: anywhere; }
+    .decision { border-left: 5px solid #a06a00; padding-left: 16px; }
+    li { margin: 8px 0; }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Milestone 3F decision</p>
+  <h1>Autonomous hosted browser acceptance</h1>
+  <p class="summary">The agent needs a repeatable authenticated browser path before presenting another release. The harness must navigate the deployed application, reproduce stale-result transitions, inspect console and network failures, take screenshots, and clean up its own Library mutations without borrowing personal browser data.</p>
+
+  <h2>Approaches</h2>
+  <div class="options">
+    <article class="recommended">
+      <p class="tag">A. Recommended</p>
+      <h3>Playwright + Access service token</h3>
+      <p>Pin <code>playwright-core</code>, use the installed stable Google Chrome, and authenticate with a service token allowed only for this Access application.</p>
+      <dl>
+        <dt>Security</dt><dd>Dedicated revocable credential; no personal Chrome profile or Google session.</dd>
+        <dt>Coverage</dt><dd>Real hosted Access, Worker, providers, D1, routes, DOM, console, and network.</dd>
+        <dt>Cost</dt><dd>USD 0 incremental on the existing Access Free boundary; current documented limit is 50 service tokens.</dd>
+        <dt>Setup</dt><dd>One service token and one exact-token Service Auth policy; two values stored only in an ignored local environment file.</dd>
+      </dl>
+    </article>
+    <article>
+      <p class="tag">B</p>
+      <h3>Playwright + persistent personal session</h3>
+      <p>Use a dedicated Playwright profile and ask the user to complete the email login once.</p>
+      <dl>
+        <dt>Security</dt><dd>No new Access policy, but stores a personal authenticated session locally.</dd>
+        <dt>Coverage</dt><dd>Full hosted browser coverage while the session remains valid.</dd>
+        <dt>Tradeoff</dt><dd>Manual renewal, identity coupling, and more sensitive local state.</dd>
+      </dl>
+    </article>
+    <article>
+      <p class="tag">C</p>
+      <h3>Local browser only</h3>
+      <p>Automate a local server with injected test boundaries and no hosted authentication.</p>
+      <dl>
+        <dt>Security</dt><dd>No additional credential.</dd>
+        <dt>Coverage</dt><dd>Fast DOM and state testing, but cannot prove Access, deployed assets, real providers, or D1 behavior.</dd>
+        <dt>Tradeoff</dt><dd>Useful as a development loop, insufficient as the final release gate.</dd>
+      </dl>
+    </article>
+  </div>
+
+  <h2>Recommended Design</h2>
+  <section class="choice">
+    <ul>
+      <li>Use Approach A with a 90-day token named <code>resonance-browser-acceptance</code>.</li>
+      <li>Add a Service Auth policy that includes only that exact service token, while retaining the existing personal email Allow policy.</li>
+      <li>Store <code>CF_ACCESS_CLIENT_ID</code> and <code>CF_ACCESS_CLIENT_SECRET</code> in ignored <code>.env.browser-acceptance</code>; never print or persist their values.</li>
+      <li>Pin <code>playwright-core</code> and use the installed Chrome channel, avoiding a separate browser download.</li>
+      <li>Keep fast deterministic state tests local. Run the hosted browser suite only for release candidates and explicit acceptance work.</li>
+      <li>Allow one reversible production Library mutation using a generated acceptance identity; verify it, then deactivate it.</li>
+      <li>Store redacted screenshots, timings, console categories, response statuses, and Worker version under ignored <code>test-results/</code> and <code>logs/</code> for 30 days.</li>
+      <li>Keep the current deployment online while fixing because the failure appears to predate Taddy and rollback would remove the provider without addressing the state defect. Stop further production mutations until the fix passes.</li>
+    </ul>
+  </section>
+
+  <h2>Tests Proposed Before Implementation</h2>
+  <table>
+    <thead><tr><th>Area</th><th>Required red/green signal</th></tr></thead>
+    <tbody>
+      <tr><td>Current result detail</td><td>After a central search, selecting one returned ID renders that exact current result rather than <q>Item unavailable</q> or a starter item.</td></tr>
+      <tr><td>State continuity</td><td>Detail, Back to results, hash navigation, and tab navigation preserve the current query, provider filters, limit, and result collection for the browser session without another provider request.</td></tr>
+      <tr><td>Search replacement</td><td>A second query or filter change atomically replaces the prior live result set; no stale persisted result can reappear.</td></tr>
+      <tr><td>Boundaries</td><td>Empty or failed searches preserve an explicit error/partial state; suppressed items remain hidden; a missing selected ID stays explicitly unavailable.</td></tr>
+      <tr><td>Automation credentials</td><td>Missing ID, missing secret, Access rejection, redirect-to-login, and expired token are distinct harness failures and never leak credential values.</td></tr>
+      <tr><td>Hosted navigation</td><td>Feed, Discover, Review, and Library render at desktop and mobile sizes with no uncaught console error or failed same-origin module request.</td></tr>
+      <tr><td>Hosted search</td><td>One generic central query confirms enabled Web and Podcast providers, bounded results, detail selection, return navigation, and filter replacement.</td></tr>
+      <tr><td>Library lifecycle</td><td>Add one podcast as <code>feed - metadata</code>, confirm D1 persistence, remove it, and confirm existing history and unrelated sources remain.</td></tr>
+      <tr><td>Artifacts</td><td>Screenshots and logs are redacted, ignored by Git, bounded, and deleted after 30 days.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Consolidated Approval</h2>
+  <section class="choice decision">
+    <p>Approve or revise these decisions together:</p>
+    <ol>
+      <li>Approach A: Playwright with a dedicated Cloudflare Access service token.</li>
+      <li>90-day token duration and exact-token Service Auth policy.</li>
+      <li>Pin <code>playwright-core</code> and use installed Chrome.</li>
+      <li>Permit reversible release-candidate mutations only.</li>
+      <li>Retain redacted artifacts for 30 days.</li>
+      <li>Keep the current deployment online while fixing; pause further mutations.</li>
+      <li>Approve every proposed regression and hosted-browser test above.</li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>
