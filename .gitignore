@@ -1,0 +1,20 @@
+.DS_Store
+.agents/
+.codex/
+.dev.vars*
+.env*
+.deno/
+.npm-cache/
+.qodo/
+.specify/
+.superpowers/
+.worktrees/
+.wrangler/
+coverage/
+dist/
+dist 2/
+dist.tmp-*/
+logs/
+node_modules/
+playwright-report/
+test-results/

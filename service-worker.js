@@ -1,0 +1,138 @@
+// @ts-check
+
+const CACHE_PREFIX = "resonance-shell-";
+const BUILD_CACHE_ID = "__RESONANCE_BUILD_ID__";
+const CACHE_NAME = `${CACHE_PREFIX}${BUILD_CACHE_ID}`;
+const OFFLINE_FAILURE_MESSAGE = "resonance-offline-failure";
+const SHELL_URLS = [
+  "./",
+  "./index.html",
+  "./manifest.webmanifest",
+  "./service-worker.js",
+  "./src/app.js",
+  "./src/styles.css",
+  "./assets/catalog-fixtures.json",
+  "./assets/discovery-starters.json",
+  "./assets/suspension-study-640.webp",
+  "./assets/suspension-study.webp",
+  "./assets/filter-spectrum-640.webp",
+  "./assets/filter-spectrum.webp",
+  "./assets/rhythmic-displacement-640.webp",
+  "./assets/rhythmic-displacement.webp",
+  "./assets/icon-192.webp",
+  "./assets/icon-512.webp",
+];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(installShell());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(upgradeShell());
+});
+
+self.addEventListener("fetch", (event) => {
+  if (event.request.method !== "GET") return;
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.origin !== self.location.origin) return;
+  if (requestUrl.pathname.startsWith("/api/")) return;
+
+  event.respondWith(resolveSameOriginRequest(event.request));
+});
+
+async function installShell() {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const buildAssets = await readAssetManifest();
+    const installUrls = new Set([
+      ...SHELL_URLS,
+      "./asset-manifest.json",
+      ...buildAssets,
+    ]);
+    await cache.addAll([...installUrls]);
+    await self.skipWaiting();
+  } catch {
+    try {
+      await notifyOfflineFailure("OfflineCacheInstallFailed");
+    } finally {
+      throw new Error("OfflineCacheInstallFailed");
+    }
+  }
+}
+
+async function readAssetManifest() {
+  const response = await fetch("./asset-manifest.json", { cache: "no-store" });
+  if (!response.ok) throw new Error("OfflineAssetManifestMissing");
+  const document = await response.json();
+  if (
+    !Array.isArray(document) ||
+    !document.every((path) =>
+      typeof path === "string" && path.startsWith("./") &&
+      !path.startsWith("./../")
+    )
+  ) {
+    throw new Error("OfflineAssetManifestInvalid");
+  }
+  return document;
+}
+
+async function upgradeShell() {
+  try {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+        .map((key) => caches.delete(key)),
+    );
+    await self.clients.claim();
+  } catch {
+    try {
+      await notifyOfflineFailure("OfflineUpgradeFailed");
+    } finally {
+      throw new Error("OfflineUpgradeFailed");
+    }
+  }
+}
+
+async function resolveSameOriginRequest(request) {
+  let cache;
+  let cached;
+  try {
+    cache = await caches.open(CACHE_NAME);
+    cached = await cache.match(request);
+  } catch {
+    await notifyOfflineFailure("OfflineCacheMiss");
+    try {
+      return await fetch(request);
+    } catch {
+      return Response.error();
+    }
+  }
+
+  const fetched = fetch(request)
+    .then(async (response) => {
+      if (response.ok) {
+        try {
+          await cache.put(request, response.clone());
+        } catch {
+          await notifyOfflineFailure("OfflineCacheMiss");
+        }
+      }
+      return response;
+    })
+    .catch(async () => {
+      if (cached !== undefined) return cached;
+      await notifyOfflineFailure("OfflineCacheMiss");
+      return Response.error();
+    });
+  return cached ?? fetched;
+}
+
+async function notifyOfflineFailure(kind) {
+  const clients = await self.clients.matchAll({
+    includeUncontrolled: true,
+    type: "window",
+  });
+  for (const client of clients) {
+    client.postMessage({ type: OFFLINE_FAILURE_MESSAGE, kind });
+  }
+}
