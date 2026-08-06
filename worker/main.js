@@ -32,6 +32,7 @@ import { BrowserRunPageAcquirer } from "./browser-run-page-acquirer.js";
 import { SourceIngestionRunner } from "./source-ingestion-runner.js";
 import { ManualMaterialService } from "../src/features/source-library/manual-material.js";
 import { createSourceCursorCodec } from "./source-cursor.js";
+import { createLocalSemanticEmbedding } from "./local-semantic-index.js";
 import {
   DurableYouTubeOAuthStore,
   YouTubeOAuthDurableObject,
@@ -349,22 +350,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         platform.subtle,
       ),
       embedding: {
-        create: () =>
-          Promise.resolve({
-            ok: false,
-            error: {
-              kind: /** @type {const} */ ("SourceEmbeddingUnavailable"),
-            },
-          }),
+        create: createLocalSemanticEmbedding,
       },
       semanticIndex: {
-        search: () =>
-          Promise.resolve({
-            ok: false,
-            error: {
-              kind: /** @type {const} */ ("SourceSemanticIndexUnavailable"),
-            },
-          }),
+        search: (query) => sourceRepository.semanticSearch(query),
       },
       maximumPageSize: 50,
       maximumQueryLength: 200,

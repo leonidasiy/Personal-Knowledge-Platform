@@ -10,6 +10,17 @@
 - Kept the browser release gate strict except for the exact idempotent source
   approval `409` console response; unrelated runtime errors remain failures.
 
+## 2026-08-06: Milestone 3F.2 Combined Library Search
+
+- Replaced the Library method selector with one fixed Combined search and a
+  truthful local-search explanation.
+- Added versioned local feature-hash vectors and bounded owner-scoped semantic
+  ranking over active source metadata; merged it with D1 FTS using existing RRF
+  fusion and named failures.
+- Hosted smoke acceptance passed against Worker
+  `97803204-e09c-49a3-9bf5-15d5043f8871` with one Combined request, zero live
+  Discover provider requests, no selector, and a returned Library source.
+
 ## 2026-08-06: Autonomous Hosted Browser Acceptance
 
 - Added a typed, redacted Playwright release gate using installed Chrome and

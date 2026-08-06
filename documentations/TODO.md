@@ -16,10 +16,13 @@
 
 ## Milestone 3F.2
 
-- Replace the Library method selector with one fixed Combined search. The
-  implementation will use the existing typed local semantic contract and
-  explicit availability failures first; no keyword-only result will be labeled
-  as Combined when semantic retrieval is unavailable.
+- Complete: replaced the Library method selector with one fixed Combined
+  search using the existing typed local semantic contract and explicit
+  availability failures. No keyword-only result is labeled as Combined when
+  semantic retrieval is unavailable.
+- Complete: local semantic adapter is deployed and authenticated browser smoke
+  acceptance confirms no Discover provider request is emitted by Library
+  search. Final Worker: `97803204-e09c-49a3-9bf5-15d5043f8871`.
 
 ## Later
 

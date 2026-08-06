@@ -6,14 +6,14 @@ captured in `REFERENCE.md` or `PROJECT_STATUS.md`.
 
 ## Current Work
 
-Milestone 3F.1 corrects automatic Feed reveal and established-client shell
-freshness. Its local candidate passes strict checking, all `526/526` repository
-tests, independent validation, and hosted acceptance against Worker
-`c2e752bf-868d-4dad-9b01-aef77b5e08fc`. The production candidate is
-`182,485` raw / `57,948` gzip aggregate JavaScript
-within the approved `182,500` raw / `58,000` gzip ceilings. Fixed Combined
-Library search is the next separate Milestone 3F.2 implementation; its tests
-will be designed and run without another approval gate as requested.
+Milestone 3F.1 is complete: automatic Feed reveal and established-client shell
+freshness passed strict checking, all `526/526` repository tests, independent
+validation, and hosted acceptance against Worker
+`c2e752bf-868d-4dad-9b01-aef77b5e08fc`. Milestone 3F.2 is complete: fixed
+Combined Library search uses a bounded local semantic index plus D1 keyword
+retrieval, with hosted smoke acceptance against Worker
+`97803204-e09c-49a3-9bf5-15d5043f8871`. The current production browser budget remains
+`182,500` raw / `58,000` gzip aggregate JavaScript.
 
 ## Authoritative Documents
 

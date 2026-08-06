@@ -50,7 +50,7 @@ export function createLibraryPage(dependencies) {
   /** @type {SourceInterestArea[]} */ let interestAreas = [];
   /** @type {string | null} */ let nextCursor = null;
   /** @type {string} */ let query = "";
-  /** @type {SourceSearchMode} */ let mode = "keyword";
+  /** @type {SourceSearchMode} */ let mode = "combined";
   /** @type {string | null} */ let message = null;
   /** @type {string | null} */ let pendingSourceId = null;
   /** @type {Promise<void> | null} */ let read = null;
@@ -105,16 +105,13 @@ export function createLibraryPage(dependencies) {
     if (read !== null) return;
     const data = new FormData(form);
     const rawQuery = data.get("query");
-    const rawMode = data.get("mode");
     if (
-      typeof rawQuery !== "string" ||
-      (rawMode !== "keyword" && rawMode !== "semantic" &&
-        rawMode !== "combined")
+      typeof rawQuery !== "string"
     ) return;
     const priorQuery = query;
     const priorMode = mode;
     query = rawQuery.trim();
-    mode = rawMode;
+    mode = "combined";
     if (query === "") return await load(true);
     state = "loading";
     message = null;
@@ -247,7 +244,7 @@ function friendly(failure) {
     (failure.failureKind === "SourceEmbeddingUnavailable" ||
       failure.failureKind === "SourceSemanticIndexUnavailable")
   ) {
-    return "Semantic search is not available on this device yet. Choose Keyword search.";
+    return "Combined search is temporarily unavailable. Try again after the source catalog reconnects.";
   }
   if (
     failure.kind === "SourceGatewayRejected" &&

@@ -142,6 +142,16 @@ Deno.test("source gateway validates search results and disabled sources", async 
   assertEquals(invalid.error.kind, "SourceGatewayResponseInvalid");
 });
 
+Deno.test("source gateway defaults omitted search mode to Combined", async () => {
+  let requested = "";
+  const result = await gateway((request) => {
+    requested = request.url;
+    return Promise.resolve(Response.json({ result: [{ source, score: 0.75 }] }));
+  }).search({ query: "harmony", limit: 10 });
+  assertEquals(result.ok, true);
+  assertEquals(new URL(requested).searchParams.get("mode"), "combined");
+});
+
 Deno.test("source gateway mutations omit owner and expose server rejection", async () => {
   /** @type {unknown} */ let body = null;
   const client = gateway(async (request) => {

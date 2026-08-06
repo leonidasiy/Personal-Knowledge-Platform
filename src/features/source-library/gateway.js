@@ -64,8 +64,8 @@ export class SourceLibraryGatewayClient {
   async search(command) {
     if (
       !isRecord(command) || !isNonEmptyText(command.query) ||
-      (command.mode !== "keyword" && command.mode !== "semantic" &&
-        command.mode !== "combined") ||
+      (command.mode !== undefined && command.mode !== "keyword" &&
+        command.mode !== "semantic" && command.mode !== "combined") ||
       typeof command.limit !== "number" || !Number.isInteger(command.limit) ||
       command.limit < 1
     ) {
@@ -73,7 +73,7 @@ export class SourceLibraryGatewayClient {
     }
     const params = new URLSearchParams({
       q: command.query.trim(),
-      mode: command.mode,
+      mode: command.mode ?? "combined",
       limit: String(command.limit),
     });
     const response = await this.#request(

@@ -29,7 +29,8 @@ aggregate JavaScript plus `23,993` raw / `5,355` gzip CSS.
   daily/seven-day recall accuracy.
 - Owner-scoped immutable local persistence with validation, replay, migration,
   quarantine/export recovery, IndexedDB, and rollback-safe composition.
-- D1-backed Source Library with chronological paging, keyword search, source
+- D1-backed Source Library with chronological paging, fixed Combined semantic
+  plus keyword search, source
   approval/rejection, suppression, deactivation, and preserved study history.
 - Access-authenticated RSS/Atom acquisition, Podcasting 2.0 references,
   official YouTube metadata search, publisher transcript authorization, and
@@ -49,15 +50,16 @@ aggregate JavaScript plus `23,993` raw / `5,355` gzip CSS.
 
 ## Active Work
 
-- Implement Milestone 3F.2 fixed Combined Library search with deterministic
-  keyword plus local semantic retrieval, explicit availability failures, and
-  no live provider calls from Library.
+- Milestone 3F.2 fixed Combined Library search is complete. It uses
+  deterministic keyword plus bounded local semantic retrieval, and hosted
+  smoke acceptance passed against Worker
+  `97803204-e09c-49a3-9bf5-15d5043f8871`.
 
 ## Later Work
 
 - Package the local ASR companion and model with user-visible pairing/restart
   controls.
 - Add rights-safe learning-content and quiz generation from approved sources.
-- Activate semantic Library search only after its model/index and failure
-  boundary are approved.
+- Revisit the semantic index model and hosted retrieval only after a separate
+  cost, privacy, and failure-boundary review.
 - Package the verified PWA with Capacitor for Android.

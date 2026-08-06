@@ -1,6 +1,7 @@
 // @ts-check
 
 import { D1SourceLibraryRepository } from "../worker/source-library-d1.js";
+import { vectorize } from "../worker/local-semantic-index.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) {
@@ -103,7 +104,9 @@ class DatabaseFixture {
   /** @param {string} query @param {readonly (string | number | null)[]} bindings */
   all(query, bindings) {
     this.allCalls.push({ query, bindings });
-    const kind = query.includes("FROM interest_areas")
+    const kind = bindings.at(-1) === 501
+      ? "semantic"
+      : query.includes("FROM interest_areas")
       ? "areas"
       : query.includes("FROM source_suppressions")
       ? "suppressions"
@@ -398,6 +401,26 @@ Deno.test("D1 keyword search parameterizes escaped terms and keeps owner scope",
   assertEquals(call.query.includes('harmony" OR rhythm'), false);
   assertEquals(call.bindings[0], "owner-a");
   assertEquals(call.bindings[1], '"harmony" AND "OR" AND "rhythm"');
+});
+
+Deno.test("D1 local semantic search is bounded, owner scoped, and versioned", async () => {
+  const database = new DatabaseFixture();
+  database.allRows.set("semantic:owner-a|501", [sourceRow()]);
+  const result = await new D1SourceLibraryRepository(database).semanticSearch({
+    ownerId: "owner-a",
+    vector: vectorize("Learning source Source description."),
+    modelId: "local-feature-hash",
+    modelVersion: "v1",
+    dimensions: 64,
+    limit: 5,
+  });
+  assertEquals(result.ok, true);
+  if (!result.ok) throw new Error(result.error.kind);
+  assertEquals(result.value[0].sourceId, "source:1");
+  assertEquals(result.value[0].ownerId, "owner-a");
+  assertEquals(result.value[0].dimensions, 64);
+  assertEquals(database.allCalls[0].bindings[0], "owner-a");
+  assertEquals(database.allCalls[0].bindings[1], 501);
 });
 
 Deno.test("D1 suppression checks are bounded by owner and candidate identities", async () => {

@@ -195,6 +195,34 @@ independent validation completed 2026-07-29; hosted activation checks approved
   `c2e752bf-868d-4dad-9b01-aef77b5e08fc`; no unexpected console or page errors
   remained and all retained evidence was redacted.
 
+## Milestone 3F.2 Combined Library Search
+
+### Proposed And Implemented Tests
+
+- The Library route has no search-method selector and the gateway defaults an
+  omitted mode to `combined`.
+- The local feature-hash vector is versioned, finite, dimension-checked, and
+  deterministic; related morphology receives a positive cosine score.
+- D1 semantic ranking is owner-scoped, bounded to 500 active sources, returns
+  only versioned raw semantic hits, and fails closed over the cap.
+- The Worker source-catalog route defaults missing mode to Combined while
+  preserving the legacy typed route contract.
+- Existing query-service tests cover semantic-only, keyword-only, union,
+  de-duplication, active-source revalidation, and named model/index failures.
+
+### Completed Local Validation
+
+- Focused source-library/Worker tests: `39/39` passed.
+- Full repository tests: `530/530` passed.
+- `deno task check` passed.
+- Production browser build passed the existing raw/gzip budgets.
+
+### Hosted Acceptance Completed
+
+- Hosted smoke acceptance passed against Worker
+  `97803204-e09c-49a3-9bf5-15d5043f8871`: one `mode=combined` Library request,
+  zero Discover-provider requests, no selector, and one returned source.
+
 ## Milestone 3D Centralized Educational Source Search
 
 **Status: approved for hosted activation, locally completed, and independently
