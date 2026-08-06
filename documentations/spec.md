@@ -10,10 +10,13 @@ to stale content or become unavailable when selected.
 
 - Use pinned `playwright-core` with the installed stable Google Chrome binary.
   Do not download another browser or copy a personal Chrome profile.
-- Authenticate hosted automation through one 90-day Cloudflare Access service
-  token permitted by an exact-token Service Auth policy for this application.
-- Keep `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` only in ignored
-  `.env.browser-acceptance`. Never print, log, persist, or bundle their values.
+- Authenticate hosted automation through one isolated interactive Cloudflare
+  Access session for the approved account. Do not add a machine identity to the
+  production owner model for this private prototype.
+- Keep Playwright storage state only at ignored
+  `.private/browser-acceptance/storage-state.json`, with directory mode `0700`
+  and file mode `0600`. Never print, log, bundle, or retain its cookie values in
+  acceptance evidence.
 - Navigate Feed, Discover, Review, and Library at desktop and mobile viewports.
   Capture redacted screenshots, console categories, same-origin response
   statuses, timings, and Worker version without raw payloads or query text.
@@ -26,13 +29,17 @@ to stale content or become unavailable when selected.
 - Selecting a current result must render that exact result. Unknown IDs remain
   explicitly unavailable and must not resolve to another item.
 - Permit one generated, reversible Library mutation only during release
-  acceptance. Confirm the podcast source is `feed` plus `metadata`, then remove
-  it while preserving unrelated sources and completed study/review history.
+  acceptance. Confirm the HTTPS web source is `site` plus `metadata` and
+  `bounded-ingestion`, then remove it while preserving unrelated sources and
+  completed study/review history. Validate podcast `feed` plus `metadata`
+  separately without another mutation.
 - Keep logs and screenshots under ignored `logs/` and `test-results/` for at
   most 30 days. Redaction failures are blocking test failures.
-- Keep the deployed Taddy candidate online while repairing this pre-existing
-  state defect. Pause further production mutations until local validation and
-  independent review pass.
+- Keep Taddy metadata-only and exclude individual insecure HTTP search results
+  without upgrading, storing, or approving them.
+- For each non-empty Taddy search, use one bounded ID/ranking query followed by
+  one bounded batch safety/details query. Reject blocked, private, duplicate,
+  invalid, and missing feeds before central results are exposed.
 - Preserve the fixed browser budgets: `182,000` raw / `58,000` gzip JavaScript
   and `24,000` raw CSS. Stop for review if a correct fix cannot fit without
   compromising behavior, accessibility, privacy, or failure contracts.
@@ -42,8 +49,12 @@ to stale content or become unavailable when selected.
 ### Browser Harness
 
 - A feature-local browser acceptance module validates injected configuration,
-  launches installed Chrome through Playwright, attaches Access service-token
-  headers, and returns one named result variant per expected failure.
+  launches installed Chrome through Playwright, loads an isolated Access
+  storage-state file, and returns one named result variant per expected
+  failure.
+- A separate headed bootstrap writes storage state only after the canonical
+  Worker document returns success with a valid Worker-version header. An
+  expired or revoked session requires another interactive bootstrap.
 - The harness records only redacted operational evidence through an injected
   log sink. It never owns Cloudflare credentials or application business data.
 - Fast deterministic controller tests remain the primary debugging loop. The
@@ -71,29 +82,32 @@ to stale content or become unavailable when selected.
 - New Discovery layouts, ranking changes, semantic search, feed generation,
   podcast acquisition/transcription, Review scheduling changes, and Android
   packaging.
-- Personal browser profile access, browser-extension automation, or broad
-  Cloudflare service-token policies.
+- Personal browser profile access, browser-extension automation, service-token
+  owner mapping, or broad Cloudflare service-token policies.
 
 ## Implementation Checklist
 
 - [x] Capture the hosted stale-result and unavailable-detail symptoms.
 - [x] Compare authenticated browser automation approaches and costs.
-- [x] Approve Playwright, exact-token Access authentication, reversible hosted
-      mutation, retention, and proposed tests.
-- [ ] Build and run the deterministic failing Discovery regression.
-- [ ] Identify and document the root cause before changing behavior.
-- [ ] Implement the smallest state-lifecycle repair.
-- [ ] Implement the typed, redacted Playwright acceptance harness.
-- [ ] Run focused tests, strict checking, full tests, fixed budgets, and
+- [x] Approve Playwright, isolated interactive Access authentication,
+      reversible hosted mutation, retention, and proposed tests.
+- [x] Build and run the deterministic failing Discovery regression.
+- [x] Identify and document the root cause before changing behavior.
+- [x] Implement the smallest state-lifecycle repair.
+- [x] Implement the typed, redacted Playwright acceptance harness.
+- [x] Run focused tests, strict checking, full tests, fixed budgets, and
       independent validation.
-- [ ] Configure the exact-token Access policy and run hosted acceptance.
-- [ ] Present the final Milestone 3F result before further product work.
+- [x] Bootstrap the isolated Access session and run hosted acceptance.
+- [x] Present the final Milestone 3F result before further product work.
 
 ## Design Check
 
 This design fits the private single-user product and the existing Access
-boundary. A service token is narrower and more revocable than copying a
-personal browser session. Playwright is maintained, supports installed Chrome,
-and is isolated from the browser production bundle as a development dependency.
-The repair remains inside Discovery and composition boundaries; it does not
-change provider policy, Library ownership, or learning-domain behavior.
+boundary. The session is not copied from a personal Chrome profile; it is
+created in a dedicated Playwright context, stored locally with restricted
+permissions, and periodically renewed through explicit login. This avoids
+expanding the production authorization model solely for prototype automation.
+Playwright is maintained, supports installed Chrome, and is isolated from the
+browser production bundle as a development dependency. The repair remains
+inside Discovery and composition boundaries; it does not change provider
+policy, Library ownership, or learning-domain behavior.

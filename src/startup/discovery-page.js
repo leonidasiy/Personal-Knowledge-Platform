@@ -39,6 +39,11 @@ export function createDiscoveryPage(dependencies) {
     typeof dependencies.navigateToLibrary !== "function" ||
     typeof dependencies.rerender !== "function"
   ) throw new TypeError("Discovery page dependencies are invalid.");
+  const markup = dependencies.markup;
+  const escapeHtml = dependencies.escapeHtml;
+  const onNotice = dependencies.onNotice;
+  const onError = dependencies.onError;
+  const rerender = dependencies.rerender;
   const issued = new Map();
   const sessionSeed = dependencies.createId();
   const runtime = createDiscoveryRuntime({
@@ -88,12 +93,14 @@ export function createDiscoveryPage(dependencies) {
   const youtubeConnection = createYouTubeConnectionController({
     storage: dependencies.policyStorage,
     now: dependencies.now,
-    markup: dependencies.markup,
-    onNotice: dependencies.onNotice,
-    onError: dependencies.onError,
-    rerender: dependencies.rerender,
+    markup,
+    onNotice,
+    onError,
+    rerender,
   });
   let searchPending = false;
+  let searchInitialized = false;
+  let searchGeneration = 0;
   /** @type {import("../features/discovery/gateway.js").GatewaySearchCapability[]} */ let searchCapabilities = [];
   /** @type {import("../routes/discover.js").DiscoverRouteItem[]|null} */ let centralRouteItems = null;
   /** @type {string|null} */ let searchFailure = null;
@@ -111,7 +118,7 @@ export function createDiscoveryPage(dependencies) {
     async load() {
       const youtubePolicy = youtubeConnection.load();
       if (!youtubePolicy.ok) {
-        dependencies.onError("YouTube policy preference could not be read.");
+        onError("YouTube policy preference could not be read.");
       }
       const [loaded, capabilities, areas] = await Promise.all([
         runtime.load(),
@@ -120,14 +127,16 @@ export function createDiscoveryPage(dependencies) {
       ]);
       if (capabilities.ok) {
         searchCapabilities = [...capabilities.value];
-        selectedProviderIds = searchCapabilities.filter((provider) =>
-          provider.enabled
-        ).map((provider) => provider.id);
-        searchFailure = null;
-      } else {
+        if (!searchInitialized) {
+          selectedProviderIds = searchCapabilities.filter((provider) =>
+            provider.enabled
+          ).map((provider) => provider.id);
+          searchFailure = null;
+        }
+      } else if (!searchInitialized) {
         searchFailure = friendlyDiscoveryFailure(
           capabilities.error,
-          dependencies.markup,
+          markup,
         );
       }
       if (areas.ok) {
@@ -139,17 +148,20 @@ export function createDiscoveryPage(dependencies) {
     },
     /** @param {{readonly selectedItemId:string|null,readonly online:boolean}} route */
     render(route) {
-      if (searchPending) return loading(dependencies.escapeHtml, dependencies.markup);
+      if (searchPending) return loading(escapeHtml, markup);
       const projected = runtime.renderModel({
         name: "discover",
         cursor: null,
-        selectedItemId: route.selectedItemId,
+        selectedItemId: typeof route.selectedItemId === "string" &&
+            route.selectedItemId.trim() !== ""
+          ? null
+          : route.selectedItemId,
         online: route.online,
       });
       if (projected.ok) {
         const projectedModel = toDiscoverRouteModel(
           projected.value,
-          dependencies.escapeHtml,
+          escapeHtml,
         );
         const visibleItems = centralRouteItems ?? [...projectedModel.items];
         const items = visibleItems.filter((item) =>
@@ -160,13 +172,17 @@ export function createDiscoveryPage(dependencies) {
         return renderDiscoverRoute(
           freeze({
             ...projectedModel,
+            page: route.selectedItemId === null ? "list" : "detail",
+            selectedItemId: route.selectedItemId,
             items: freeze(items),
-            state: searchFailure === null
-              ? items.length === 0
-                ? /** @type {const} */ ("empty")
-                : /** @type {const} */ ("success")
-              : /** @type {const} */ ("partial"),
-            stateMessage: searchFailure,
+            state: route.online
+              ? searchFailure === null
+                ? items.length === 0
+                  ? /** @type {const} */ ("empty")
+                  : /** @type {const} */ ("success")
+                : /** @type {const} */ ("partial")
+              : projectedModel.state,
+            stateMessage: route.online ? searchFailure : projectedModel.stateMessage,
             areas: freeze(
               interestAreas.map((area) =>
                 freeze({ id: area.id, title: area.title })
@@ -175,52 +191,26 @@ export function createDiscoveryPage(dependencies) {
             pendingId: pendingDecisionItemId,
             canAct: sourceActionsAvailable && route.online,
             search: searchModel(route.online),
-            markup: dependencies.markup,
+            markup,
           }),
         );
       }
-      if (
-        projected.error.kind === "DiscoveryRuntimeSelectedItemUnknown" &&
-        route.selectedItemId !== null
-      ) {
-        const list = runtime.renderModel({
-          name: "discover",
-          cursor: null,
-          selectedItemId: null,
-          online: route.online,
-        });
-        if (list.ok) {
-          return renderDiscoverRoute(freeze({
-            ...toDiscoverRouteModel(list.value, dependencies.escapeHtml),
-            page: /** @type {const} */ ("detail"),
-            selectedItemId: route.selectedItemId,
-            areas: freeze(
-              interestAreas.map((area) =>
-                freeze({ id: area.id, title: area.title })
-              ),
-            ),
-            pendingId: pendingDecisionItemId,
-            canAct: sourceActionsAvailable && route.online,
-            search: searchModel(route.online),
-            markup: dependencies.markup,
-          }));
-        }
-      }
       return renderDiscoverRoute({
-        ...emptyRoute(dependencies.escapeHtml, dependencies.markup),
+        ...emptyRoute(escapeHtml, markup),
         state: "error",
         stateMessage: friendlyDiscoveryFailure(
           projected.error,
-          dependencies.markup,
+          markup,
         ),
-        markup: dependencies.markup,
+        markup,
         search: searchModel(route.online),
       });
     },
     /** @param {ParentNode} root */
     bind(root) {
       youtubeConnection.bind(root);
-      root.querySelector("[data-discovery-search-form]")?.addEventListener(
+      const searchForm = root.querySelector("[data-discovery-search-form]");
+      searchForm?.addEventListener(
         "submit",
         (event) => {
           event.preventDefault();
@@ -236,6 +226,7 @@ export function createDiscoveryPage(dependencies) {
           }
         },
       );
+      searchForm?.setAttribute("data-discovery-search-bound", "true");
       root.querySelectorAll("[data-discovery-approve]").forEach((element) =>
         element.addEventListener("submit", (event) => {
           event.preventDefault();
@@ -282,44 +273,49 @@ export function createDiscoveryPage(dependencies) {
 
   /** @param {unknown} command */
   async function search(command) {
-    const commandRecord = typeof command === "object" && command !== null &&
-        !Array.isArray(command)
-      ? /** @type {Record<string,unknown>} */ (command)
-      : null;
-    if (commandRecord !== null) {
-      if (typeof commandRecord.query === "string") {
-        searchQuery = commandRecord.query;
-      }
-      if (
-        Array.isArray(commandRecord.providerIds) &&
-        commandRecord.providerIds.every((value) => typeof value === "string")
-      ) selectedProviderIds = [...commandRecord.providerIds];
-      if (
-        typeof commandRecord.limit === "number" &&
-        Number.isInteger(commandRecord.limit)
-      ) searchLimit = commandRecord.limit;
-    }
+    const stagedCommand = searchCommand(command);
+    const generation = ++searchGeneration;
     if (
-      selectedProviderIds.includes("youtube") &&
+      stagedCommand !== null && stagedCommand.providerIds.includes("youtube") &&
       !youtubeConnection.isAccepted()
     ) {
+      searchInitialized = true;
+      searchQuery = stagedCommand.query;
+      selectedProviderIds = [...stagedCommand.providerIds];
+      searchLimit = stagedCommand.limit;
       const failure = { kind: /** @type {const} */ ("YouTubePolicyAcceptanceRequired") };
-      searchFailure = friendlyDiscoveryFailure(failure, dependencies.markup);
-      dependencies.onError(searchFailure);
-      dependencies.rerender();
+      searchFailure = friendlyDiscoveryFailure(failure, markup);
+      onError(searchFailure);
+      rerender();
       return { ok: false, error: failure };
     }
+    if (stagedCommand !== null && !searchInitialized) {
+      searchInitialized = true;
+      searchQuery = stagedCommand.query;
+      selectedProviderIds = [...stagedCommand.providerIds];
+      searchLimit = stagedCommand.limit;
+    }
     searchPending = true;
-    dependencies.rerender();
+    rerender();
     const result = await centralGateway.search(command);
+    if (generation !== searchGeneration) {
+      return {
+        ok: false,
+        error: { kind: /** @type {const} */ ("DiscoverySearchSuperseded") },
+      };
+    }
     searchPending = false;
     if (!result.ok) {
-      searchFailure = friendlyDiscoveryFailure(result.error, dependencies.markup);
-      dependencies.onError(searchFailure);
-      dependencies.rerender();
+      searchFailure = friendlyDiscoveryFailure(result.error, markup);
+      onError(searchFailure);
+      rerender();
       return result;
     }
     searchQuery = result.value.submittedQuery;
+    if (stagedCommand !== null) {
+      selectedProviderIds = [...stagedCommand.providerIds];
+      searchLimit = stagedCommand.limit;
+    }
     centralRouteItems = result.value.items.map((item) =>
       centralRouteItem(item, result.value.policyVersion)
     );
@@ -329,9 +325,15 @@ export function createDiscoveryPage(dependencies) {
     if (sourceActionsAvailable) {
       await syncIdentities(centralRouteItems.map((item) =>
         item.candidate.canonicalIdentity
-      ));
+      ), generation);
     }
-    dependencies.rerender();
+    if (generation !== searchGeneration) {
+      return {
+        ok: false,
+        error: { kind: /** @type {const} */ ("DiscoverySearchSuperseded") },
+      };
+    }
+    rerender();
     return result;
   }
 
@@ -343,14 +345,12 @@ export function createDiscoveryPage(dependencies) {
       item === undefined ||
       !interestAreas.some((area) => area.id === areaId)
     ) {
-      dependencies.onError(
-        dependencies.markup.sourceAreaRequired,
-      );
-      dependencies.rerender();
+      onError(markup.sourceAreaRequired);
+      rerender();
       return;
     }
     pendingDecisionItemId = item.id;
-    dependencies.rerender();
+    rerender();
     const result = await sourceLibrary.approve({
       ...item.candidate,
       identityStatus: "resolved",
@@ -359,16 +359,16 @@ export function createDiscoveryPage(dependencies) {
     });
     pendingDecisionItemId = null;
     if (!result.ok) {
-      dependencies.onError(friendlySource(result.error, dependencies.markup));
+      onError(friendlySource(result.error, markup));
     } else {
-      dependencies.onNotice(
+      onNotice(
         result.value.reused
-          ? dependencies.markup.sourceAlreadyAdded
-          : dependencies.markup.sourceAdded,
+          ? markup.sourceAlreadyAdded
+          : markup.sourceAdded,
       );
       dependencies.navigateToLibrary(result.value.source.id);
     }
-    dependencies.rerender();
+    rerender();
   }
 
   /** @param {string} itemId @param {string} areaId @param {File} file @param {boolean} attested */
@@ -380,12 +380,12 @@ export function createDiscoveryPage(dependencies) {
       item === undefined || initialItem === null || !attested ||
       !interestAreas.some((area) => area.id === areaId)
     ) {
-      dependencies.onError(dependencies.markup.uploadRequired);
-      dependencies.rerender();
+      onError(markup.uploadRequired);
+      rerender();
       return;
     }
     pendingDecisionItemId = item.id;
-    dependencies.rerender();
+    rerender();
     const approved = await sourceLibrary.approve({
       ...item.candidate,
       identityStatus: "resolved",
@@ -394,8 +394,8 @@ export function createDiscoveryPage(dependencies) {
     });
     if (!approved.ok) {
       pendingDecisionItemId = null;
-      dependencies.onError(friendlySource(approved.error, dependencies.markup));
-      dependencies.rerender();
+      onError(friendlySource(approved.error, markup));
+      rerender();
       return;
     }
     let content;
@@ -404,8 +404,8 @@ export function createDiscoveryPage(dependencies) {
     } catch (error) {
       if (!(error instanceof Error)) throw error;
       pendingDecisionItemId = null;
-      dependencies.onError(dependencies.markup.uploadReadFailed);
-      dependencies.rerender();
+      onError(markup.uploadReadFailed);
+      rerender();
       return;
     }
     const mediaType =
@@ -429,12 +429,12 @@ export function createDiscoveryPage(dependencies) {
     });
     pendingDecisionItemId = null;
     if (!uploaded.ok) {
-      dependencies.onError(dependencies.markup.uploadStoreFailed);
+      onError(markup.uploadStoreFailed);
     } else {
-      dependencies.onNotice(dependencies.markup.uploadStored);
+      onNotice(markup.uploadStored);
       dependencies.navigateToLibrary(approved.value.source.id);
     }
-    dependencies.rerender();
+    rerender();
   }
 
   /** @param {string} itemId */
@@ -443,7 +443,7 @@ export function createDiscoveryPage(dependencies) {
     const item = routeItems.get(itemId);
     if (item === undefined) return;
     pendingDecisionItemId = item.id;
-    dependencies.rerender();
+    rerender();
     const result = await sourceLibrary.reject({
       canonicalIdentity: item.candidate.canonicalIdentity,
       identityEvidence: item.candidate.identityEvidence,
@@ -451,14 +451,12 @@ export function createDiscoveryPage(dependencies) {
     });
     pendingDecisionItemId = null;
     if (!result.ok) {
-      dependencies.onError(friendlySource(result.error, dependencies.markup));
+      onError(friendlySource(result.error, markup));
     } else {
       suppressed.add(item.candidate.canonicalIdentity);
-      dependencies.onNotice(
-        dependencies.markup.sourceRejected,
-      );
+      onNotice(markup.sourceRejected);
     }
-    dependencies.rerender();
+    rerender();
   }
 
   async function syncSuppressions() {
@@ -471,17 +469,18 @@ export function createDiscoveryPage(dependencies) {
     if (!projected.ok) return;
     const identities = [
       ...new Set(
-        toDiscoverRouteModel(projected.value, dependencies.escapeHtml).items
+        toDiscoverRouteModel(projected.value, escapeHtml).items
           .map((item) => item.candidate.canonicalIdentity),
       ),
     ];
     await syncIdentities(identities);
   }
 
-  /** @param {readonly string[]} identities */
-  async function syncIdentities(identities) {
+  /** @param {readonly string[]} identities @param {number|null} [generation] */
+  async function syncIdentities(identities, generation = null) {
     if (identities.length === 0) return;
     const checked = await sourceLibrary.suppressed(identities);
+    if (generation !== null && generation !== searchGeneration) return;
     if (!checked.ok) {
       sourceActionsAvailable = false;
       return;
@@ -503,7 +502,9 @@ export function createDiscoveryPage(dependencies) {
   /** @param {import("../features/discovery/gateway.js").GatewayCentralCandidate} item @param {string} policyVersion */
   function centralRouteItem(item, policyVersion) {
     const observedAt = dependencies.now();
-    const provider = searchCapabilities.find((entry) => entry.id === item.providerId);
+    const providerId = item.providerId;
+    const canonicalUrl = item.canonicalUrl;
+    const provider = searchCapabilities.find((entry) => entry.id === providerId);
     const youtube = item.sourceLevel === "video";
     const feed = item.sourceLevel === "feed";
     const id = dependencies.createId();
@@ -520,19 +521,19 @@ export function createDiscoveryPage(dependencies) {
       sourceLabel: item.publisherLabel ?? provider?.label ?? item.resultKind,
       observedAtLabel: observedAt,
       rightsLabel: "Not assessed",
-      provenanceLabel: item.canonicalUrl,
-      sourceUrl: item.canonicalUrl,
+      provenanceLabel: canonicalUrl,
+      sourceUrl: canonicalUrl,
       evidenceStatus: /** @type {const} */ ("link-only"),
       youtubeWatchUrl: youtube ? item.canonicalUrl : null,
       podcastReferenceLabel: null,
       candidate: freeze({
-        submittedUrl: item.canonicalUrl,
-        canonicalUrl: item.canonicalUrl,
-        canonicalIdentity: item.canonicalUrl,
+        submittedUrl: canonicalUrl,
+        canonicalUrl,
+        canonicalIdentity: canonicalUrl,
         title: retainedTitle,
         description: retainedDescription,
         adapter: freeze({
-          id: `central-search:${item.providerId}`,
+          id: `central-search:${providerId}`,
           version: policyVersion,
           granularity: item.sourceLevel,
           capabilities: freeze(youtube ? ["metadata", "manual-transcript"] : feed ? ["metadata"] : ["metadata", "bounded-ingestion"]),
@@ -541,17 +542,38 @@ export function createDiscoveryPage(dependencies) {
         initialItem: youtube ? freeze({
           itemId: id,
           versionId: policyVersion,
-          canonicalUrl: item.canonicalUrl,
+          canonicalUrl,
           title: retainedTitle,
           description: retainedDescription,
-          contentDigest: `provider-metadata:${policyVersion}:${item.canonicalUrl}`,
-          provenance: freeze([{ method: "provider-metadata", reference: item.canonicalUrl }]),
+          contentDigest: `provider-metadata:${policyVersion}:${canonicalUrl}`,
+          provenance: freeze([{ method: "provider-metadata", reference: canonicalUrl }]),
           observedAt,
           publishedAt: null,
         }) : null,
       }),
     });
   }
+}
+
+/** @param {unknown} command */
+function searchCommand(command) {
+  if (typeof command !== "object" || command === null || Array.isArray(command)) return null;
+  const value = /** @type {Record<string,unknown>} */ (command);
+  const limit = value.limit;
+  if (
+    Object.keys(value).length !== 3 ||
+    typeof value.query !== "string" || value.query.trim() === "" ||
+    !Array.isArray(value.providerIds) || value.providerIds.length === 0 ||
+    value.providerIds.length > 20 ||
+    !value.providerIds.every((id) => typeof id === "string" && id.trim() !== "") ||
+    new Set(value.providerIds).size !== value.providerIds.length ||
+    typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 20
+  ) return null;
+  return freeze({
+    query: value.query,
+    providerIds: freeze(/** @type {string[]} */ ([...value.providerIds])),
+    limit,
+  });
 }
 
 /** @param {(value:string)=>string} escapeHtml @param {import("../routes/discover.js").DiscoverMarkup} markup */

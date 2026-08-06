@@ -260,6 +260,8 @@ function renderDecisionActions(model, item, offline) {
       });
   return youtubePolicy + template(model, "decisionActions", {
     itemId: remoteText(model, item.id),
+    sourceGranularity: remoteText(model, item.candidate.adapter.granularity),
+    sourceCapabilities: remoteText(model, item.candidate.adapter.capabilities.join(",")),
     areas,
     areaDisabled: model.areas.length === 0 ? "disabled" : "",
     submitDisabled: unavailable || model.areas.length === 0 ? "disabled" : "",

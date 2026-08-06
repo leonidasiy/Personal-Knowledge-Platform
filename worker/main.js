@@ -15,6 +15,7 @@ import {
 import { YouTubeDiscoveryAdapter } from "./youtube-adapter.js";
 import { createEducationalSearchPolicy } from "./educational-search-policy.js";
 import { createCentralDiscoverySearch } from "./discovery-search.js";
+import { instrumentCentralSearch } from "./search-observability.js";
 import { createBraveSearchProvider } from "./brave-search-adapter.js";
 import { createTaddySearchProvider } from "./taddy-search-adapter.js";
 import { createYouTubeSearchProvider } from "./youtube-search-provider.js";
@@ -517,6 +518,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       ]),
     },
   );
+  const observedCentralSearch = instrumentCentralSearch(
+    centralSearch,
+    (event) => console.info(JSON.stringify(event)),
+  );
   const baseWorker = createDiscoveryWorker(
     {
       allowedOrigin: configuration.value.allowedOrigin,
@@ -555,7 +560,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         });
         return recorded.ok ? acquired : recorded;
       },
-      centralSearch,
+      centralSearch: observedCentralSearch,
       sourceLibrary,
       sourceCatalog,
       sourceIngestion,

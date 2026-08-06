@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Milestone 3F Access identity decision</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; line-height: 1.5; }
+    body { margin: 0; background: Canvas; color: CanvasText; }
+    main { width: min(980px, calc(100% - 32px)); margin: 40px auto 64px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(2rem, 6vw, 3.6rem); margin: 0 0 12px; letter-spacing: 0; }
+    h2 { font-size: 1.2rem; margin: 0 0 8px; }
+    p { max-width: 76ch; }
+    .eyebrow { color: #a94535; font-weight: 750; text-transform: uppercase; }
+    .summary { font-size: 1.1rem; color: color-mix(in srgb, CanvasText 72%, Canvas); }
+    .options { border-top: 1px solid color-mix(in srgb, CanvasText 24%, Canvas); margin-top: 32px; }
+    article { padding: 24px 0; border-bottom: 1px solid color-mix(in srgb, CanvasText 24%, Canvas); }
+    .recommended { border-left: 5px solid #197466; padding-left: 18px; }
+    .tag { display: inline-block; border: 1px solid #197466; color: #197466; padding: 2px 8px; font-size: .82rem; font-weight: 750; }
+    dl { display: grid; grid-template-columns: 150px 1fr; gap: 8px 16px; margin: 16px 0 0; }
+    dt { font-weight: 750; }
+    dd { margin: 0; }
+    code { font-family: ui-monospace, monospace; font-size: .92em; }
+    .tests { margin-top: 36px; padding-top: 20px; border-top: 4px solid #a87700; }
+    li { margin: 8px 0; }
+    a { color: #197466; }
+    @media (max-width: 640px) { dl { grid-template-columns: 1fr; } dd { margin-bottom: 8px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Milestone 3F · Security boundary</p>
+    <h1>How should browser automation become the private owner?</h1>
+    <p class="summary">Cloudflare Access successfully validates the Service Auth token. Its signed JWT uses <code>common_name</code> for the service-token client ID and does not carry the user's email, while Resonance currently accepts only mapped email identities.</p>
+
+    <section class="options" aria-label="Implementation choices">
+      <article class="recommended">
+        <span class="tag">Recommended</span>
+        <h2>A · Exact service-principal mapping</h2>
+        <p>Extend the existing signed-JWT verifier to accept either one mapped email identity or one exact configured service-token <code>common_name</code>. Map only the approved acceptance client ID to <code>personal-owner-v1</code>.</p>
+        <dl>
+          <dt>Security</dt><dd>Strong. Signature, issuer, audience, expiry, and exact principal mapping remain mandatory. Browser-supplied identity claims stay rejected.</dd>
+          <dt>Operations</dt><dd>Add one Worker secret, <code>ACCESS_ACCEPTANCE_SERVICE_TOKEN_ID</code>, containing the existing non-secret client ID. The client secret remains only in the local acceptance environment.</dd>
+          <dt>Automation</dt><dd>Fully unattended and compatible with the current reversible browser journey.</dd>
+          <dt>Recurring cost</dt><dd>USD 0.00 under the existing Cloudflare Access Free setup.</dd>
+        </dl>
+      </article>
+
+      <article>
+        <h2>B · Persist an interactive user session</h2>
+        <p>Authenticate once through the Google/Access login screen and retain Playwright storage state for later acceptance runs.</p>
+        <dl>
+          <dt>Security</dt><dd>Weaker local artifact posture: an identity session cookie must be stored, rotated, protected, and excluded from logs and source control.</dd>
+          <dt>Operations</dt><dd>Periodic manual login is required when the session expires.</dd>
+          <dt>Automation</dt><dd>Not fully unattended and harder to reproduce in isolated environments.</dd>
+          <dt>Recurring cost</dt><dd>USD 0.00, with higher maintenance cost.</dd>
+        </dl>
+      </article>
+
+      <article>
+        <h2>C · Acceptance-only application bypass</h2>
+        <p>Add a separate custom credential or bypass route specifically for testing.</p>
+        <dl>
+          <dt>Security</dt><dd>Not recommended. It creates a second authorization mechanism and increases the production attack surface.</dd>
+          <dt>Operations</dt><dd>Requires separate credential rotation, routing, monitoring, and rollback.</dd>
+          <dt>Automation</dt><dd>Unattended, but at an unjustified architectural cost.</dd>
+          <dt>Recurring cost</dt><dd>USD 0.00, with the highest engineering risk.</dd>
+        </dl>
+      </article>
+    </section>
+
+    <section class="tests">
+      <h2>Proposed tests for Option A</h2>
+      <ul>
+        <li>Identity JWT with one mapped email continues to authenticate.</li>
+        <li>Service JWT with the exact configured <code>common_name</code> authenticates as the approved owner.</li>
+        <li>Unknown service IDs, missing principals, ambiguous email-plus-service claims, invalid signatures, wrong audiences, and expired tokens remain distinct failures.</li>
+        <li>Missing service-token configuration disables only service authentication and preserves interactive user access.</li>
+        <li>The hosted Library API returns success, browser artifacts remain redacted, the temporary source is removed, and completed review history is unchanged.</li>
+        <li>The init-script hook receives a dedicated sanitized browser-setup failure instead of being mislabeled as a Chrome launch failure.</li>
+      </ul>
+      <p>Cloudflare references: <a href="https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/">Service tokens</a> and <a href="https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/application-token/">Application token claims</a>.</p>
+    </section>
+  </main>
+</body>
+</html>

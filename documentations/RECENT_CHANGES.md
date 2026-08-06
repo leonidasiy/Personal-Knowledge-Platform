@@ -1,5 +1,21 @@
 # Recent Changes
 
+## 2026-08-06: Autonomous Hosted Browser Acceptance
+
+- Added a typed, redacted Playwright release gate using installed Chrome and
+  an ignored, isolated Cloudflare Access session.
+- Repaired live Discovery state so search results, filters, selections, and
+  Discover-to-Library refreshes survive route navigation without reverting to
+  stale persisted results.
+- Corrected Brave mixed-transport handling and the live Taddy GraphQL contract,
+  including its bounded follow-up safety check and nullable block status.
+- Passed `524/524` tests, strict checking, production budgets, independent
+  validation, and the hosted desktop/mobile journey against Worker
+  `6e0768f8-1dd9-4b07-a42a-48ad31af5d8a`.
+- Preserved content-free operational evidence and verified that credentials,
+  raw queries, provider payloads, and Access cookies do not enter retained
+  artifacts or tracked files.
+
 ## 2026-07-29: Taddy Podcast Discovery Candidate
 
 - Recorded Podcast Index's free-email signup restriction without attempting an

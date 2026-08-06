@@ -677,8 +677,17 @@ Deno.test("Discover is a lazy fourth destination with one bounded search command
     ) && !/^import .*discovery-page/m.test(source),
     "Discover page code must stay behind route activation.",
   );
+  const libraryNavigation = source.slice(
+    source.indexOf("navigateToLibrary:"),
+    source.indexOf("rerender:", source.indexOf("navigateToLibrary:")),
+  );
+  assert(
+    libraryNavigation.includes("libraryPageController?.load()"),
+    "A Discover approval must refresh an already-opened Library before navigation.",
+  );
   assert(
     discoveryPage.includes("data-discovery-search-form") &&
+      discoveryPage.includes('data-discovery-search-bound", "true"') &&
       discoveryPage.includes("centralGateway.capabilities()") &&
       discoveryPage.includes("centralGateway.search(command)") &&
       discoveryPage.includes('form.getAll("provider")') &&

@@ -2,7 +2,9 @@
 
 ## Milestone 3F Autonomous Browser Acceptance And Discovery State Repair
 
-**Status: design, tests, and specification approved 2026-08-01; implementation pending.**
+**Status: design and original tests approved 2026-08-01; Option B interactive
+Access session and its revised tests approved 2026-08-05; implementation and
+independent validation completed 2026-08-05.**
 
 ### Discovery State Regression
 
@@ -19,13 +21,20 @@
 ### Browser Harness Contract
 
 - Validate target URL, installed Chrome path, result directory, timeouts, and
-  the complete Access credential pair before launching a browser.
-- Return distinct named failures for missing ID, missing secret, invalid target,
-  Chrome launch failure, Access redirect/rejection, navigation timeout,
-  unexpected console error, failed same-origin module/API response, assertion
-  failure, artifact write failure, cleanup failure, and redaction failure.
-- Never include credential values, Access tokens, raw response bodies, or query
-  text in results, exceptions, console output, logs, screenshots, or filenames.
+  the canonical isolated storage-state path before launching a browser.
+- Bootstrap storage state in a headed isolated context only after the canonical
+  Worker succeeds with a valid Worker version. Enforce `0700` on its directory,
+  `0600` on its file, and Git exclusion for both.
+- Return distinct named failures for missing, unreadable, malformed, or expired
+  session state; invalid target; browser launch/setup failure; Access
+  redirect/rejection; navigation timeout; unexpected console error; failed
+  same-origin module/API response; assertion failure; artifact write failure;
+  cleanup failure; and redaction failure.
+- Never include cookies, Access tokens, raw response bodies, or query text in
+  results, exceptions, console output, logs, screenshots, or filenames.
+- Load session state directly into the fresh browser context. Send no Access
+  client headers, install no service-token request route, and do not persist a
+  personal Chrome profile.
 - Navigate Feed, Discover, Review, and Library at approved desktop and mobile
   viewports with no uncaught console error or failed same-origin module request.
 - Run one generic bounded central search, select a result, return to the same
@@ -57,17 +66,21 @@ independent validation completed 2026-07-29; hosted activation checks approved
 
 - Accept only a typed central provider command with the configured provider ID,
   the already-augmented educational query, and a bounded positive result limit.
-- Send one HTTPS GraphQL request with `X-USER-ID` and `X-API-KEY` from injected
-  Worker secrets. Never return, log, export, or persist either credential.
+- Send one bounded HTTPS GraphQL search request and, only when it returns IDs,
+  one bounded `getMultiplePodcastSeries` safety/details request with
+  `X-USER-ID` and `X-API-KEY` from injected Worker secrets. Never return, log,
+  export, or persist either credential. A non-empty search therefore uses two
+  Taddy requests; the 500-request free allowance conservatively supports 250
+  such searches per month before any other Taddy use.
 - Query only `PODCASTSERIES`, enable safe mode, use the already-augmented query,
-  and request the smaller of the command and configured result limits. Do not
-  request episode, audio, artwork, transcript, or hosted-media fields.
+  and request the smaller of the command and configured result limits. The
+  second request retrieves only bounded feed identity and safety evidence. Do
+  not request episode, audio, artwork, transcript, or hosted-media fields.
 - Validate the complete response batch before returning results. Reject a
   malformed batch atomically with a named provider-response failure.
 - Return show/feed-level evidence only. Accept an HTTPS RSS URL only when the
-  provider supplies it. Missing RSS stays link-only; private, blocked,
-  duplicate, invalid, and missing feed states are never silently treated as an
-  active source.
+  provider supplies it. Private, blocked, duplicate, invalid, and missing feed
+  states fail explicitly and are never treated as an active source.
 - Preserve the provider UUID, ranking evidence, refresh priority, and canonical
   identity as bounded provenance without retaining provider-hosted media.
 - Map missing credential, timeout, network, non-success status, GraphQL error,
@@ -197,6 +210,7 @@ approval and outcome without duplicating executable specifications.
 
 | Milestone | Outcome |
 | --- | --- |
+| Milestone 3F autonomous browser acceptance | `524/524` full tests, `38/38` focused browser-contract tests, strict check, and production build passed; hosted desktop/mobile journey passed against Worker `6e0768f8-1dd9-4b07-a42a-48ad31af5d8a`; one exact site source was approved and disabled while completed Review history and unrelated Library sources remained; 8 redacted screenshots retained; JavaScript `181,935` raw / `57,807` gzip and CSS `23,993` raw / `5,355` gzip; independent validation found no remaining code or privacy blocker |
 | Milestone 3E Taddy podcast discovery | Independent revalidation found no blocking issue after confirming the metadata-only ingestion gate; `465/465` full tests and `20/20` independently selected relevant tests passed; strict check and production build passed; browser artifacts remained `181,639` raw / `57,528` gzip JavaScript and `23,993` raw / `5,355` gzip CSS; hosted activation pending |
 | Milestone 3D centralized educational search | Independent revalidation found no blocking issue; `461/461` full tests and `19/19` independently selected relevant tests passed; strict check and production build passed; `181,639` raw / `57,528` gzip aggregate JavaScript; `23,993` raw / `5,355` gzip CSS; hosted provider timing pending |
 | Milestone 3 eligibility and canonical deduplication | `31/31` focused and `445/445` full tests passed; strict check passed; `182,000` raw / `57,564` gzip aggregate JavaScript |

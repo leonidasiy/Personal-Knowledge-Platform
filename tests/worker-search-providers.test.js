@@ -38,6 +38,10 @@ Deno.test("Brave provider forwards the augmented query and returns site roots", 
         return Response.json({
           web: {
             results: [{
+              title: "Insecure result is not eligible",
+              url: "http://legacy.example/tutorial",
+              description: "A legacy result without transport security.",
+            }, {
               title: "Singing lessons for healthy technique",
               url: "https://voice.example/articles/breath-support?ref=search",
               description: "A practical tutorial for vocalists.",
@@ -115,10 +119,10 @@ Deno.test("Brave provider reports credential, quota, and document failures", asy
   if (!invalidResult.ok) equal(invalidResult.error.kind, "SearchProviderResponseInvalid");
 });
 
-Deno.test("Taddy provider sends one bounded series-only educational GraphQL query", async () => {
-  /** @type {URL|null} */ let requestedUrl = null;
-  /** @type {Headers|null} */ let requestedHeaders = null;
-  /** @type {unknown} */ let requestedBody = null;
+Deno.test("Taddy provider searches once and safety-checks the bounded batch once", async () => {
+  /** @type {URL[]} */ const requestedUrls = [];
+  /** @type {Headers[]} */ const requestedHeaders = [];
+  /** @type {unknown[]} */ const requestedBodies = [];
   const provider = createTaddySearchProvider(
     {
       providerId: "podcasts",
@@ -136,58 +140,79 @@ Deno.test("Taddy provider sends one bounded series-only educational GraphQL quer
       }),
       timeoutSignal: () => new AbortController().signal,
       fetch: async (input, init) => {
-        requestedUrl = new URL(String(input));
-        requestedHeaders = new Headers(init?.headers);
-        requestedBody = JSON.parse(String(init?.body));
-        return Response.json({
-          data: { search: {
+        requestedUrls.push(new URL(String(input)));
+        requestedHeaders.push(new Headers(init?.headers));
+        requestedBodies.push(JSON.parse(String(init?.body)));
+        if (requestedBodies.length === 1) return Response.json({ data: { searchForTerm: {
+            searchId: "search-1",
             podcastSeries: [{
               uuid: "6bdfd429-f58b-427d-8072-353d478aa15f",
-              name: "Song Exploder lessons",
-              description: "An educational course in song analysis.",
-              websiteUrl: "https://show.example/song-exploder",
-              rssUrl: "https://feeds.example/song-exploder.xml",
-              authorName: "Example Radio",
-              isBlocked: false,
-              feedRefreshDetails: {
-                uuid: "9f9d9083-e718-47cd-b7f1-62abdd18d270",
-                priority: "HIGH",
-                priorityReason: null,
-                dateLastRefreshed: 1785242096,
-              },
             }],
-            rankingDetails: [{
-              uuid: "6bdfd429-f58b-427d-8072-353d478aa15f",
-              rankingScore: 0.875,
-            }],
-          } },
-        });
+            rankingDetails: [{ uuid: "6bdfd429-f58b-427d-8072-353d478aa15f", rankingScore: 0.875 }],
+        } } });
+        return Response.json({ data: { getMultiplePodcastSeries: [{
+          uuid: "6bdfd429-f58b-427d-8072-353d478aa15f",
+          name: "Song Exploder lessons",
+          rssUrl: "https://feeds.example/song-exploder.xml",
+          isBlocked: null,
+          feedRefreshDetails: {
+            uuid: "9f9d9083-e718-47cd-b7f1-62abdd18d270",
+            priority: "HIGH",
+            priorityReason: null,
+            dateLastRefreshed: 1785242096,
+          },
+        }] } });
       },
     },
   );
   const result = await provider.search({ ...command, providerId: "podcasts" });
   equal(result.ok, true);
-  if (!result.ok || requestedUrl === null || requestedHeaders === null) return;
-  const podcastUrl = /** @type {URL} */ (requestedUrl),
-    podcastHeaders = /** @type {Headers} */ (requestedHeaders),
-    body = /** @type {Record<string,unknown>} */ (requestedBody);
-  equal(podcastUrl.href, "https://api.taddy.org/");
-  equal(podcastHeaders.get("x-user-id"), "user-7");
-  equal(podcastHeaders.get("x-api-key"), "taddy-secret");
-  equal(podcastHeaders.get("content-type"), "application/json");
-  equal(JSON.stringify(body.variables), JSON.stringify({ term: command.query, limit: 6 }));
+  if (!result.ok) return;
+  equal(requestedUrls.length, 2);
+  equal(requestedUrls.every((url) => url.href === "https://api.taddy.org/"), true);
+  equal(requestedHeaders.every((headers) => headers.get("x-user-id") === "user-7"), true);
+  equal(requestedHeaders.every((headers) => headers.get("x-api-key") === "taddy-secret"), true);
+  equal(requestedHeaders.every((headers) => headers.get("content-type") === "application/json"), true);
+  const body = /** @type {Record<string,unknown>} */ (requestedBodies[0]);
+  const detailsBody = /** @type {Record<string,unknown>} */ (requestedBodies[1]);
+  equal(body.variables, undefined);
+  equal(detailsBody.variables, undefined);
   const query = String(body.query);
-  equal(query.includes("filterForTypes:PODCASTSERIES"), true);
-  equal(query.includes("isSafeMode:true"), true);
+  const detailsQuery = String(detailsBody.query);
+  const compactQuery = query.replaceAll(/\s+/g, "");
+  const compactDetailsQuery = detailsQuery.replaceAll(/\s+/g, "");
+  equal(compactQuery.startsWith("{searchForTerm("), true);
+  equal(query.includes(`term:${JSON.stringify(command.query)}`), true);
+  equal(compactQuery.includes("limitPerPage:6"), true);
+  equal(compactQuery.includes("searchForTerm("), true);
+  equal(compactQuery.includes("filterForTypes:PODCASTSERIES"), true);
+  equal(compactQuery.includes("isSafeMode:true"), true);
   equal(query.includes("podcastEpisodes"), false);
   equal(query.includes("audioUrl"), false);
   equal(query.includes("imageUrl"), false);
   equal(query.includes("transcript"), false);
+  equal(query.includes("page:"), false);
+  equal(query.includes("searchResultsBoostType:"), false);
+  equal(query.includes("includeSearchOperator:OR"), true);
+  equal(query.includes("isBlocked"), false);
+  equal(query.includes("feedRefreshDetails"), false);
+  equal(query.includes("rankingDetails"), true);
+  equal(query.includes("rankingDetails{id uuid rankingScore}"), true);
+  equal(query.includes("searchId"), true);
+  equal(query.includes("description"), false);
+  equal(query.includes("websiteUrl"), false);
+  equal(query.includes("authorName"), false);
+  equal(detailsQuery.includes("getMultiplePodcastSeries"), true);
+  equal(detailsQuery.includes("getMultiplePodcastSeries"), true);
+  equal(detailsQuery.includes(JSON.stringify("6bdfd429-f58b-427d-8072-353d478aa15f")), true);
+  equal(detailsQuery.includes("isBlocked"), true);
+  equal(detailsQuery.includes("feedRefreshDetails"), true);
+  equal(compactDetailsQuery.endsWith("}}}"), true);
+  equal(compactDetailsQuery.endsWith("}}}}"), false);
   equal(result.value[0].canonicalUrl, "https://feeds.example/song-exploder.xml");
   equal(result.value[0].sourceLevel, "feed");
   equal(result.value[0].identityEvidence.some((entry) => entry.attribute === "taddy-series-uuid"), true);
-  equal(result.value[0].identityEvidence.some((entry) => entry.attribute === "taddy-ranking-score"), true);
-  equal(result.value[0].identityEvidence.some((entry) => entry.attribute === "taddy-feed-refresh-priority"), true);
+  equal(result.value[0].identityEvidence.some((entry) => entry.attribute === "podcast-feed"), true);
 });
 
 Deno.test("Taddy provider maps transport and GraphQL failures distinctly", async () => {
@@ -230,13 +255,21 @@ Deno.test("Taddy provider maps transport and GraphQL failures distinctly", async
       credentials, timeoutSignal: () => AbortSignal.abort(new DOMException("timed out", "TimeoutError")),
       fetch: async (_input, init) => { throw init?.signal?.reason; },
     })],
-    ["SearchProviderGraphqlRejected", () => createTaddySearchProvider(configuration, {
+    ["SearchProviderInputInvalid", () => createTaddySearchProvider(configuration, {
       credentials, timeoutSignal: () => new AbortController().signal,
-      fetch: async () => Response.json({ errors: [{ code: "BAD_USER_INPUT", message: "invalid" }], data: { search: null } }),
+      fetch: async () => Response.json({ errors: [{ code: "BAD_USER_INPUT", message: "invalid" }], data: { searchForTerm: null } }),
+    })],
+    ["SearchProviderQueryInvalid", () => createTaddySearchProvider(configuration, {
+      credentials, timeoutSignal: () => new AbortController().signal,
+      fetch: async () => Response.json({ errors: [{ code: "INVALID_QUERY_OR_SYNTAX", message: "Cannot query field on this type" }] }),
     })],
     ["SearchProviderCredentialRejected", () => createTaddySearchProvider(configuration, {
       credentials, timeoutSignal: () => new AbortController().signal,
       fetch: async () => Response.json({ errors: [{ code: "API_KEY_INVALID", message: "invalid key" }] }),
+    })],
+    ["SearchProviderCredentialRejected", () => createTaddySearchProvider(configuration, {
+      credentials, timeoutSignal: () => new AbortController().signal,
+      fetch: async () => Response.json({ errors: [{ code: "API_KEY_INVALID", message: "invalid key" }] }, { status: 500 }),
     })],
     ["SearchProviderQuotaExceeded", () => createTaddySearchProvider(configuration, {
       credentials, timeoutSignal: () => new AbortController().signal,
@@ -260,10 +293,7 @@ Deno.test("Taddy provider fails closed for blocked, private, duplicate, invalid,
   const series = {
     uuid: "6bdfd429-f58b-427d-8072-353d478aa15f",
     name: "Music course",
-    description: "Tutorial",
-    websiteUrl: "https://show.example/",
     rssUrl: "https://feeds.example/show.xml",
-    authorName: "Teacher",
     isBlocked: false,
     feedRefreshDetails: { uuid: "9f9d9083-e718-47cd-b7f1-62abdd18d270", priority: "REGULAR", priorityReason: null, dateLastRefreshed: 1785242096 },
   };
@@ -279,14 +309,35 @@ Deno.test("Taddy provider fails closed for blocked, private, duplicate, invalid,
     const provider = createTaddySearchProvider(configuration, {
       credentials: () => ({ ok: true, value: { userId: "user-7", apiKey: "secret" } }),
       timeoutSignal: () => new AbortController().signal,
-      fetch: async () => Response.json({ data: { search: {
-        podcastSeries: [item],
-        rankingDetails: [{ uuid: series.uuid, rankingScore: 0.5 }],
-      } } }),
+      fetch: async (_input, init) => String(init?.body).includes("getMultiplePodcastSeries")
+        ? Response.json({ data: { getMultiplePodcastSeries: [item] } })
+        : Response.json({ data: { searchForTerm: {
+          podcastSeries: [{ uuid: series.uuid }],
+          rankingDetails: [{ uuid: series.uuid, rankingScore: 0.5 }],
+        } } }),
     });
     const result = await provider.search({ ...command, providerId: "podcasts" });
     equal(result.ok, false);
     if (!result.ok) equal(result.error.kind, expected);
+  }
+});
+
+Deno.test("Taddy provider classifies query diagnostics without retaining provider messages", async () => {
+  const provider = createTaddySearchProvider(
+    { providerId: "podcasts", label: "Podcasts", resultKind: "podcast", priority: 2, enabled: true, maximumResults: 20, timeoutMs: 5_000 },
+    {
+      credentials: () => ({ ok: true, value: { userId: "user-7", apiKey: "secret" } }),
+      timeoutSignal: () => new AbortController().signal,
+      fetch: async () => Response.json({ errors: [{ code: "INVALID_QUERY_OR_SYNTAX", message: "Cannot query field private-field on type Query" }] }),
+    },
+  );
+  const result = await provider.search({ ...command, providerId: "podcasts" });
+  equal(result.ok, false);
+  if (!result.ok) {
+    equal(result.error.kind, "SearchProviderQueryInvalid");
+    equal("reason" in result.error ? result.error.reason : null, "field");
+    equal("diagnosticTokens" in result.error ? JSON.stringify(result.error.diagnosticTokens) : null, JSON.stringify(["search", "query", "field"]));
+    equal(JSON.stringify(result.error).includes("private-field"), false);
   }
 });
 
@@ -296,10 +347,11 @@ Deno.test("Taddy provider rejects a malformed mixed batch atomically", async () 
     {
       credentials: () => ({ ok: true, value: { userId: "user-7", apiKey: "secret" } }),
       timeoutSignal: () => new AbortController().signal,
-      fetch: async () => Response.json({ data: { search: {
+      fetch: async () => Response.json({ data: { searchForTerm: {
         podcastSeries: [{
-          uuid: "6bdfd429-f58b-427d-8072-353d478aa15f", name: "Valid lesson", description: "Course",
-          websiteUrl: null, rssUrl: "https://feeds.example/valid.xml", authorName: null, isBlocked: false,
+          uuid: "6bdfd429-f58b-427d-8072-353d478aa15f", name: "Valid lesson",
+          rssUrl: "https://feeds.example/valid.xml",
+          isBlocked: false,
           feedRefreshDetails: { uuid: "9f9d9083-e718-47cd-b7f1-62abdd18d270", priority: "REGULAR", priorityReason: null, dateLastRefreshed: 1785242096 },
         }, { uuid: "not-a-uuid" }],
         rankingDetails: [{ uuid: "6bdfd429-f58b-427d-8072-353d478aa15f", rankingScore: 0.5 }],

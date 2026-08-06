@@ -653,6 +653,10 @@ async function loadActiveRoute() {
           notice = null;
         },
         navigateToLibrary: () => {
+          void libraryPageController?.load().catch(() => {
+            libraryRouteIssue = APP_COPY.libraryRouteUnavailable;
+            render();
+          });
           activeView = "library";
           libraryPage = "collection";
           location.hash = "library";

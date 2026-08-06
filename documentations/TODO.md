@@ -1,24 +1,22 @@
 # Durable Handoff
 
-## Milestone 3E
+## Milestone 3F
 
-- Receive explicit approval of the locally completed and independently
-  validated Milestone 3E result before deployment.
-- Store `BRAVE_SEARCH_API_KEY`, `TADDY_USER_ID`, and `TADDY_API_KEY` as Worker
-  secrets. Do not place their values in source, browser state, or documentation.
-- Measure hosted provider latency and complete the browser, accessibility,
-  Access, partial-failure, approval, rejection, and Library acceptance checks.
+- Approved, deployed, and accepted against Worker
+  `6e0768f8-1dd9-4b07-a42a-48ad31af5d8a`.
 - Keep Taddy sources metadata-only. Automatic acquisition remains prohibited
   until a separately approved eligibility workflow grants `bounded-ingestion`.
+- Renew the ignored isolated Cloudflare Access browser session when hosted
+  acceptance reports an authentication redirect.
 - Revisit the CSS budget before any further styling: only 7 raw bytes remain
   under its current ceiling.
 - Reclaim or explicitly revise the JavaScript budget before the next browser
-  feature: only `361` raw and `472` gzip bytes remain under the approved
+  feature: only `65` raw and `193` gzip bytes remain under the approved
   aggregate ceilings.
 
 ## Later
 
+- Define the next milestone through one grilling session before implementing
+  rights-safe learning-content and quiz generation from approved sources.
 - Package the local ASR model and companion daemon with pairing/restart UX.
-- Complete rendered accessibility, real IndexedDB, service-worker, and hosted
-  provider acceptance checks in [`TESTING.md`](TESTING.md).
 - Keep Android packaging behind verified responsive PWA acceptance.

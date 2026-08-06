@@ -6,6 +6,18 @@ The local fixture-backed PWA needs no environment variables or credentials.
 Discovery API requests use same-origin `/api/*` paths and are never cached by
 the service worker.
 
+## Hosted Browser Acceptance
+
+The optional headed login helper accepts `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` from ignored `.env.browser-acceptance` only to reach
+the Access login flow. They are never browser application settings. The
+authenticated account session is stored only at ignored
+`.private/browser-acceptance/storage-state.json` with directory mode `0700` and
+file mode `0600`; do not print, share, commit, or copy that file into build or
+test artifacts. The release gate uses fixed code-owned target, browser,
+timeout, artifact-root, and retention contracts rather than additional
+environment overrides.
+
 ## Cloudflare Worker
 
 Hosted activation is provisioned. Configure these as Worker variables unless

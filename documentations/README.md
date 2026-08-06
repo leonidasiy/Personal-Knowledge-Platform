@@ -6,12 +6,12 @@ captured in `REFERENCE.md` or `PROJECT_STATUS.md`.
 
 ## Current Work
 
-Milestone 3E replaces Podcast Index with Taddy Free for show/feed-level podcast
-discovery. Brave Search, Taddy, and official YouTube metadata share the same
-educational query and metadata policy. The local candidate passes strict
-checking and all `465/465` tests; independent validation also passes. Aggregate
-JavaScript remains `181,639` bytes raw and `57,528` bytes gzip. Taddy activation
-and hosted acceptance await milestone approval and server-secret setup.
+Milestone 3F adds a typed, redacted Playwright release gate for the private
+hosted product and repairs live Discovery state, Discover-to-Library refresh,
+and Brave mixed-transport response handling. The hosted desktop/mobile journey
+passes against Worker `6e0768f8-1dd9-4b07-a42a-48ad31af5d8a`; all `524/524`
+tests and strict checking pass. Aggregate browser JavaScript is `181,935` bytes
+raw and `57,807` bytes gzip, within the fixed budget.
 
 ## Authoritative Documents
 

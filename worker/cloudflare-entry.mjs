@@ -1,6 +1,7 @@
 import puppeteer from "@cloudflare/puppeteer";
 import { createCloudflareDiscoveryWorker } from "./main.js";
 import { createUnifiedWorkerRouter } from "./static-router.js";
+import { routeWithWorkerVersion } from "./versioned-router.js";
 
 export {
   PublisherTranscriptAuthorizationDurableObject,
@@ -24,19 +25,10 @@ export default {
           },
         }),
     });
-    if (routed.ok) return routed.value.fetch(request);
-    return new Response(
-      JSON.stringify({
-        error: routed.error.kind,
-        field: routed.error.field,
-      }),
-      {
-        status: 503,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-        },
-      },
+    return routeWithWorkerVersion(
+      routed,
+      request,
+      environment.CF_VERSION_METADATA,
     );
   },
 };

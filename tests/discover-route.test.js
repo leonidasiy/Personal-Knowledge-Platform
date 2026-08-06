@@ -333,6 +333,8 @@ Deno.test("Discovery exposes only source approval and rejection without learning
     html.includes('aria-label="Source action"') &&
       html.includes("Watch on YouTube") &&
       html.includes("Add to Library") &&
+      html.includes('data-source-granularity="individual-video"') &&
+      html.includes('data-source-capabilities="metadata,manual-transcript"') &&
       html.includes("data-discovery-reject") &&
       html.includes("Interest area"),
     "The attributed source and the two approved Library decisions must remain available.",
@@ -347,6 +349,31 @@ Deno.test("Discovery exposes only source approval and rejection without learning
     html.includes("data-discovery-upload") &&
       html.includes("I confirm I am permitted to store this transcript"),
     "YouTube detail must expose an explicit rights-attested transcript workflow.",
+  );
+});
+
+Deno.test("Discover renders the actual feed approval contract with metadata-only capabilities", () => {
+  const feedCandidate = item({
+    id: "feed-observed-1",
+    candidate: Object.freeze({
+      ...item().candidate,
+      adapter: Object.freeze({
+        id: "podcast-feed",
+        version: "1",
+        granularity: "feed",
+        capabilities: Object.freeze(["metadata"]),
+      }),
+    }),
+  });
+  const html = renderDiscoverRoute(model("success", [feedCandidate], {
+    page: "detail",
+    selectedItemId: "feed-observed-1",
+  }));
+  assert(
+    html.includes('data-discovery-approve="feed-observed-1"') &&
+      html.includes('data-source-granularity="feed"') &&
+      html.includes('data-source-capabilities="metadata"'),
+    "A feed candidate must retain its exact approval attributes.",
   );
 });
 

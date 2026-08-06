@@ -5,6 +5,7 @@
 .env*
 .deno/
 .npm-cache/
+.private/
 .qodo/
 .specify/
 .superpowers/

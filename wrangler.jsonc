@@ -11,12 +11,17 @@
     "binding": "SOURCE_BROWSER",
     "remote": true
   },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
   "workers_dev": true,
   "preview_urls": false,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
     "run_worker_first": [
+      "/",
+      "/index.html",
       "/api",
       "/api/*"
     ]

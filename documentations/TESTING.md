@@ -20,12 +20,33 @@ Run the full suite:
 deno task test
 ```
 
-The latest completed candidate passed `461/461` tests. Its aggregate JavaScript
-is `181,639` bytes raw and `57,528` bytes gzip; CSS is `23,993` bytes raw and
+The latest completed candidate passed `524/524` tests. Its aggregate JavaScript
+is `181,935` bytes raw and `57,807` bytes gzip; CSS is `23,993` bytes raw and
 `5,355` bytes gzip. Treat the executable tests and build output as authoritative;
 update these figures only after a fresh complete validation.
 
 ## Browser Acceptance
+
+Create or renew the isolated Cloudflare Access session interactively:
+
+```sh
+deno task browser:acceptance:login
+```
+
+Run the hosted release gate only after a successful production build and
+deployment:
+
+```sh
+deno task browser:acceptance
+```
+
+The session is read only from ignored
+`.private/browser-acceptance/storage-state.json`. The gate retains redacted
+evidence under ignored `logs/browser-acceptance/` and eight route screenshots
+under ignored `test-results/browser-acceptance/`, with a maximum 30-day
+retention. It performs one exact reversible site-source mutation and fails
+closed if removal, redaction, Access, console, API, or Worker-version evidence
+cannot be confirmed.
 
 After `deno task build` and `deno task serve`, validate:
 
