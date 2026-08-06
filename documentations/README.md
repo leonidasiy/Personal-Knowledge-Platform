@@ -6,12 +6,14 @@ captured in `REFERENCE.md` or `PROJECT_STATUS.md`.
 
 ## Current Work
 
-Milestone 3F adds a typed, redacted Playwright release gate for the private
-hosted product and repairs live Discovery state, Discover-to-Library refresh,
-and Brave mixed-transport response handling. The hosted desktop/mobile journey
-passes against Worker `6e0768f8-1dd9-4b07-a42a-48ad31af5d8a`; all `524/524`
-tests and strict checking pass. Aggregate browser JavaScript is `181,935` bytes
-raw and `57,807` bytes gzip, within the fixed budget.
+Milestone 3F.1 corrects automatic Feed reveal and established-client shell
+freshness. Its local candidate passes strict checking, all `526/526` repository
+tests, independent validation, and hosted acceptance against Worker
+`c2e752bf-868d-4dad-9b01-aef77b5e08fc`. The production candidate is
+`182,485` raw / `57,948` gzip aggregate JavaScript
+within the approved `182,500` raw / `58,000` gzip ceilings. Fixed Combined
+Library search is the next separate Milestone 3F.2 implementation; its tests
+will be designed and run without another approval gate as requested.
 
 ## Authoritative Documents
 

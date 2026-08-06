@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Milestone 3F autonomous hosted browser acceptance is approved, deployed, and
+Milestone 3F.1 autonomous hosted browser acceptance is approved, deployed, and
 independently validated. The selected provider boundary remains Brave Search
 for web publisher roots, Taddy Free for podcast shows and evidenced feeds, and
 official YouTube metadata for individual videos. One shared versioned
@@ -13,7 +13,7 @@ The hosted application uses one Cloudflare Access-protected Worker with
 Static Assets, D1, private R2, Browser Run, Durable Objects, and a restricted
 YouTube Data API key. Milestone 3F passed strict checking, `524/524` tests,
 independent validation, and the hosted desktop/mobile journey against Worker
-`6e0768f8-1dd9-4b07-a42a-48ad31af5d8a`. The production build is `181,935` raw / `57,807` gzip
+`c2e752bf-868d-4dad-9b01-aef77b5e08fc`. The production build is `182,485` raw / `57,948` gzip
 aggregate JavaScript plus `23,993` raw / `5,355` gzip CSS.
 
 ## Completed Product Capabilities
@@ -49,9 +49,9 @@ aggregate JavaScript plus `23,993` raw / `5,355` gzip CSS.
 
 ## Active Work
 
-- Close the approved Milestone 3F branch as one validated commit.
-- Define the next product milestone through the required grilling session;
-  implementation has not started.
+- Implement Milestone 3F.2 fixed Combined Library search with deterministic
+  keyword plus local semantic retrieval, explicit availability failures, and
+  no live provider calls from Library.
 
 ## Later Work
 

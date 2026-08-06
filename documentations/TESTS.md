@@ -1,5 +1,60 @@
 # Test Specification
 
+## Milestone 3F.1 Feed Reveal And Hosted Shell Correction
+
+**Status: approved 2026-08-06. Library Alternative B is deferred to separate
+sub-milestone 3F.2.**
+
+### Feed Progressive Reveal
+
+- A Feed with hidden frozen assignments renders an automatic reveal sentinel.
+  Entering the configured viewport margin reveals exactly one next assignment
+  without calling ranking, moving focus, or writing study state.
+- Repeated observer notifications cannot reveal more than one item for the same
+  rendered sentinel. Rerender and route change disconnect the prior observer.
+- No hidden assignment creates no reveal observer or control.
+- Missing or failed observer capability exposes the keyboard-operable Load more
+  fallback; normal automatic operation does not show that button.
+- Passive exposure observation remains independent and retains its dwell and
+  visibility thresholds.
+
+### Hosted Shell And Discover Detail
+
+- A deterministic two-version scenario begins with a controlled legacy cached
+  application shell, publishes a changed build, reloads, and converges to the
+  current document, entry module, styles, manifest, and Worker version.
+- Navigations and entry assets use network-first freshness with current-cache
+  write-through and exact offline fallback. Immutable generated chunks remain
+  cacheable. API requests and authenticated payloads never enter the shell
+  cache.
+- After convergence, a central search result click retains the current query,
+  filters, limit, and result collection; it performs no replacement search and
+  renders the exact selected item without historical persisted rows.
+- Unknown IDs remain explicitly unavailable. Current offline results remain
+  inspectable without claiming unavailable network actions.
+- Network failure with a cached shell succeeds offline; network and cache
+  failure emits the existing typed, content-free offline failure.
+
+### Delivery
+
+- Pass focused Feed, offline-shell, build, and browser-acceptance regressions,
+  strict checking, the full suite, production budgets, hosted desktop/mobile
+  acceptance, and independent validation before deployment.
+- Preserve redacted evidence: no query text, source content, credentials,
+  Access cookies, or raw provider payloads in retained logs or screenshots.
+
+### Candidate Validation
+
+- Focused build, Feed, frontend, and offline-shell regressions: `41/41` passed.
+- Strict repository check: passed.
+- Full repository suite: `526/526` passed after the executable two-version and
+  stale-observer lifecycle regressions were strengthened.
+- Production build: `182,485` raw / `57,948` gzip aggregate JavaScript and
+  `23,993` raw / `5,355` gzip CSS. The user approved the `182,500` raw ceiling;
+  gzip and CSS budgets are unchanged.
+- Independent validation passed after closing stale-observer lifecycle gaps.
+  Hosted desktop/mobile acceptance remains required after deployment.
+
 ## Milestone 3F Autonomous Browser Acceptance And Discovery State Repair
 
 **Status: design and original tests approved 2026-08-01; Option B interactive
@@ -129,6 +184,16 @@ independent validation completed 2026-07-29; hosted activation checks approved
   tokens, credentials, or raw provider payloads.
 - Roll back to the preceding Worker version if Access, API routing, centralized
   search, Library persistence, or static route acceptance fails.
+
+### Milestone 3F.1 Completed Validation
+
+- `38/38` browser-acceptance contract tests passed, including the exact
+  expected `409 /api/source-library/approve` console exception boundary.
+- `526/526` repository tests passed after the harness correction.
+- `deno task check` and `git diff --check` passed.
+- Hosted desktop/mobile acceptance passed against Worker
+  `c2e752bf-868d-4dad-9b01-aef77b5e08fc`; no unexpected console or page errors
+  remained and all retained evidence was redacted.
 
 ## Milestone 3D Centralized Educational Source Search
 

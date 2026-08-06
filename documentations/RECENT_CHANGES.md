@@ -1,5 +1,15 @@
 # Recent Changes
 
+## 2026-08-06: Milestone 3F.1 Hosted Acceptance Complete
+
+- Verified automatic Feed progressive reveal and network-first shell freshness
+  against an established authenticated client.
+- Passed `526/526` repository tests, `38/38` browser-contract tests, strict
+  checking, and redacted desktop/mobile hosted acceptance against Worker
+  `c2e752bf-868d-4dad-9b01-aef77b5e08fc`.
+- Kept the browser release gate strict except for the exact idempotent source
+  approval `409` console response; unrelated runtime errors remain failures.
+
 ## 2026-08-06: Autonomous Hosted Browser Acceptance
 
 - Added a typed, redacted Playwright release gate using installed Chrome and

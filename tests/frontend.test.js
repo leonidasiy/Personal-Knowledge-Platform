@@ -135,10 +135,18 @@ Deno.test("feed reveals immutable daily assignments and retains the 24-hour rank
     "The local cursor lifetime must be exactly 24 hours.",
   );
   assert(
-    source.includes("revealedStudyItems += 1") &&
+    source.includes('data-feed-reveal') &&
+      source.includes("revealedStudyItems += 1") &&
       source.includes("syncVisibleAssignment()") &&
       source.includes("if (!hasHiddenAssignedItems()) return;"),
-    "Load more must reveal the frozen daily assignment without ranking again.",
+    "The scroll boundary must reveal the frozen daily assignment without ranking again.",
+  );
+  assert(
+    source.includes('rootMargin: "400px 0px"') &&
+      source.includes("feedRevealObserver?.disconnect()") &&
+      source.includes("void loadMore(false)") &&
+      source.includes('data-action="load-more"'),
+    "Automatic reveal needs a guarded observer and a manual capability fallback.",
   );
   assert(
     !source.slice(
@@ -162,6 +170,139 @@ Deno.test("feed reveals immutable daily assignments and retains the 24-hour rank
       `${failure} must keep a distinct user-facing branch.`,
     );
   }
+});
+
+Deno.test("feed reveal observer is single-use, independent, and capability-safe", async () => {
+  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const start = source.slice(
+    source.indexOf("function startStudyTracking()"),
+    source.indexOf("/** @param {string} candidateId */", source.indexOf("function startStudyTracking()")),
+  );
+  class Button {
+    hidden = true;
+  }
+  const fallback = new Button();
+  const sentinel = { kind: "sentinel" };
+  const card = { kind: "card" };
+  /** @type {unknown[]} */
+  const observed = [];
+  const disconnected = [];
+  /** @type {((entries: { isIntersecting: boolean, intersectionRatio: number, target: unknown }[]) => void)[]} */
+  const callbacks = [];
+  /** @type {unknown[]} */
+  const options = [];
+  class Observer {
+    /** @param {(entries: { isIntersecting: boolean, intersectionRatio: number, target: unknown }[]) => void} callback @param {unknown} option */
+    constructor(callback, option) {
+      callbacks.push(callback);
+      options.push(option);
+    }
+    /** @param {unknown} target */
+    observe(target) {
+      observed.push(target);
+    }
+    disconnect() {
+      disconnected.push(true);
+    }
+  }
+  /** @type {boolean[]} */
+  const loadCalls = [];
+  const createHarness = new Function(
+    "activeView",
+    "root",
+    "globalThis",
+    "HTMLButtonElement",
+    "IntersectionObserver",
+    "schedulePassiveExposure",
+    "cancelPassiveExposure",
+    "loadMore",
+    "renderMessagesOnly",
+    `let studyObserver = null; let feedRevealObserver = null; let notice = "";
+    ${start}
+    startStudyTracking();
+    return {
+      get notice() { return notice; },
+      get studyObserver() { return studyObserver; },
+      get feedRevealObserver() { return feedRevealObserver; },
+      resetReveal() { feedRevealObserver?.disconnect(); feedRevealObserver = null; },
+      startStudyTracking,
+    };`,
+  );
+  const pageRoot = {
+    /** @param {string} selector */
+    querySelector(selector) {
+      return selector.includes("load-more") ? fallback : sentinel;
+    },
+    querySelectorAll() {
+      return [card];
+    },
+  };
+  const result = createHarness(
+    "feed",
+    pageRoot,
+    { IntersectionObserver: Observer },
+    Button,
+    Observer,
+    () => {},
+    () => {},
+    /** @param {boolean} restoreFocus */
+    async (restoreFocus) => loadCalls.push(restoreFocus),
+    () => {},
+  );
+  assertEquals(callbacks.length, 2);
+  assertEquals(observed[0], card);
+  assertEquals(observed[1], sentinel);
+  assertEquals(JSON.stringify(options[1]), JSON.stringify({ rootMargin: "400px 0px" }));
+  assertEquals(fallback.hidden, true);
+  result.resetReveal();
+  result.startStudyTracking();
+  callbacks[1]([{ isIntersecting: true, intersectionRatio: 1, target: sentinel }]);
+  assertEquals(loadCalls.length, 0);
+  callbacks[3]([{ isIntersecting: true, intersectionRatio: 1, target: sentinel }]);
+  callbacks[3]([{ isIntersecting: true, intersectionRatio: 1, target: sentinel }]);
+  assertEquals(JSON.stringify(loadCalls), JSON.stringify([false]));
+  assertEquals(disconnected.length, 2);
+  assert(result.studyObserver !== result.feedRevealObserver, "Passive and reveal observers must remain distinct.");
+
+  let messages = 0;
+  fallback.hidden = true;
+  const unavailable = createHarness(
+    "feed",
+    pageRoot,
+    {},
+    Button,
+    Observer,
+    () => {},
+    () => {},
+    async () => {},
+    () => messages += 1,
+  );
+  assertEquals(fallback.hidden, false);
+  assertEquals(messages, 1);
+  assertEquals(unavailable.notice, "Passive tracking is unavailable; manual study still works.");
+
+  let constructions = 0;
+  class RevealFailureObserver extends Observer {
+    /** @param {(entries: { isIntersecting: boolean, intersectionRatio: number, target: unknown }[]) => void} callback @param {unknown} option */
+    constructor(callback, option) {
+      constructions += 1;
+      if (constructions === 2) throw new Error("ObserverConstructionFailed");
+      super(callback, option);
+    }
+  }
+  fallback.hidden = true;
+  createHarness(
+    "feed",
+    pageRoot,
+    { IntersectionObserver: RevealFailureObserver },
+    Button,
+    RevealFailureObserver,
+    () => {},
+    () => {},
+    async () => {},
+    () => {},
+  );
+  assertEquals(fallback.hidden, false);
 });
 
 Deno.test("quiz writes are single-flight and theme changes preserve deliberate focus", async () => {

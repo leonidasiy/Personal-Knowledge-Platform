@@ -178,7 +178,7 @@ Deno.test("artifact budgets accept exact boundaries", () => {
   );
   assertEquals(javascript.ok, true);
   assertEquals(stylesheet.ok, true);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 182_000);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 182_500);
   assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 58_000);
 });
 

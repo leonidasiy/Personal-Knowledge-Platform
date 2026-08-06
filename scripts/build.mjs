@@ -16,7 +16,7 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   }),
   aggregateJavascript: Object.freeze({
     label: "Aggregate JavaScript",
-    rawBytes: 182_000,
+    rawBytes: 182_500,
     gzipBytes: 58_000,
   }),
   stylesheet: Object.freeze({

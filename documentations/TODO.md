@@ -10,9 +10,16 @@
   acceptance reports an authentication redirect.
 - Revisit the CSS budget before any further styling: only 7 raw bytes remain
   under its current ceiling.
-- Reclaim or explicitly revise the JavaScript budget before the next browser
-  feature: only `65` raw and `193` gzip bytes remain under the approved
-  aggregate ceilings.
+- Milestone 3F.1 deployment and hosted desktop/mobile acceptance are complete.
+  The accepted candidate is `182,485` raw / `57,948` gzip within revised
+  `182,500` raw / unchanged `58,000` gzip aggregate ceilings.
+
+## Milestone 3F.2
+
+- Replace the Library method selector with one fixed Combined search. The
+  implementation will use the existing typed local semantic contract and
+  explicit availability failures first; no keyword-only result will be labeled
+  as Combined when semantic retrieval is unavailable.
 
 ## Later
 

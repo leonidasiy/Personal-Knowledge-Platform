@@ -56,6 +56,26 @@ function normalizedAbsolutePath(path) {
 }
 /** @param {string} url @returns {"document" | "module" | "asset" | "api"} */
 function category(url) { try { const path = new URL(url).pathname; if (path.startsWith("/api/")) return "api"; if (/\.(?:m?js)$/i.test(path)) return "module"; if (/\.(?:css|png|jpe?g|webp|svg|ico|woff2?)$/i.test(path)) return "asset"; } catch {} return "document"; }
+/** @param {string} url @param {unknown} status */
+function expectedSourceApprovalConflict(url, status) {
+  if (status !== 409) return false;
+  try { return new URL(url).pathname === "/api/source-library/approve"; } catch { return false; }
+}
+/** @param {unknown} event @param {string} message */
+function expectedSourceApprovalConflictConsole(event, message) {
+  if (!/failed to load resource|\b409\b/i.test(message)) return false;
+  const location = runtimeLocation(event);
+  return location.startsWith("/api/source-library/approve:");
+}
+/** @param {unknown} event */
+function runtimeLocation(event) {
+  try {
+    const location = eventValue(event, "location");
+    const url = record(location) ? text(location.url) : "";
+    const parsed = url === "" ? null : new URL(url);
+    return parsed === null ? "unknown" : `${parsed.pathname}:${typeof location.lineNumber === "number" ? location.lineNumber : 0}:${typeof location.columnNumber === "number" ? location.columnNumber : 0}`;
+  } catch { return "unknown"; }
+}
 /** @param {unknown} value */
 function timeout(value) { return record(value) && "code" in value && value.code === "ETIMEDOUT"; }
 /** @param {unknown} value */
@@ -486,7 +506,7 @@ export async function runBrowserAcceptance(config, dependencies) {
     if (browser !== null && outcome === null) try { if (typeof browser.newContext !== "function") throw new Error(); context = await browser.newContext({ serviceWorkers: "allow", reducedMotion: "reduce", storageState: sessionState }); if (!record(context)) throw new Error(); } catch { outcome = Object.freeze({ kind: "BrowserAcceptanceBrowserSetupFailed", stage: "context" }); }
     if (context !== null && outcome === null) try { if (typeof context.newPage !== "function") throw new Error(); page = await context.newPage(); if (!record(page)) throw new Error(); } catch { outcome = Object.freeze({ kind: "BrowserAcceptanceBrowserSetupFailed", stage: "page" }); }
     if (page !== null && outcome === null) {
-      try { if (typeof page.on !== "function") throw new Error(); page.on("console", (/** @type {unknown} */ event) => { const severity = text(eventValue(event, "type")); if (severity === "error" || severity === "assert" || (severity === "" && nonblank(eventValue(event, "category")))) runtimeConsoleError = true; }); page.on("pageerror", () => { runtimeConsoleError = true; }); page.on("requestfailed", (/** @type {unknown} */ event) => { if (outcome !== null) return; const url = text(eventValue(event, "url")); try { const route = category(url); if (new URL(url).origin === new URL(checked.value.targetUrl).origin && (route === "module" || route === "api")) outcome = Object.freeze({ kind: "BrowserAcceptanceSameOriginResponseFailed", category: route, status: 0 }); } catch {} }); page.on("response", (/** @type {unknown} */ event) => { if (outcome !== null) return; const status = eventValue(event, "status"); const url = text(eventValue(event, "url")); let origin = ""; try { origin = new URL(url).origin; } catch { return; } const route = category(url); const durationMs = responseDuration(event); if (origin === new URL(checked.value.targetUrl).origin && (route === "module" || route === "api") && typeof status === "number") { if (durationMs === null) { outcome = Object.freeze({ kind: "BrowserAcceptanceRedactionFailed", artifact: "evidence" }); return; } observations.push(Object.freeze({ routeCategory: route, status, durationMs })); if (!Number.isInteger(status) || status < 200 || status >= 300) outcome = Object.freeze({ kind: "BrowserAcceptanceSameOriginResponseFailed", category: route, status }); } }); } catch { outcome = Object.freeze({ kind: "BrowserAcceptanceConsoleError", category: "listener" }); }
+      try { if (typeof page.on !== "function") throw new Error(); page.on("console", (/** @type {unknown} */ event) => { const severity = text(eventValue(event, "type")); const message = text(eventValue(event, "text")); if (expectedSourceApprovalConflictConsole(event, message)) return; if (severity === "error" || severity === "assert" || (severity === "" && nonblank(eventValue(event, "category")))) runtimeConsoleError = true; }); page.on("pageerror", () => { runtimeConsoleError = true; }); page.on("requestfailed", (/** @type {unknown} */ event) => { if (outcome !== null) return; const url = text(eventValue(event, "url")); try { const route = category(url); if (new URL(url).origin === new URL(checked.value.targetUrl).origin && (route === "module" || route === "api")) outcome = Object.freeze({ kind: "BrowserAcceptanceSameOriginResponseFailed", category: route, status: 0 }); } catch {} }); page.on("response", (/** @type {unknown} */ event) => { if (outcome !== null) return; const status = eventValue(event, "status"); const url = text(eventValue(event, "url")); let origin = ""; try { origin = new URL(url).origin; } catch { return; } const route = category(url); if (expectedSourceApprovalConflict(url, status)) return; const durationMs = responseDuration(event); if (origin === new URL(checked.value.targetUrl).origin && (route === "module" || route === "api") && typeof status === "number") { if (durationMs === null) { outcome = Object.freeze({ kind: "BrowserAcceptanceRedactionFailed", artifact: "evidence" }); return; } observations.push(Object.freeze({ routeCategory: route, status, durationMs })); if (!Number.isInteger(status) || status < 200 || status >= 300) outcome = Object.freeze({ kind: "BrowserAcceptanceSameOriginResponseFailed", category: route, status }); } }); } catch { outcome = Object.freeze({ kind: "BrowserAcceptanceConsoleError", category: "listener" }); }
       let response; try { if (typeof page.goto !== "function") throw new Error(); response = await page.goto(checked.value.targetUrl, { timeout: checked.value.navigationTimeoutMs }); } catch (error) { outcome = timeout(error) ? Object.freeze({ kind: "BrowserAcceptanceNavigationTimedOut", route: "document" }) : Object.freeze({ kind: "BrowserAcceptanceNetworkUnavailable" }); }
       const documentStatus = eventValue(response, "status");
       if (outcome === null && typeof documentStatus === "number") { if (documentStatus >= 300 && documentStatus < 400) outcome = Object.freeze({ kind: "BrowserAcceptanceAccessRedirected" }); else if (documentStatus === 401 || documentStatus === 403) outcome = Object.freeze({ kind: "BrowserAcceptanceAccessRejected", status: documentStatus }); }
