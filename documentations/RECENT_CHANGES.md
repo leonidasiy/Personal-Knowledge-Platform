@@ -1,5 +1,14 @@
 # Recent Changes
 
+## 2026-08-11: Project Build Process
+
+- Added the repository-wide `PROCESS.md` with the milestone, validation,
+  documentation, review, and mandatory self-improvement workflow.
+- Added a project-local `SELF_IMPROVEMENT.md` copied from the global guidance
+  and extended it with repository-specific recursive-improvement rules.
+- Recorded the documentation-only validation contract in `TESTS.md` and linked
+  the process from the documentation index.
+
 ## 2026-07-29: Taddy Podcast Discovery Candidate
 
 - Recorded Podcast Index's free-email signup restriction without attempting an

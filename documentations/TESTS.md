@@ -1,5 +1,17 @@
 # Test Specification
 
+## Process Document Validation
+
+**Status: proposed and approved 2026-08-11; completed after creation.**
+
+- Confirm the root `PROCESS.md` exists.
+- Confirm it follows the requested title, introduction, numbered-process, and
+  mandatory-self-improvement structure.
+- Confirm every referenced project file, command, and project-local
+  `SELF_IMPROVEMENT.md` path is present and directly applicable.
+- Confirm no unrelated project carryover is introduced by the documentation
+  change.
+
 ## Milestone 3F Autonomous Browser Acceptance And Discovery State Repair
 
 **Status: design, tests, and specification approved 2026-08-01; implementation pending.**

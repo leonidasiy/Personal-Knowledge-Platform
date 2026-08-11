@@ -4,6 +4,8 @@ This directory contains the current product, engineering, setup, and validation
 records. Superseded decision pages are removed after their accepted outcomes are
 captured in `REFERENCE.md` or `PROJECT_STATUS.md`.
 
+The repository-wide build workflow is documented in [`../PROCESS.md`](../PROCESS.md).
+
 ## Current Work
 
 Milestone 3E replaces Podcast Index with Taddy Free for show/feed-level podcast
