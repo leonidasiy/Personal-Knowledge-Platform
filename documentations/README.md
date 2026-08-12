@@ -30,9 +30,8 @@ and hosted acceptance await milestone approval and server-secret setup.
 
 ## Decision Artifacts
 
-- [`milestone-3-podcast-provider-recovery-options.html`](milestone-3-podcast-provider-recovery-options.html):
-  approved Taddy Free provider-replacement decision
-- [`milestone-3-central-search-options.html`](milestone-3-central-search-options.html):
-  approved Provider A and hybrid source-boundary decision
-- [`frontend-customization-options.html`](frontend-customization-options.html):
-  retained because the live theme configuration cites it as provenance
+All milestone option pages live in the project-root [`milestones/`](../milestones/)
+folder, rather than inside `documentations/`. This includes provider,
+hosted-access, frontend-customization, and learning-generation decisions. The
+live theme configuration records the frontend page at
+`milestones/frontend-customization-options.html` as its provenance.

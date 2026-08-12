@@ -3,6 +3,12 @@
 const CACHE_PREFIX = "resonance-shell-";
 const BUILD_CACHE_ID = "__RESONANCE_BUILD_ID__";
 const CACHE_NAME = `${CACHE_PREFIX}${BUILD_CACHE_ID}`;
+const NETWORK_FIRST_PATHS = new Set([
+  "/",
+  "/index.html",
+  "/asset-manifest.json",
+  "/service-worker.js",
+]);
 const OFFLINE_FAILURE_MESSAGE = "resonance-offline-failure";
 const SHELL_URLS = [
   "./",
@@ -108,23 +114,38 @@ async function resolveSameOriginRequest(request) {
     }
   }
 
-  const fetched = fetch(request)
-    .then(async (response) => {
-      if (response.ok) {
-        try {
-          await cache.put(request, response.clone());
-        } catch {
-          await notifyOfflineFailure("OfflineCacheMiss");
-        }
+  const requestUrl = new URL(request.url);
+  const networkFirst = request.mode === "navigate" ||
+    NETWORK_FIRST_PATHS.has(requestUrl.pathname);
+  const fetched = fetch(
+    request,
+    networkFirst ? { cache: "no-store" } : undefined,
+  ).then(async (response) => {
+    if (response.ok) {
+      try {
+        await cache.put(request, response.clone());
+      } catch {
+        await notifyOfflineFailure("OfflineCacheMiss");
       }
-      return response;
-    })
-    .catch(async () => {
+    }
+    return response;
+  });
+  if (networkFirst) {
+    try {
+      return await fetched;
+    } catch {
       if (cached !== undefined) return cached;
       await notifyOfflineFailure("OfflineCacheMiss");
       return Response.error();
-    });
-  return cached ?? fetched;
+    }
+  }
+  if (cached !== undefined) return cached;
+  try {
+    return await fetched;
+  } catch {
+    await notifyOfflineFailure("OfflineCacheMiss");
+    return Response.error();
+  }
 }
 
 async function notifyOfflineFailure(kind) {

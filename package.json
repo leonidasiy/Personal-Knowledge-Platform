@@ -2,6 +2,7 @@
   "name": "resonance-learning",
   "private": true,
   "devDependencies": {
-    "@cloudflare/puppeteer": "1.1.0"
+    "@cloudflare/puppeteer": "1.1.0",
+    "playwright-core": "1.61.1"
   }
 }

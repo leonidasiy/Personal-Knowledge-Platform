@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Milestone 4 learning-generation decisions</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f3f5f2;
+      --surface: #ffffff;
+      --ink: #17211e;
+      --muted: #586660;
+      --line: #c8d2cd;
+      --green: #126e63;
+      --green-soft: #dceee9;
+      --red: #a33d30;
+      --gold: #9a6a00;
+      --gold-soft: #f7edce;
+      --focus: #0b67d1;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 72px; }
+    header { border-top: 5px solid var(--green); padding: 28px 0 30px; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--red); font-weight: 800; text-transform: uppercase; }
+    h1 { margin: 6px 0 12px; font: 700 clamp(2.2rem, 6vw, 4.5rem)/1.03 Georgia, serif; }
+    h2 { margin: 0; font-size: 1.4rem; }
+    h3 { margin: 0 0 6px; font-size: 1.05rem; }
+    p { max-width: 78ch; }
+    .intro { color: var(--muted); font-size: 1.1rem; }
+    .notice { margin-top: 22px; padding: 16px 18px; border-left: 4px solid var(--gold); background: var(--gold-soft); }
+    .decision { padding: 30px 0; border-bottom: 1px solid var(--line); }
+    .decision-head { display: flex; gap: 14px; align-items: baseline; margin-bottom: 16px; }
+    .number { color: var(--green); font-weight: 900; }
+    .choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    label {
+      display: block;
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      padding: 16px;
+      cursor: pointer;
+    }
+    label:hover { border-color: var(--green); }
+    label:has(input:checked) { border: 2px solid var(--green); padding: 15px; background: var(--green-soft); }
+    input { margin: 2px 8px 0 0; accent-color: var(--green); }
+    .choice-title { display: flex; align-items: flex-start; font-weight: 800; }
+    .tag { display: inline-block; margin: 8px 0; padding: 2px 7px; border: 1px solid var(--green); color: var(--green); font-size: .78rem; font-weight: 800; text-transform: uppercase; }
+    .tradeoff { margin: 0; color: var(--muted); font-size: .94rem; }
+    .cost-table { width: 100%; border-collapse: collapse; margin: 18px 0 6px; background: var(--surface); }
+    th, td { padding: 11px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-size: .84rem; text-transform: uppercase; }
+    .summary { margin-top: 34px; padding: 24px; background: var(--surface); border-top: 5px solid var(--green); }
+    pre { margin: 14px 0 0; padding: 16px; overflow: auto; background: var(--bg); border: 1px solid var(--line); white-space: pre-wrap; }
+    button { margin-top: 14px; padding: 11px 15px; border: 1px solid var(--green); background: var(--green); color: white; font: inherit; font-weight: 800; cursor: pointer; }
+    button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .sources { margin-top: 28px; color: var(--muted); font-size: .9rem; }
+    a { color: var(--green); }
+    @media (max-width: 800px) {
+      main { width: min(100% - 22px, 700px); padding-top: 22px; }
+      .choices { grid-template-columns: 1fr; }
+      .cost-table { display: block; overflow-x: auto; }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111714; --surface: #19211e; --ink: #edf3ef; --muted: #b7c4be;
+        --line: #42514b; --green: #68cabb; --green-soft: #173c36;
+        --red: #f29a8b; --gold: #e6b94d; --gold-soft: #3b3117; --focus: #7ab8ff;
+      }
+      button { color: #071c18; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Milestone 4 candidate</div>
+    <h1>Evidence-grounded learning generation</h1>
+    <p class="intro">Choose how approved source material becomes atomic learning units and recall drafts. The recommended combination deliberately starts narrow: it proves rights, grounding, cost control, and review before scaling to transcripts, listening tasks, or private uploads.</p>
+    <div class="notice"><strong>Current constraint:</strong> the browser JavaScript budget has only 65 raw bytes remaining. This milestone should establish the server-side pipeline and a minimal lazy review surface; any broader frontend must reclaim code or receive a separately approved budget revision.</div>
+  </header>
+
+  <section class="decision" data-decision="scope">
+    <div class="decision-head"><span class="number">01</span><h2>Eligible source scope</h2></div>
+    <div class="choices">
+      <label><span class="choice-title"><input type="radio" name="scope" value="A" checked>A · Rights-cleared public text</span><span class="tag">Recommended</span><p class="tradeoff">Only active Library items with current storage, display, and transformation permission. Excludes Taddy metadata, YouTube media, private uploads, and manual transcripts for now.</p></label>
+      <label><span class="choice-title"><input type="radio" name="scope" value="B">B · Public text plus manual transcripts</span><p class="tradeoff">Adds a new display and derivative-learning attestation for user-supplied text/VTT. More useful, but expands privacy, revocation, and consent work.</p></label>
+      <label><span class="choice-title"><input type="radio" name="scope" value="C">C · Public and local-private material</span><p class="tradeoff">Requires packaging the local companion and private sync protocol first. Highest scope and risk; not a small next milestone.</p></label>
+    </div>
+  </section>
+
+  <section class="decision" data-decision="pipeline">
+    <div class="decision-head"><span class="number">02</span><h2>Generation architecture</h2></div>
+    <div class="choices">
+      <label><span class="choice-title"><input type="radio" name="pipeline" value="A" checked>A · Deterministic units plus model drafts</span><span class="tag">Recommended</span><p class="tradeoff">The Worker segments and anchors evidence. An injected provider receives only bounded eligible excerpts and returns schema-constrained drafts. Local validators remain authoritative.</p></label>
+      <label><span class="choice-title"><input type="radio" name="pipeline" value="B">B · Deterministic cards only</span><p class="tradeoff">No external AI cost or privacy exposure. Reliable for basic extraction and fill-blank cards, but weak for explanations, plausible distractors, and application questions.</p></label>
+      <label><span class="choice-title"><input type="radio" name="pipeline" value="C">C · Local model generation</span><p class="tradeoff">Keeps text local through Ollama, but requires companion packaging, hardware checks, job recovery, and quality benchmarking before it is dependable.</p></label>
+    </div>
+  </section>
+
+  <section class="decision" data-decision="provider">
+    <div class="decision-head"><span class="number">03</span><h2>Initial draft provider</h2></div>
+    <table class="cost-table">
+      <thead><tr><th>Option</th><th>Low use</th><th>Medium use</th><th>Boundary</th></tr></thead>
+      <tbody>
+        <tr><td>OpenAI gpt-5-nano</td><td>$0.22/month</td><td>$0.59/month</td><td>Structured Outputs; documented API data policy</td></tr>
+        <tr><td>DeepSeek V4 Flash</td><td>$0.31/month</td><td>$1.04/month</td><td>JSON/tools; unclear official retention commitment</td></tr>
+        <tr><td>Local Ollama Qwen3 8B</td><td>No token fee</td><td>No token fee</td><td>About 5.2 GB model; hardware and quality costs</td></tr>
+      </tbody>
+    </table>
+    <p class="tradeoff">Model: 500 items/month, 20% retry reserve; low is 2,500 input + 600 output tokens/item, medium is 10,000 input + 1,200 output. Storage, ingestion, and human review are excluded.</p>
+    <div class="choices" style="margin-top: 14px">
+      <label><span class="choice-title"><input type="radio" name="provider" value="A" checked>A · gpt-5-nano</span><span class="tag">Recommended</span><p class="tradeoff">Cheapest modeled hosted choice, native schema control, clearer default API policy. Public rights-cleared excerpts only.</p></label>
+      <label><span class="choice-title"><input type="radio" name="provider" value="B">B · DeepSeek V4 Flash</span><p class="tradeoff">Preserves the earlier provider preference. Use only public licensed excerpts until retention and training terms are clarified.</p></label>
+      <label><span class="choice-title"><input type="radio" name="provider" value="C">C · No hosted provider</span><p class="tradeoff">Ship deterministic unitization first and defer model drafts until local generation is ready.</p></label>
+    </div>
+  </section>
+
+  <section class="decision" data-decision="review">
+    <div class="decision-head"><span class="number">04</span><h2>Approval authority</h2></div>
+    <div class="choices">
+      <label><span class="choice-title"><input type="radio" name="review" value="A" checked>A · Review every package</span><span class="tag">Recommended</span><p class="tradeoff">Nothing generated reaches Feed, Review, or mastery until you approve its anchors, learning unit, answer key, and rubric.</p></label>
+      <label><span class="choice-title"><input type="radio" name="review" value="B">B · Two-tier approval</span><p class="tradeoff">Auto-publish simple validated factual items; review all open, case, audio, and sampled factual prompts. Faster, but needs quality thresholds and rollback.</p></label>
+      <label><span class="choice-title"><input type="radio" name="review" value="C">C · Schema-valid auto-publish</span><p class="tradeoff">Highest throughput and unacceptable initial ambiguity risk. Not recommended before measured reviewer agreement.</p></label>
+    </div>
+  </section>
+
+  <section class="decision" data-decision="skills">
+    <div class="decision-head"><span class="number">05</span><h2>Learning-task boundary</h2></div>
+    <div class="choices">
+      <label><span class="choice-title"><input type="radio" name="skills" value="A" checked>A · Declarative and text-applicable skills</span><span class="tag">Recommended</span><p class="tradeoff">MCQ, multiple choice, fill-blank, short response, and text case studies that are answerable from cited evidence. Listening and performance come later.</p></label>
+      <label><span class="choice-title"><input type="radio" name="skills" value="B">B · Add symbolic MIDI and notation</span><p class="tradeoff">Adds inspectable musical stimuli and useful transfer tasks, but requires a rights-safe renderer and stimulus contract.</p></label>
+      <label><span class="choice-title"><input type="radio" name="skills" value="C">C · Add audio, DAW, and performance tasks</span><p class="tradeoff">Needs licensed clips, timestamps, loudness-matched A/B assets, self-scoring, and subjective rubrics. Too broad for the first generation slice.</p></label>
+    </div>
+  </section>
+
+  <section class="decision" data-decision="schedule">
+    <div class="decision-head"><span class="number">06</span><h2>Early recall schedule</h2></div>
+    <div class="choices">
+      <label><span class="choice-title"><input type="radio" name="schedule" value="A" checked>A · 10m, 1d, 3d, 7d, then FSRS</span><span class="tag">Recommended</span><p class="tradeoff">A transparent validation ladder before adaptive scheduling. Failed items receive a corrective same-day review and restart conservatively.</p></label>
+      <label><span class="choice-title"><input type="radio" name="schedule" value="B">B · 10m, then FSRS</span><p class="tradeoff">More adaptive and simpler, but less interpretable while generated item quality and learner calibration are still unproven.</p></label>
+      <label><span class="choice-title"><input type="radio" name="schedule" value="C">C · Fixed ladder only</span><p class="tradeoff">Easy to explain, but discards the adaptive scheduler already implemented and over-reviews strong memories.</p></label>
+    </div>
+  </section>
+
+  <section class="decision" data-decision="trigger">
+    <div class="decision-head"><span class="number">07</span><h2>Generation trigger and budget</h2></div>
+    <div class="choices">
+      <label><span class="choice-title"><input type="radio" name="trigger" value="A" checked>A · Manual source action, $2 hard cap</span><span class="tag">Recommended</span><p class="tradeoff">Show a per-job estimate, require Generate learning material, and stop before crossing the existing monthly AI ceiling.</p></label>
+      <label><span class="choice-title"><input type="radio" name="trigger" value="B">B · Automatic after rights approval</span><p class="tradeoff">Faster catalog growth, but spends quota before source quality is known and makes failures harder to supervise.</p></label>
+      <label><span class="choice-title"><input type="radio" name="trigger" value="C">C · Scheduled batch with confirmation</span><p class="tradeoff">Efficient for many sources, but adds job selection and batch recovery before single-source quality is proven.</p></label>
+    </div>
+  </section>
+
+  <section class="decision" data-decision="revocation">
+    <div class="decision-head"><span class="number">08</span><h2>Rights expiry or source removal</h2></div>
+    <div class="choices">
+      <label><span class="choice-title"><input type="radio" name="revocation" value="A" checked>A · Hide descendants, preserve history</span><span class="tag">Recommended</span><p class="tradeoff">Immediately suppress learning units and prompts, retain tombstones and non-content study/review facts for audit and progress continuity.</p></label>
+      <label><span class="choice-title"><input type="radio" name="revocation" value="B">B · Delete all descendants</span><p class="tradeoff">Minimizes retained derivative data, but destroys useful history and makes audit/recovery difficult.</p></label>
+      <label><span class="choice-title"><input type="radio" name="revocation" value="C">C · Freeze existing reviews</span><p class="tradeoff">Preserves continuity but can continue displaying material after permission is no longer valid. Not recommended.</p></label>
+    </div>
+  </section>
+
+  <section class="summary">
+    <h2>Reply format</h2>
+    <p>Select alternatives above or keep the defaults, then send the generated line. Approval here authorizes specification and test design only; tests will still be presented for approval before implementation.</p>
+    <pre id="reply" aria-live="polite"></pre>
+    <button id="copy" type="button">Copy decisions</button>
+  </section>
+
+  <footer class="sources">
+    <strong>Cost and capability sources:</strong>
+    <a href="https://platform.openai.com/docs/pricing">OpenAI pricing</a>,
+    <a href="https://platform.openai.com/docs/models/default-usage-policies-by-endpoint">OpenAI API data controls</a>,
+    <a href="https://api-docs.deepseek.com/quick_start/pricing">DeepSeek pricing</a>,
+    <a href="https://api-docs.deepseek.com/api/list-models">DeepSeek model list</a>,
+    <a href="https://ollama.com/library/qwen3">Ollama Qwen3</a>, and
+    <a href="https://docs.ollama.com/capabilities/structured-outputs">Ollama structured outputs</a>.
+  </footer>
+</main>
+<script>
+  const names = ["scope", "pipeline", "provider", "review", "skills", "schedule", "trigger", "revocation"];
+  const reply = document.querySelector("#reply");
+  function renderReply() {
+    const chosen = names.map((name) => `${name}: ${document.querySelector(`input[name="${name}"]:checked`).value}`);
+    reply.textContent = `Milestone 4 decisions — ${chosen.join("; ")}. Approve this shared understanding and proceed to test specification.`;
+  }
+  document.addEventListener("change", renderReply);
+  document.querySelector("#copy").addEventListener("click", async () => {
+    await navigator.clipboard.writeText(reply.textContent);
+    document.querySelector("#copy").textContent = "Copied";
+  });
+  renderReply();
+</script>
+</body>
+</html>

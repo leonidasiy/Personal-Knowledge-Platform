@@ -1,5 +1,10 @@
 # Recent Changes
 
+## 2026-08-12: Root Milestone Options Folder
+
+- Moved all milestone decision HTML pages to the project-root `milestones/`
+  folder and updated documentation and frontend provenance references.
+
 ## 2026-08-11: Project Build Process
 
 - Added the repository-wide `PROCESS.md` with the milestone, validation,
@@ -23,6 +28,31 @@
   `bounded-ingestion`.
 - Passed strict checking, `465/465` tests, fixed production budgets, and
   independent validation. Hosted activation awaits result approval and secrets.
+
+## 2026-08-11: Discover Default Stale-State Correction
+
+- Added an online default projection gate that filters persisted nonstarter
+  search rows until a live central search replaces the collection.
+- Added a regression covering persisted stale results and explicit route-value
+  validation. Existing offline saved-discovery behavior remains unchanged.
+- The current source is validated locally; rebuild `dist` before the next
+  hosted deployment.
+
+## 2026-08-11: Discover Live Result Selection Correction
+
+- Preserved the in-memory central-search projection when opening a result
+  detail, instead of falling back to older persisted discovery rows.
+- Kept invalid selections in an explicit unavailable state and added a page
+  regression test for live-result selection.
+- Rebuilt `dist`; hosted deployment and browser verification remain pending.
+
+## 2026-08-11: Hosted Shell Cache Refresh Correction
+
+- Changed navigation, `index.html`, `asset-manifest.json`, and the service
+  worker script to network-first resolution with the existing offline cache as
+  fallback.
+- This prevents a successful deployment from continuing to serve an older
+  shell and stale lazy-chunk graph during an authenticated refresh.
 
 ## 2026-07-28: Centralized Educational Search Candidate
 

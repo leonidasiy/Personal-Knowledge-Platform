@@ -38,6 +38,10 @@ You must complete step 5 before you stop.
 - For documentation-only work, distinguish reference checks and focused test
   results from a full production build result; do not claim a build passed
   unless that build has been run and its output inspected.
+- For hosted frontend regressions, verify the exact deployment source tree and
+  inspect the generated chunk before redeploying. A successful Wrangler upload
+  can publish an older `dist` bundle when the source fix was made in a
+  different worktree or the build did not complete.
 - The project-local `SELF_IMPROVEMENT.md` is now authoritative, so future
   recursive improvements can be made within the repository and validated with
   the rest of the project documentation.
