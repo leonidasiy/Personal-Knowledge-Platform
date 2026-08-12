@@ -253,6 +253,115 @@ Deno.test("offline upgrade retires only older Resonance caches", async () => {
   );
 });
 
+Deno.test("established clients refresh the application shell before using cached fallback", async () => {
+  const root = new URL("../", import.meta.url);
+  const serviceWorker = await Deno.readTextFile(
+    new URL("service-worker.js", root),
+  );
+  assert(
+    serviceWorker.includes("FRESH_PATHS") &&
+      serviceWorker.includes('event.request.mode === "navigate"') &&
+      serviceWorker.includes("resolveFreshRequest(event.request)"),
+    "Navigations and application entry assets must use a distinct freshness path.",
+  );
+  const freshPaths = [
+    "/",
+    "/index.html",
+    "/manifest.webmanifest",
+    "/asset-manifest.json",
+    "/src/app.js",
+    "/src/styles.css",
+  ];
+  for (const path of freshPaths) {
+    assert(
+      serviceWorker.includes(`"${path}"`),
+      `${path} must converge before a cached application shell is reused.`,
+    );
+  }
+  const fresh = serviceWorker.slice(
+    serviceWorker.indexOf("async function resolveFreshRequest"),
+    serviceWorker.indexOf("async function resolveSameOriginRequest"),
+  );
+  assert(
+    fresh.includes('fetch(request, { cache: "no-store" })') &&
+      fresh.indexOf('fetch(request, { cache: "no-store" })') <
+        fresh.indexOf("cache.match(request)"),
+    "Fresh shell requests must try the deployed response before exact cached fallback.",
+  );
+  assert(
+    fresh.includes("await cache.put(request, response.clone())") &&
+      fresh.includes('notifyOfflineFailure("OfflineCacheMiss")'),
+    "Fresh responses must update the current cache and complete failure must remain explicit.",
+  );
+
+  /** @type {string[]} */
+  const notifications = [];
+  let networkAvailable = true;
+  const stored = new Map(
+    freshPaths.map((path) => [
+      `https://app.example${path}`,
+      new Response(`legacy:${path}`),
+    ]),
+  );
+  const cache = {
+    /** @param {Request} request */
+    async match(request) {
+      return stored.get(request.url)?.clone();
+    },
+    /** @param {Request} request @param {Response} response */
+    async put(request, response) {
+      stored.set(request.url, response);
+    },
+  };
+  const createResolver = new Function(
+    "caches",
+    "fetch",
+    "notifyOfflineFailure",
+    "Response",
+    "CACHE_NAME",
+    `${fresh}; return resolveFreshRequest;`,
+  );
+  const resolveCurrent = /** @type {(request: Request) => Promise<Response>} */ (
+    createResolver(
+      { async open() { return cache; } },
+      /** @param {Request} request */
+      async (request) => {
+        if (!networkAvailable) throw new Error("NetworkUnavailable");
+        return new Response(`current:${new URL(request.url).pathname}`, {
+          status: 200,
+          headers: { "x-resonance-worker-version": "current-build" },
+        });
+      },
+      /** @param {string} kind */
+      async (kind) => notifications.push(kind),
+      Response,
+      "resonance-shell-current",
+    )
+  );
+  for (const path of freshPaths) {
+    const request = new Request(`https://app.example${path}`);
+    const current = await resolveCurrent(request);
+    assertEquals(await current.text(), `current:${path}`);
+    assertEquals(
+      current.headers.get("x-resonance-worker-version"),
+      "current-build",
+    );
+    assertEquals(
+      await stored.get(request.url)?.clone().text(),
+      `current:${path}`,
+    );
+  }
+
+  networkAvailable = false;
+  for (const path of freshPaths) {
+    const offline = await resolveCurrent(
+      new Request(`https://app.example${path}`),
+    );
+    assertEquals(await offline.text(), `current:${path}`);
+  }
+  assertEquals(notifications.length, 0);
+});
+
 Deno.test("authenticated discovery API responses never enter the offline cache", async () => {
   const root = new URL("../", import.meta.url);
   const serviceWorker = await Deno.readTextFile(

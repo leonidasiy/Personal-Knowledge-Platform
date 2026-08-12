@@ -53,15 +53,9 @@ function renderCollection(model) {
     <label for="library-search">Search saved sources</label>
     <div><input id="library-search" name="query" type="search" value="${
     model.escapeHtml(collection.query)
-  }" autocomplete="off" placeholder="Title, description, or topic">
-    <select name="mode" aria-label="Search method"><option value="keyword" ${
-    collection.mode === "keyword" ? "selected" : ""
-  }>Keyword</option><option value="semantic" ${
-    collection.mode === "semantic" ? "selected" : ""
-  }>Semantic</option><option value="combined" ${
-    collection.mode === "combined" ? "selected" : ""
-  }>Combined</option></select>
+  }" autocomplete="off" placeholder="Title, description, or topic" aria-describedby="library-search-help">
     <button class="button secondary" type="submit">Search</button></div>
+    <p id="library-search-help">Combined search matches saved titles and descriptions by exact terms and related word forms.</p>
   </form></div>`;
   if (collection.state === "loading" && collection.items.length === 0) {
     return `${search}<div class="state-panel" aria-busy="true"><h2>Opening sources</h2><p>Loading your approved Library sources.</p></div>`;

@@ -97,10 +97,11 @@ function parseDocument(value, descriptor) {
   }
   /** @type {Map<string,BraveCandidate>} */ const candidates = new Map();
   for (const item of value.web.results) {
-    if (!record(item) || !text(item.title) || !secure(item.url) || (item.description !== undefined && typeof item.description !== "string")) {
+    if (!record(item) || !text(item.title) || !text(item.url) || !URL.canParse(item.url) || (item.description !== undefined && typeof item.description !== "string")) {
       return { ok: false, error: { kind: "SearchProviderResponseInvalid" } };
     }
     const resultUrl = new URL(item.url);
+    if (resultUrl.protocol !== "https:") continue;
     const canonicalUrl = `${resultUrl.origin}/`;
     if (candidates.has(canonicalUrl)) continue;
     candidates.set(canonicalUrl, Object.freeze({
@@ -142,5 +143,3 @@ function record(value) { return typeof value === "object" && value !== null && !
 function text(value) { return typeof value === "string" && value.trim() !== ""; }
 /** @param {unknown} value @returns {value is number} */
 function positive(value) { return typeof value === "number" && Number.isInteger(value) && value > 0; }
-/** @param {unknown} value @returns {value is string} */
-function secure(value) { return typeof value === "string" && URL.canParse(value) && new URL(value).protocol === "https:"; }

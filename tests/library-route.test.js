@@ -43,7 +43,7 @@ function baseModel() {
       }],
       nextCursor: "signed",
       query: "",
-      mode: /** @type {const} */ ("keyword"),
+      mode: /** @type {const} */ ("combined"),
       pendingSourceId: null,
       message: null,
     },
@@ -65,8 +65,6 @@ Deno.test("Library renders grouped source search, provenance, progressive reveal
   for (
     const expected of [
       "Search saved sources",
-      "Keyword",
-      "Semantic",
       "Combined",
       "Music",
       "Harmony source",
@@ -89,6 +87,10 @@ Deno.test("Library renders grouped source search, provenance, progressive reveal
   assert(
     !html.includes("Studied ·"),
     "Source catalog must not masquerade as lesson status.",
+  );
+  assert(
+    !html.includes('name="mode"'),
+    "Library must not expose a search-method selector.",
   );
 });
 

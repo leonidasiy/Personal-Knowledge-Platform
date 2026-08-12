@@ -28,6 +28,14 @@ const SHELL_URLS = [
   "./assets/icon-192.webp",
   "./assets/icon-512.webp",
 ];
+const FRESH_PATHS = new Set([
+  "/",
+  "/index.html",
+  "/manifest.webmanifest",
+  "/asset-manifest.json",
+  "/src/app.js",
+  "/src/styles.css",
+]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(installShell());
@@ -43,7 +51,11 @@ self.addEventListener("fetch", (event) => {
   if (requestUrl.origin !== self.location.origin) return;
   if (requestUrl.pathname.startsWith("/api/")) return;
 
-  event.respondWith(resolveSameOriginRequest(event.request));
+  event.respondWith(
+    event.request.mode === "navigate" || FRESH_PATHS.has(requestUrl.pathname)
+      ? resolveFreshRequest(event.request)
+      : resolveSameOriginRequest(event.request),
+  );
 });
 
 async function installShell() {
@@ -96,6 +108,45 @@ async function upgradeShell() {
     } finally {
       throw new Error("OfflineUpgradeFailed");
     }
+  }
+}
+
+async function resolveFreshRequest(request) {
+  let cache;
+  try {
+    cache = await caches.open(CACHE_NAME);
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    await notifyOfflineFailure("OfflineCacheMiss");
+    try {
+      return await fetch(request, { cache: "no-store" });
+    } catch (fetchError) {
+      if (!(fetchError instanceof Error)) throw fetchError;
+      return Response.error();
+    }
+  }
+
+  try {
+    const response = await fetch(request, { cache: "no-store" });
+    if (response.ok) {
+      try {
+        await cache.put(request, response.clone());
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        await notifyOfflineFailure("OfflineCacheMiss");
+      }
+    }
+    return response;
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    try {
+      const cached = await cache.match(request);
+      if (cached !== undefined) return cached;
+    } catch (cacheError) {
+      if (!(cacheError instanceof Error)) throw cacheError;
+    }
+    await notifyOfflineFailure("OfflineCacheMiss");
+    return Response.error();
   }
 }
 

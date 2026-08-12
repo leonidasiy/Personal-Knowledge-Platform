@@ -109,7 +109,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
             ownerId: authenticated.value.ownerId,
             limit,
             query: url.searchParams.get("q"),
-            mode: url.searchParams.get("mode"),
+            mode: url.searchParams.get("mode") ?? "combined",
           });
         return result.ok
           ? json(

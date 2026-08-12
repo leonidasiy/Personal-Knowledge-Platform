@@ -15,6 +15,7 @@ import {
 import { YouTubeDiscoveryAdapter } from "./youtube-adapter.js";
 import { createEducationalSearchPolicy } from "./educational-search-policy.js";
 import { createCentralDiscoverySearch } from "./discovery-search.js";
+import { instrumentCentralSearch } from "./search-observability.js";
 import { createBraveSearchProvider } from "./brave-search-adapter.js";
 import { createTaddySearchProvider } from "./taddy-search-adapter.js";
 import { createYouTubeSearchProvider } from "./youtube-search-provider.js";
@@ -31,6 +32,7 @@ import { BrowserRunPageAcquirer } from "./browser-run-page-acquirer.js";
 import { SourceIngestionRunner } from "./source-ingestion-runner.js";
 import { ManualMaterialService } from "../src/features/source-library/manual-material.js";
 import { createSourceCursorCodec } from "./source-cursor.js";
+import { createLocalSemanticEmbedding } from "./local-semantic-index.js";
 import {
   DurableYouTubeOAuthStore,
   YouTubeOAuthDurableObject,
@@ -348,22 +350,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         platform.subtle,
       ),
       embedding: {
-        create: () =>
-          Promise.resolve({
-            ok: false,
-            error: {
-              kind: /** @type {const} */ ("SourceEmbeddingUnavailable"),
-            },
-          }),
+        create: createLocalSemanticEmbedding,
       },
       semanticIndex: {
-        search: () =>
-          Promise.resolve({
-            ok: false,
-            error: {
-              kind: /** @type {const} */ ("SourceSemanticIndexUnavailable"),
-            },
-          }),
+        search: (query) => sourceRepository.semanticSearch(query),
       },
       maximumPageSize: 50,
       maximumQueryLength: 200,
@@ -517,6 +507,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       ]),
     },
   );
+  const observedCentralSearch = instrumentCentralSearch(
+    centralSearch,
+    (event) => console.info(JSON.stringify(event)),
+  );
   const baseWorker = createDiscoveryWorker(
     {
       allowedOrigin: configuration.value.allowedOrigin,
@@ -555,7 +549,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         });
         return recorded.ok ? acquired : recorded;
       },
-      centralSearch,
+      centralSearch: observedCentralSearch,
       sourceLibrary,
       sourceCatalog,
       sourceIngestion,

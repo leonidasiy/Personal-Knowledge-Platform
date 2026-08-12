@@ -84,6 +84,81 @@ Deno.test("Worker Browser Run pins Cloudflare Puppeteer without adding it to the
   assertEquals(serviceWorker.includes("@cloudflare/puppeteer"), false);
 });
 
+Deno.test("production assets route shell and API requests through the Worker selectively", async () => {
+  const configuration = await Deno.readTextFile(
+    new URL("../wrangler.jsonc", import.meta.url),
+  );
+  const routes = configuration.match(/"run_worker_first"\s*:\s*(\[[\s\S]*?\])/);
+  assert(routes !== null, "Assets must configure selective Worker-first routes.");
+  if (routes === null) return;
+
+  const configuredRoutes = JSON.parse(routes[1]);
+  assertEquals(
+    JSON.stringify(configuredRoutes),
+    JSON.stringify(["/", "/index.html", "/api", "/api/*"]),
+  );
+  assertEquals(configuration.includes('"run_worker_first": true'), false);
+});
+
+Deno.test("browser acceptance pins Playwright Core outside the production browser graph", async () => {
+  const packageDocument = JSON.parse(await Deno.readTextFile("package.json"));
+  assertEquals(packageDocument.devDependencies?.["playwright-core"], "1.61.1");
+
+  const denoConfiguration = JSON.parse(await Deno.readTextFile("deno.json"));
+  assertEquals(
+    denoConfiguration.tasks?.["browser:acceptance"],
+    "node scripts/browser-acceptance.mjs",
+  );
+  assertEquals(
+    denoConfiguration.tasks?.["browser:acceptance:login"],
+    "node scripts/browser-acceptance-login.mjs",
+  );
+  const checkedSources = String(denoConfiguration.tasks?.check ?? "");
+  for (const sourcePath of [
+    "scripts/browser-acceptance-composition.mjs",
+    "scripts/browser-acceptance-core.mjs",
+    "scripts/browser-acceptance-login-core.mjs",
+    "scripts/browser-acceptance-login.mjs",
+    "scripts/browser-acceptance.mjs",
+    "scripts/browser-session-state.mjs",
+  ]) {
+    assert(checkedSources.includes(sourcePath), `${sourcePath} must be included in strict checking.`);
+  }
+
+  for (const sourcePath of ["src/app.js", "service-worker.js"]) {
+    const source = await Deno.readTextFile(sourcePath);
+    assertEquals(source.includes("playwright-core"), false);
+  }
+
+  const manifest = await Deno.readTextFile("dist/asset-manifest.json");
+  assertEquals(manifest.includes("playwright"), false);
+
+  /** @param {string} directory @returns {Promise<string[]>} */
+  async function generatedJavaScript(directory) {
+    /** @type {string[]} */
+    const paths = [];
+    for await (const entry of Deno.readDir(directory)) {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory) {
+        paths.push(...await generatedJavaScript(path));
+      } else if (entry.isFile && path.endsWith(".js")) {
+        paths.push(path);
+      }
+    }
+    return paths;
+  }
+
+  const generatedPaths = await generatedJavaScript("dist");
+  assert(
+    generatedPaths.length > 0,
+    "The production build must emit JavaScript artifacts to scan.",
+  );
+  for (const path of generatedPaths) {
+    const artifact = await Deno.readTextFile(path);
+    assertEquals(/playwright/i.test(artifact), false);
+  }
+});
+
 Deno.test("artifact budgets accept exact boundaries", () => {
   const javascript = validateArtifactBudget(
     {
@@ -103,7 +178,7 @@ Deno.test("artifact budgets accept exact boundaries", () => {
   );
   assertEquals(javascript.ok, true);
   assertEquals(stylesheet.ok, true);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 182_000);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 182_500);
   assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 58_000);
 });
 

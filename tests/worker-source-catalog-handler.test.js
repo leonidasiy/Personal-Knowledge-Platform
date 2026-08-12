@@ -128,6 +128,16 @@ Deno.test("source catalog GET routes derive owner and validate query parameters"
   assertEquals(search.status, 200);
   assertEquals(commands[1].query, "harmony");
   assertEquals(commands[1].mode, "keyword");
+
+  const defaultCombined = await worker.fetch(
+    new Request(
+      "https://worker.example/api/source-library/search?q=motion&limit=10",
+      { headers: { origin: "https://app.example" } },
+    ),
+  );
+  assertEquals(defaultCombined.status, 200);
+  assertEquals(commands[2].query, "motion");
+  assertEquals(commands[2].mode, "combined");
 });
 
 Deno.test("source rejection derives owner and never accepts one from the client", async () => {

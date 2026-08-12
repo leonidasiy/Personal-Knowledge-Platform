@@ -316,6 +316,8 @@ let settingsOpen = false;
 let sessionStartPending = false;
 /** @type {IntersectionObserver | null} */
 let studyObserver = null;
+/** @type {IntersectionObserver | null} */
+let feedRevealObserver = null;
 /** @type {Map<string, number>} */
 const passiveExposureTimers = new Map();
 /** @type {Set<string>} */
@@ -653,6 +655,10 @@ async function loadActiveRoute() {
           notice = null;
         },
         navigateToLibrary: () => {
+          void libraryPageController?.load().catch(() => {
+            libraryRouteIssue = APP_COPY.libraryRouteUnavailable;
+            render();
+          });
           activeView = "library";
           libraryPage = "collection";
           location.hash = "library";
@@ -869,6 +875,8 @@ function render(preferredFocusKey = null, fallbackHeadingId = null) {
     ? activeElement.dataset.focusKey ?? null
     : null;
   stopStudyTracking();
+  feedRevealObserver?.disconnect();
+  feedRevealObserver = null;
   synchronizeNotification(notifications, notice, errorMessage);
   root.innerHTML =
     `<div class="app-shell">${renderHeader()}<main class="workspace" id="main-content" tabindex="-1" data-layout="${experienceSettings.layoutMode}">${
@@ -1014,10 +1022,14 @@ function renderFeed() {
       <div class="feed-stack">
         ${visibleItems.map(renderFeedItem).join("")}
       </div>
-      <div class="feed-end">
+      <div class="feed-end" ${
+    hasHiddenAssignedItems() ? "data-feed-reveal" : ""
+  }>
         ${
     hasHiddenAssignedItems()
-      ? `<button class="button secondary" type="button" data-action="load-more" data-focus-key="load-more">Load more</button>`
+      ? `<button class="button secondary" type="button" data-action="load-more" data-focus-key="load-more" ${
+        "IntersectionObserver" in globalThis ? "hidden" : ""
+      }>Load more</button>`
       : renderNextSetControl()
   }
       </div>
@@ -1438,7 +1450,7 @@ function bindInteractions() {
   );
   root.querySelector("[data-action='load-more']")?.addEventListener(
     "click",
-    loadMore,
+    () => void loadMore(),
   );
   root.querySelector("[data-action='add-study-set']")?.addEventListener(
     "click",
@@ -1571,10 +1583,14 @@ function bindInteractions() {
   });
 }
 
-async function loadMore() {
+async function loadMore(restoreAppendedFocus = true) {
   if (!hasHiddenAssignedItems()) return;
   revealedStudyItems += 1;
   syncVisibleAssignment();
+  if (!restoreAppendedFocus) {
+    render();
+    return;
+  }
   const appended = visibleItems.at(-1);
   await renderWithTransition(
     appended ? `card-heading:${appended.candidateId}` : "cursor-restart",
@@ -2078,7 +2094,9 @@ async function appendEnvelope(envelope, allowDuplicate) {
 
 function startStudyTracking() {
   if (activeView !== "feed") return;
+  const fallback = root.querySelector("[data-action='load-more']");
   if (!("IntersectionObserver" in globalThis)) {
+    if (fallback instanceof HTMLButtonElement) fallback.hidden = false;
     notice = "Passive tracking is unavailable; manual study still works.";
     renderMessagesOnly();
     return;
@@ -2100,6 +2118,24 @@ function startStudyTracking() {
   root.querySelectorAll(".learning-card").forEach((card) => {
     studyObserver?.observe(card);
   });
+  const sentinel = root.querySelector("[data-feed-reveal]");
+  if (sentinel === null) return;
+  try {
+    const observer = new IntersectionObserver((entries) => {
+      if (
+        feedRevealObserver !== observer ||
+        !entries.some((entry) => entry.isIntersecting)
+      ) return;
+      observer.disconnect();
+      feedRevealObserver = null;
+      void loadMore(false);
+    }, { rootMargin: "400px 0px" });
+    feedRevealObserver = observer;
+    observer.observe(sentinel);
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    if (fallback instanceof HTMLButtonElement) fallback.hidden = false;
+  }
 }
 
 /** @param {string} candidateId */

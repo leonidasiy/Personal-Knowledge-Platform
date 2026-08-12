@@ -88,6 +88,25 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       if (path === "/api/discovery/search") {
         centralSearchRequests += 1;
         centralSearchCommand = await request.json();
+        const searchCommand = /** @type {{readonly query?:unknown}} */ (centralSearchCommand);
+        if (searchCommand.query === "replacement-failure") {
+          return Response.json({ error: "DiscoverySearchFailed" }, { status: 503 });
+        }
+        if (searchCommand.query === "orchestration") {
+          return Response.json({ result: {
+            items: [{
+              providerId: "web", resultKind: "web", sourceLevel: "site",
+              title: "Orchestration lesson archive", description: "Educational lessons.",
+              canonicalUrl: "https://orchestration.example/", publisherLabel: null,
+              publishedAt: null, identityEvidence: [{
+                attribute: "provider-result-page", value: "https://orchestration.example/lessons/",
+                provenanceUrl: "https://orchestration.example/lessons/",
+              }],
+            }], providerFailures: [], submittedQuery: "orchestration",
+            providerQuery: "orchestration tutorial lesson course educational",
+            policyVersion: "educational-v1",
+          } });
+        }
         return Response.json({ result: {
           items: [{
             providerId: "web",
@@ -233,6 +252,33 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
     list.includes("Ableton Learning Music"),
     "Starter source must render.",
   );
+  let invalidDetail = "";
+  try {
+    invalidDetail = page.render({ selectedItemId: " ", online: true });
+  } catch {
+    // The assertion below verifies that invalid decoded route IDs do not throw.
+  }
+  const initialFailedSearch = await page.search({
+    query: "replacement-failure",
+    providerIds: ["podcasts"],
+    limit: 20,
+  });
+  assert(!initialFailedSearch.ok, "The initial fixture search must fail.");
+  const requestsAfterInitialFailure = centralSearchRequests;
+  await page.load();
+  const restoredInitialFailure = page.render({ selectedItemId: null, online: true });
+  assert(
+    centralSearchRequests === requestsAfterInitialFailure &&
+      restoredInitialFailure.includes('value="replacement-failure"') &&
+      restoredInitialFailure.includes('value="20" selected') &&
+      restoredInitialFailure.includes("Discovery could not complete the request."),
+    "A route-only load must preserve the initial submitted failed search without another request.",
+  );
+  assert(
+    invalidDetail.includes('role="alert"') &&
+      invalidDetail.includes("Discovery could not complete the request."),
+    "A whitespace-only selected item ID must render the explicit discovery error state.",
+  );
   assert(
     manualUploads === 0,
     "Ordinary source approval must not upload material.",
@@ -302,7 +348,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   });
   assert(searched.ok, "Central search must succeed.");
   assert(
-    centralSearchRequests === 1 &&
+    centralSearchRequests === requestsAfterInitialFailure + 1 &&
       JSON.stringify(centralSearchCommand) === JSON.stringify({
         query: "counterpoint",
         providerIds: ["web", "podcasts", "youtube"],
@@ -314,8 +360,29 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
     "Central search must send one typed command and render its source metadata.",
   );
   const searchedHtml = page.render({ selectedItemId: null, online: true });
+  const searchedId = searchedHtml.match(
+    /data-discovery-item-id="([^"]+)"[^>]*>[\s\S]*?Counterpoint course library/,
+  )?.[1] ?? null;
+  assert(searchedId !== null, "The searched result must expose a stable route ID.");
+  const detail = page.render({ selectedItemId: searchedId, online: true });
+  assert(
+    detail.includes("Counterpoint course library") && !detail.includes("Item unavailable"),
+    "A live central result must resolve before persisted starter data.",
+  );
   const searchedIds = [...searchedHtml.matchAll(/data-discovery-item-id="([^"]+)"/g)]
     .map((match) => match[1]);
+  const offlineYouTubeDetail = page.render({
+    selectedItemId: searchedIds[1],
+    online: false,
+  });
+  assert(
+    offlineYouTubeDetail.includes('id="discover-offline-message"') &&
+      offlineYouTubeDetail.includes(
+        'aria-describedby="discover-offline-message"',
+      ) &&
+      offlineYouTubeDetail.includes("Watch link unavailable") &&
+      !offlineYouTubeDetail.includes("Watch on YouTube</a>"),
+    "An offline live YouTube detail must retain the offline notice and unavailable watch action.",
   const selectedSearchHtml = page.render({
     selectedItemId: searchedIds[0],
     online: true,
@@ -356,6 +423,27 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       !JSON.stringify(podcastApproval).includes("Example Radio") &&
       JSON.stringify(podcastApproval).includes("6bdfd429-f58b-427d-8072-353d478aa15f"),
     "Podcast approval must keep feed evidence without retaining provider preview metadata or enabling ingestion.",
+  );
+  const requestsAfterSearch = centralSearchRequests;
+  await page.load();
+  const restored = page.render({ selectedItemId: null, online: true });
+  assert(centralSearchRequests === requestsAfterSearch, "Route loads must not search again.");
+  assert(restored.includes('value="counterpoint"'), "Load must preserve the query.");
+  assert(restored.includes('value="10" selected'), "Load must preserve the limit.");
+  assert(restored.includes("Counterpoint course library"), "Load must preserve live results.");
+  const replaced = await page.search({ query: "orchestration", providerIds: ["web"], limit: 5 });
+  assert(replaced.ok, "The replacement search must succeed.");
+  const replacement = page.render({ selectedItemId: null, online: true });
+  assert(!replacement.includes("Counterpoint course library") && replacement.includes("Orchestration lesson archive"), "A successful replacement must atomically replace results.");
+  const failedReplacement = await page.search({ query: "replacement-failure", providerIds: ["podcasts"], limit: 20 });
+  assert(!failedReplacement.ok, "The fixture replacement must fail.");
+  const afterFailedReplacement = page.render({ selectedItemId: null, online: true });
+  assert(
+    afterFailedReplacement.includes('value="orchestration"') &&
+      afterFailedReplacement.includes('value="5" selected') &&
+      afterFailedReplacement.includes("Orchestration lesson archive") &&
+      !afterFailedReplacement.includes("Counterpoint course library"),
+    "A failed replacement must preserve the last successful controls and results.",
   );
 });
 
@@ -432,12 +520,58 @@ Deno.test("Central search requires YouTube consent only when YouTube is selected
       ),
     "Blocked YouTube search must expose its consent workflow without a request.",
   );
+  const requestsAfterBlockedSearch = centralRequests;
+  await page.load();
+  const restoredBlockedSearch = page.render({ selectedItemId: null, online: true });
+  assert(
+    centralRequests === requestsAfterBlockedSearch &&
+      restoredBlockedSearch.includes('value="harmony"') &&
+      restoredBlockedSearch.includes('value="10" selected') &&
+      restoredBlockedSearch.includes("Accept the YouTube API Services policy before searching."),
+    "A route-only load must preserve a policy-rejected submitted search without requesting discovery.",
+  );
   const allowed = await page.search({
     query: "harmony",
     providerIds: ["web"],
     limit: 10,
   });
   assert(allowed.ok && centralRequests === 1, "Web-only search must not require YouTube consent.");
+});
+
+Deno.test("Discovery controller ignores stale central search completions", async () => {
+  const storage = new MemoryPersistence();
+  /** @type {(value:Response)=>void} */ let resolveFirst = () => {};
+  /** @type {(value:Response)=>void} */ let resolveSecond = () => {};
+  const firstResponse = new Promise((resolve) => { resolveFirst = resolve; });
+  const secondResponse = new Promise((resolve) => { resolveSecond = resolve; });
+  let requests = 0;
+  /** @param {string} title */
+  const result = (title) => Response.json({ result: {
+    items: [{ providerId: "web", resultKind: "web", sourceLevel: "site", title, description: null, canonicalUrl: `https://${title}.example/`, publisherLabel: null, publishedAt: null, identityEvidence: [{ attribute: "result", value: title, provenanceUrl: `https://${title}.example/` }] }],
+    providerFailures: [], submittedQuery: title, providerQuery: title, policyVersion: "educational-v1",
+  } });
+  const page = createDiscoveryPage({
+    ownerId: "owner-a", persistence: { appendBatch: storage.appendBatch.bind(storage), list: storage.list.bind(storage) },
+    fetch: async (input, init) => {
+      const request = new Request(input, init); const path = new URL(request.url).pathname;
+      if (path === "/api/discovery/search/capabilities") return Response.json({ result: [{ id: "web", label: "Web", resultKind: "web", priority: 1, enabled: true }] });
+      if (path === "/api/discovery/search") return ++requests === 1 ? firstResponse : secondResponse;
+      if (path === "/api/source-library" && request.method === "GET") return Response.json({ result: { items: [], interestAreas: [], nextCursor: null } });
+      if (path === "/api/source-library/suppressions/check") return Response.json({ result: [] });
+      throw new Error(`Unexpected request: ${request.method} ${path}`);
+    },
+    gatewayBaseUrl: "https://app.example/", policyStorage: { getItem: () => null, setItem: () => {} }, starterInventory: STARTERS, markup: MARKUP, escapeHtml: (value) => value, createId: () => "race-id", now: () => "2026-08-01T00:00:00.000Z", onNotice: () => {}, onError: () => {}, navigateToLibrary: () => {}, rerender: () => {},
+  });
+  await page.load();
+  const first = page.search({ query: "first", providerIds: ["web"], limit: 5 });
+  const second = page.search({ query: "second", providerIds: ["web"], limit: 5 });
+  resolveSecond(result("second"));
+  assert((await second).ok, "The latest search must succeed.");
+  resolveFirst(result("first"));
+  const stale = await first;
+  assert(!stale.ok && /** @type {{readonly kind:string}} */ (stale.error).kind === "DiscoverySearchSuperseded", "An older completion must be superseded.");
+  const html = page.render({ selectedItemId: null, online: true });
+  assert(html.includes("second") && !html.includes("first"), "A stale completion must not replace the latest result.");
 });
 
 Deno.test("Discovery source actions recover after a transient catalog failure", async () => {

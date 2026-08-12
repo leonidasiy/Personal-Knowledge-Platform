@@ -1,6 +1,13 @@
 // @ts-check
 
 import { isRecord } from "../src/features/source-library/contracts.js";
+import {
+  LOCAL_SEMANTIC_DIMENSIONS,
+  LOCAL_SEMANTIC_MODEL_ID,
+  LOCAL_SEMANTIC_MODEL_VERSION,
+  cosineSimilarity,
+  vectorize,
+} from "./local-semantic-index.js";
 
 /** @import { LibrarySource, Result, SourceInterestArea, SourceLibraryFailure, SourceIngestionJob, SourceSearchHit, SourceSuppression } from "../src/features/source-library/contracts.js" */
 /** @import { ApprovalCommit, RevisionCommit, SuppressionCommit, TransitionCommit } from "../src/features/source-library/repository.js" */
@@ -200,6 +207,76 @@ export class D1SourceLibraryRepository {
       if (error instanceof TypeError) throw error;
       if (error instanceof Error) {
         return { ok: false, error: { kind: "SourceKeywordSearchUnavailable" } };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Rank the bounded active catalog with the local feature-hash vector. The
+   * query service still rechecks every returned identity through activeByIds.
+   * @param {{ readonly ownerId: string, readonly vector: readonly number[], readonly modelId: string, readonly modelVersion: string, readonly dimensions: number, readonly limit: number }} query
+   * @returns {Promise<Result<readonly { readonly sourceId: string, readonly ownerId: string, readonly score: number, readonly modelId: string, readonly modelVersion: string, readonly dimensions: number }[], SourceLibraryFailure>>}
+   */
+  async semanticSearch(query) {
+    if (
+      !isRecord(query) || typeof query.ownerId !== "string" ||
+      query.ownerId.trim() === "" || query.modelId !== LOCAL_SEMANTIC_MODEL_ID ||
+      query.modelVersion !== LOCAL_SEMANTIC_MODEL_VERSION ||
+      query.dimensions !== LOCAL_SEMANTIC_DIMENSIONS ||
+      !Array.isArray(query.vector) ||
+      query.vector.length !== LOCAL_SEMANTIC_DIMENSIONS ||
+      query.vector.some((value) => !Number.isFinite(value)) ||
+      !Number.isInteger(query.limit) || query.limit < 1
+    ) {
+      return { ok: false, error: { kind: "SourceSemanticIndexUnavailable" } };
+    }
+    console.log(JSON.stringify({ event: "source-semantic-search-entry" }));
+    try {
+      const candidates = await this.#allSources(
+        `${SOURCE_SELECT} WHERE s.owner_id = ? AND s.state = 'active' GROUP BY s.owner_id, s.source_id ORDER BY s.approved_at DESC, s.source_id DESC LIMIT ?`,
+        [query.ownerId.trim(), MAX_LOCAL_SEMANTIC_CANDIDATES + 1],
+      );
+      if (candidates.length > MAX_LOCAL_SEMANTIC_CANDIDATES) {
+        return { ok: false, error: { kind: "SourceSemanticIndexUnavailable" } };
+      }
+      const ranked = candidates.flatMap((source) => {
+        const score = cosineSimilarity(
+          query.vector,
+          vectorize(`${source.title} ${source.description}`),
+        );
+        return score === null || score <= 0 ? [] : [{ source, score }];
+      });
+      ranked.sort((left, right) =>
+        right.score - left.score ||
+        right.source.approvedAt.localeCompare(left.source.approvedAt) ||
+        right.source.id.localeCompare(left.source.id)
+      );
+      console.log(JSON.stringify({
+        event: "source-semantic-search-success",
+        resultCount: Math.min(ranked.length, query.limit),
+      }));
+      return {
+        ok: true,
+        value: Object.freeze(ranked.slice(0, query.limit).map((hit) =>
+          Object.freeze({
+            sourceId: hit.source.id,
+            ownerId: hit.source.ownerId,
+            score: hit.score,
+            modelId: query.modelId,
+            modelVersion: query.modelVersion,
+            dimensions: query.dimensions,
+          })
+        )),
+      };
+    } catch (error) {
+      if (error instanceof TypeError) throw error;
+      if (error instanceof Error) {
+        console.log(JSON.stringify({
+          event: "source-semantic-search-failure",
+          failureKind: "SourceSemanticIndexUnavailable",
+        }));
+        return { ok: false, error: { kind: "SourceSemanticIndexUnavailable" } };
       }
       throw error;
     }
@@ -703,6 +780,7 @@ const SOURCE_FROM =
 const SOURCE_SELECT = `SELECT ${SOURCE_COLUMNS}${SOURCE_FROM}`;
 const SEARCH_SOURCE_COLUMNS =
   "s.owner_id, s.source_id, s.submitted_url, s.canonical_url, s.title, s.description, s.adapter_json, s.identity_evidence_json, s.state, s.approved_at, s.updated_at, s.revision, COALESCE((SELECT json_group_array(a.interest_area_id) FROM source_interest_areas a WHERE a.owner_id = s.owner_id AND a.source_id = s.source_id), '[]') AS interest_area_ids_json";
+const MAX_LOCAL_SEMANTIC_CANDIDATES = 500;
 
 /** @param {unknown} row @param {string} ownerId @returns {SourceInterestArea} */
 function interestAreaFromRow(row, ownerId) {
