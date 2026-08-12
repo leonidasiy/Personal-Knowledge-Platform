@@ -293,6 +293,15 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       !list.includes("data-discovery-youtube-form"),
     "Discover must expose one centralized search form.",
   );
+  const missingDetail = page.render({
+    selectedItemId: "persisted-search-result-that-is-not-visible",
+    online: true,
+  });
+  assert(
+    missingDetail.includes(MARKUP.missingDetail) &&
+      !missingDetail.includes("Stale search result"),
+    "A stale selection must remain unavailable without broadening the online list.",
+  );
   const itemIds = [...list.matchAll(/data-discovery-item-id="([^"]+)"/g)].map(
     (match) => match[1],
   );
@@ -374,6 +383,14 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       offlineYouTubeDetail.includes("Watch link unavailable") &&
       !offlineYouTubeDetail.includes("Watch on YouTube</a>"),
     "An offline live YouTube detail must retain the offline notice and unavailable watch action.",
+  const selectedSearchHtml = page.render({
+    selectedItemId: searchedIds[0],
+    online: true,
+  });
+  assert(
+    selectedSearchHtml.includes("Counterpoint course library") &&
+      !selectedSearchHtml.includes("Ableton Learning Music"),
+    "Selecting a live search result must preserve that search projection instead of restoring persisted rows.",
   );
   await page.approve(searchedIds[1], "area-a");
   const youtubeApproval = approvalCommands.at(-1);

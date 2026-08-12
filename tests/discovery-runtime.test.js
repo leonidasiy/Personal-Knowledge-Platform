@@ -188,9 +188,15 @@ function setup(persistence = new FakePersistence(), options = {}) {
   return { runtime, persistence };
 }
 
-/** @param {string|null} selectedItemId */
-function route(selectedItemId = null) {
-  return { name: "discover", cursor: null, selectedItemId, online: true };
+/** @param {string|null} selectedItemId @param {boolean} [starterOnly] */
+function route(selectedItemId = null, starterOnly) {
+  return {
+    name: "discover",
+    cursor: null,
+    selectedItemId,
+    online: true,
+    ...(starterOnly === undefined ? {} : { starterOnly }),
+  };
 }
 
 Deno.test("empty restore installs attributed starter recommendations", async () => {
@@ -256,6 +262,61 @@ Deno.test("saved discovery remains available when starter inventory is unavailab
   const rendered = recovered.runtime.renderModel(route());
   if (!rendered.ok) throw new Error(rendered.error.kind);
   equal(rendered.value.page.items.length, 4);
+});
+
+Deno.test("online default projection excludes persisted nonstarter search rows", async () => {
+  const persistence = new FakePersistence();
+  const installed = setup(persistence);
+  equal((await installed.runtime.load()).ok, true);
+  await persistence.appendBatch([
+    {
+      id: "discovery_source:stale-search",
+      ownerId: "owner-a",
+      kind: /** @type {const} */ ("discovery_source"),
+      payloadJson: JSON.stringify({
+        id: "stale-search",
+        ownerId: "owner-a",
+        identity: "https://search.example/stale",
+        evidence: [{ reference: "https://search.example/stale", provenance: "search" }],
+        adapterId: "search-adapter",
+        adapterVersion: "v1",
+        submittedUrl: "https://search.example/stale",
+        canonicalUrl: "https://search.example/stale",
+        observedAt: "2026-07-22T00:00:00.000Z",
+      }),
+      recordedAt: "2026-07-22T00:00:00.000Z",
+    },
+    {
+      id: "discovery_item_version:stale-search-item:1",
+      ownerId: "owner-a",
+      kind: /** @type {const} */ ("discovery_item_version"),
+      payloadJson: JSON.stringify({
+        id: "stale-search-item",
+        ownerId: "owner-a",
+        sourceId: "stale-search",
+        version: 1,
+        identityEvidence: [{ reference: "https://search.example/stale", provenance: "search" }],
+        title: "Stale search result",
+        canonicalUrl: "https://search.example/stale",
+        contentDigest: "stale-search-v1",
+        publisherLabel: "Search provider",
+        publishedAt: null,
+        podcastReferenceLabel: null,
+        expiresAt: null,
+        observedAt: "2026-07-22T00:00:00.000Z",
+      }),
+      recordedAt: "2026-07-22T00:00:00.000Z",
+    },
+  ]);
+  const recovered = setup(persistence);
+  equal((await recovered.runtime.load()).ok, true);
+  const rendered = recovered.runtime.renderModel(route(null, true));
+  if (!rendered.ok) throw new Error(rendered.error.kind);
+  equal(rendered.value.page.items.length, 4);
+  assert(
+    rendered.value.page.items.every((item) => item.canonicalUrl.startsWith("https://publisher.example/starter-")),
+    "Online default Discover must exclude persisted search rows.",
+  );
 });
 
 Deno.test("Discover preserves actionable nested YouTube failures", () => {

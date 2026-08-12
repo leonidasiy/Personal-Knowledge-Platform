@@ -54,6 +54,46 @@ sub-milestone 3F.2.**
   gzip and CSS budgets are unchanged.
 - Independent validation passed after closing stale-observer lifecycle gaps.
   Hosted desktop/mobile acceptance remains required after deployment.
+## Discover Default Projection Correction
+
+**Status: implemented locally 2026-08-11; rebuild and hosted verification
+required.**
+
+- Persisted nonstarter search rows are excluded from the empty online Discover
+  projection while the attributed starter inventory remains visible.
+- Invalid `starterOnly` route values are rejected explicitly.
+- Focused runtime regression and strict type-check pass before rebuilding the
+  deployment artifact.
+
+## Discover Live Result Selection Correction
+
+**Status: implemented locally 2026-08-11; hosted browser verification required.**
+
+- Selecting a result returned by the current central search keeps that live
+  result projection and opens its detail view.
+- A selected item absent from the current projection remains explicitly
+  unavailable; rendering it must not broaden the list to older persisted rows.
+- Focused page tests, full tests, and strict checking pass before deployment.
+
+## Hosted Shell Cache Refresh Correction
+
+**Status: implemented locally 2026-08-11; hosted browser verification required.**
+
+- Navigations and build identity assets prefer the network after deployment.
+- Offline fallback still returns the cached response when the network fails.
+- The service-worker source contract test rejects a cache-first shell strategy.
+
+## Process Document Validation
+
+**Status: proposed and approved 2026-08-11; completed after creation.**
+
+- Confirm the root `PROCESS.md` exists.
+- Confirm it follows the requested title, introduction, numbered-process, and
+  mandatory-self-improvement structure.
+- Confirm every referenced project file, command, and project-local
+  `SELF_IMPROVEMENT.md` path is present and directly applicable.
+- Confirm no unrelated project carryover is introduced by the documentation
+  change.
 
 ## Milestone 3F Autonomous Browser Acceptance And Discovery State Repair
 

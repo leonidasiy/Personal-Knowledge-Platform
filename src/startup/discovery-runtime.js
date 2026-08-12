@@ -237,7 +237,8 @@ export class DiscoveryRuntime {
       !record(route) || route.name !== "discover" ||
       typeof route.online !== "boolean" ||
       (route.cursor !== null && typeof route.cursor !== "string") ||
-      (route.selectedItemId !== null && !text(route.selectedItemId))
+      (route.selectedItemId !== null && !text(route.selectedItemId)) ||
+      (route.starterOnly !== undefined && typeof route.starterOnly !== "boolean")
     ) return invalid("route");
     let offset = 0;
     if (typeof route.cursor === "string") {
@@ -269,7 +270,10 @@ export class DiscoveryRuntime {
         (prior.observedAt === item.observedAt && item.id < prior.id)
       ) canonical.set(item.canonicalUrl, item);
     }
-    const all = [...canonical.values()].sort((a, b) => {
+    const starterOnly = route.starterOnly === true;
+    const all = [...canonical.values()].filter((item) =>
+      !starterOnly || this.#starterOrder.has(item.canonicalUrl)
+    ).sort((a, b) => {
       const aStarter = this.#starterOrder.get(a.canonicalUrl);
       const bStarter = this.#starterOrder.get(b.canonicalUrl);
       if (aStarter === undefined && bStarter !== undefined) return -1;

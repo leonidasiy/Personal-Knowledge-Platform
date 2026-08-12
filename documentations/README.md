@@ -4,6 +4,8 @@ This directory contains the current product, engineering, setup, and validation
 records. Superseded decision pages are removed after their accepted outcomes are
 captured in `REFERENCE.md` or `PROJECT_STATUS.md`.
 
+The repository-wide build workflow is documented in [`../PROCESS.md`](../PROCESS.md).
+
 ## Current Work
 
 Milestone 3F.1 is complete: automatic Feed reveal and established-client shell
@@ -30,9 +32,8 @@ retrieval, with hosted smoke acceptance against Worker
 
 ## Decision Artifacts
 
-- [`milestone-3-podcast-provider-recovery-options.html`](milestone-3-podcast-provider-recovery-options.html):
-  approved Taddy Free provider-replacement decision
-- [`milestone-3-central-search-options.html`](milestone-3-central-search-options.html):
-  approved Provider A and hybrid source-boundary decision
-- [`frontend-customization-options.html`](frontend-customization-options.html):
-  retained because the live theme configuration cites it as provenance
+All milestone option pages live in the project-root [`milestones/`](../milestones/)
+folder, rather than inside `documentations/`. This includes provider,
+hosted-access, frontend-customization, and learning-generation decisions. The
+live theme configuration records the frontend page at
+`milestones/frontend-customization-options.html` as its provenance.
