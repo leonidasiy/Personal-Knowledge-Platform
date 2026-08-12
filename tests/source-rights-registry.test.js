@@ -28,7 +28,7 @@ function row(overrides = {}) {
 
 /** @param {readonly unknown[] | null} rows @param {boolean} [unavailable] */
 function registry(rows, unavailable = false) {
-  return new D1SourceRightsRegistry({ database: { prepare: () => { const statement = { bind: () => statement, all: async () => { if (unavailable) throw new Error("offline"); return rows === null ? {} : { results: rows }; } }; return statement; } }, now: () => now });
+  return new D1SourceRightsRegistry({ database: { prepare: () => { const statement = { bind: () => statement, all: async () => { if (unavailable) throw new Error("offline"); return rows === null ? {} : { results: rows }; } }; return statement; } }, now: () => now, logger: () => {} });
 }
 
 Deno.test("rights registry resolves one exact active attributed grant", async () => {
@@ -63,6 +63,13 @@ Deno.test("rights registry names identity, lifecycle, capability, and attributio
     [row({ canonical_root_url: "https://publisher.example/other/" }), "RightsRegistryRootMismatch"],
     [row({ state: "revoked" }), "RightsRegistryEvidenceRevoked"],
     [row({ expires_at: now }), "RightsRegistryEvidenceExpired"],
+    [row({ evidence_json: JSON.stringify({
+      ...JSON.parse(evidence()),
+      storage: {
+        ...JSON.parse(evidence()).storage,
+        expiresAt: now,
+      },
+    }) }), "RightsRegistryEvidenceExpired"],
     [row({ attribution_text: " " }), "RightsRegistryAttributionMissing"],
     [row({ evidence_json: JSON.stringify({ storage: JSON.parse(evidence()).storage, crawl: JSON.parse(evidence()).crawl }) }), "RightsRegistryCapabilityMissing"],
   ];
@@ -75,7 +82,7 @@ Deno.test("rights registry names identity, lifecycle, capability, and attributio
 
 Deno.test("rights registry rejects an invalid authoritative job before D1", async () => {
   let calls = 0;
-  const subject = new D1SourceRightsRegistry({ database: { prepare: () => { calls += 1; throw new Error("must not query"); } }, now: () => now });
+  const subject = new D1SourceRightsRegistry({ database: { prepare: () => { calls += 1; throw new Error("must not query"); } }, now: () => now, logger: () => {} });
   const result = await subject.resolve(/** @type {typeof job} */ (/** @type {unknown} */ ({ ...job, rootUrl: "http://publisher.example" })));
   if (result.ok) throw new Error("Expected failure.");
   assertEquals(result.error.kind, "RightsRegistrySchemaInvalid");

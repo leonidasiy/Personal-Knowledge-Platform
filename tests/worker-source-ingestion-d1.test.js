@@ -69,7 +69,7 @@ function commit() {
     rightsAssessments: [{ id: "rights-a", ownerId: "owner-a", sourceId: "source-a", sourceRevision: 1, itemId: "item-a", itemVersionId: "version-a", capabilities: [{ capability: "storage", outcome: "allowed" }], evidence: [{ reference: "https://publisher.example/rights", observedAt: "2026-07-22T11:00:00.000Z" }], assessedAt: "2026-07-22T12:00:00.000Z", expiresAt: null }],
     items: [{ ownerId: "owner-a", sourceId: "source-a", sourceRevision: 1, itemId: "item-a", versionId: "version-a", canonicalUrl: "https://publisher.example/item", title: "Item", description: "Description", contentDigest: "sha256:item", provenance: [{ method: "bounded-fetch", reference: "https://publisher.example/item" }], observedAt: "2026-07-22T12:00:00.000Z", publishedAt: null }],
     contentReferences: [{ id: "content-a", ownerId: "owner-a", sourceId: "source-a", sourceRevision: 1, itemId: "item-a", itemVersionId: "version-a", objectKey: "owners/opaque/content-a", contentDigest: "sha256:item", rightsAssessmentId: "rights-a", state: "processing-ready", createdAt: "2026-07-22T12:01:00.000Z" }],
-    state: "completed", stopReason: null, pagesProcessed: 1, decodedBytes: 1200, resumeCursor: null, committedAt: "2026-07-22T12:01:00.000Z",
+    state: "completed", generationState: "queued", stopReason: null, pagesProcessed: 1, decodedBytes: 1200, resumeCursor: null, committedAt: "2026-07-22T12:01:00.000Z",
   };
 }
 

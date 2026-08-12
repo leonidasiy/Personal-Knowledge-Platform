@@ -22,6 +22,7 @@ export class SourceIngestionRunner {
    *     readonly loadRunnable: (command: { readonly ownerId: string, readonly jobId: string }) => Promise<Result<TrustedSourceIngestionJob, SourceIngestionFailure>>,
    *     readonly lease: (lease: SourceIngestionLease, planJson: string, cursor: SourceIngestionCursor) => Promise<Result<SourceIngestionLease, SourceIngestionFailure>>,
    *     readonly recordMetadataOnly: (job: TrustedSourceIngestionJob, reason: string, recordedAt: string) => Promise<Result<null, SourceIngestionFailure>>,
+   *     readonly markGenerationState?: (command: { readonly ownerId: string, readonly jobId: string, readonly state: "completed" | "failed", readonly failureKind: string | null, readonly updatedAt: string }) => Promise<Result<null, SourceIngestionFailure>>,
    *     readonly commit: (commit: SourceIngestionCommit) => Promise<Result<{ readonly state: "completed" | "partial" }, SourceIngestionFailure>>
    *   },
    *   readonly rightsRegistry: { readonly resolve: (job: TrustedSourceIngestionJob) => Promise<Result<ServerRightsGrant, SourceIngestionFailure>> },
@@ -29,6 +30,8 @@ export class SourceIngestionRunner {
    *   readonly acquirer: { readonly acquire: (command: unknown) => Promise<Result<BrowserRunAcquisitionBatch, SourceIngestionFailure>> },
    *   readonly contentStore: { readonly stage: (command: { readonly objectId: string, readonly ownerId: string, readonly sourceId: string, readonly itemId: string, readonly itemVersionId: string, readonly content: Uint8Array, readonly contentDigest: string, readonly mediaType: string }) => Promise<Result<{ readonly objectKey: string }, SourceIngestionFailure>>, readonly remove: (objectKey: string) => Promise<Result<null, SourceIngestionFailure>> },
    *   readonly digest: (content: Uint8Array) => Promise<Result<string, SourceIngestionFailure>>,
+   *   readonly generationEnqueue?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+   *   readonly logger: (entry: { readonly event: string, readonly failureKind?: string, readonly itemCount?: number }) => void,
    *   readonly createId: () => string,
    *   readonly now: () => string,
    *   readonly leaseDurationMs: number
@@ -41,7 +44,7 @@ export class SourceIngestionRunner {
       typeof dependencies.capacity.reconcile !== "function" || typeof dependencies.acquirer?.acquire !== "function" ||
       typeof dependencies.contentStore?.stage !== "function" || typeof dependencies.contentStore.remove !== "function" ||
       typeof dependencies.digest !== "function" || typeof dependencies.createId !== "function" ||
-      typeof dependencies.now !== "function" || !isPositiveInteger(dependencies.leaseDurationMs)) {
+      typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || !isPositiveInteger(dependencies.leaseDurationMs)) {
       throw new TypeError("Source-ingestion runner dependencies are invalid.");
     }
     this.#dependencies = dependencies;
@@ -89,6 +92,7 @@ export class SourceIngestionRunner {
     const reconciled = await this.#dependencies.capacity.reconcile({ reservation: reservation.value, measuredMilliseconds: acquired.value.measuredMilliseconds, outcome: acquired.value.nextCursor === null ? "completed" : "partial" });
     if (!reconciled.ok) return await this.#cleanup(processed.value.stagedKeys, reconciled);
     const state = acquired.value.nextCursor === null ? /** @type {const} */ ("completed") : /** @type {const} */ ("partial");
+    const generationState = this.#dependencies.generationEnqueue !== undefined && processed.value.generationInputs.length > 0 ? /** @type {const} */ ("queued") : /** @type {const} */ ("not-requested");
     const committed = await this.#dependencies.repository.commit({
       lease,
       crawlAssessment: { id: this.#id("crawl"), ownerId: lease.ownerId, sourceId: lease.sourceId, sourceRevision: lease.sourceRevision, policyVersion: plan.value.policyVersion, selectedDepth: plan.value.selectedDepth, evidence: plan.value.depthEvidence === null ? [] : [plan.value.depthEvidence], outcome: state === "completed" ? "eligible" : "partial", assessedAt: plan.value.assessedAt },
@@ -96,6 +100,7 @@ export class SourceIngestionRunner {
       items: processed.value.items,
       contentReferences: processed.value.contentReferences,
       state,
+      generationState,
       stopReason: acquired.value.stopReason,
       pagesProcessed: (acquired.value.nextCursor ?? terminalCursor(job.cursor, acquired.value)).pagesProcessed,
       decodedBytes: (acquired.value.nextCursor ?? terminalCursor(job.cursor, acquired.value)).decodedBytes,
@@ -103,15 +108,24 @@ export class SourceIngestionRunner {
       committedAt: this.#time(),
     });
     if (!committed.ok) return await this.#cleanup(processed.value.stagedKeys, committed);
+    if (this.#dependencies.generationEnqueue !== undefined && processed.value.generationInputs.length > 0) {
+      const enqueued = await this.#dependencies.generationEnqueue({ ownerId: lease.ownerId, sourceId: lease.sourceId, sourceRevision: lease.sourceRevision, rightsEvidenceId: rights.value.registryId, attribution: { label: rights.value.attributionText, sourceUrl: processed.value.items[0].canonicalUrl }, items: processed.value.generationInputs });
+      if (!enqueued.ok) this.#dependencies.logger({ event: "source-ingestion-generation-enqueue-failure", failureKind: enqueued.error.kind, itemCount: processed.value.generationInputs.length });
+      if (this.#dependencies.repository.markGenerationState !== undefined) {
+        const marked = await this.#dependencies.repository.markGenerationState({ ownerId: lease.ownerId, jobId: lease.jobId, state: enqueued.ok ? "completed" : "failed", failureKind: enqueued.ok ? null : enqueued.error.kind, updatedAt: this.#time() });
+        if (!marked.ok) this.#dependencies.logger({ event: "source-ingestion-generation-state-failure", failureKind: marked.error.kind, itemCount: processed.value.generationInputs.length });
+      }
+    }
     return { ok: true, value: freeze({ state, itemsStored: processed.value.items.length }) };
   }
 
-  /** @param {SourceIngestionLease} lease @param {import("../src/features/source-library/ingestion-contracts.js").SourceCrawlPlan} plan @param {ServerRightsGrant} grant @param {BrowserRunAcquisitionBatch} batch @param {SourceIngestionCursor} startingCursor @returns {Promise<Result<{ readonly items: readonly SourceItemVersion[], readonly rightsAssessments: readonly SourceRightsAssessment[], readonly contentReferences: readonly SourceContentReference[], readonly stagedKeys: readonly string[] }, SourceIngestionFailure>>} */
+  /** @param {SourceIngestionLease} lease @param {import("../src/features/source-library/ingestion-contracts.js").SourceCrawlPlan} plan @param {ServerRightsGrant} grant @param {BrowserRunAcquisitionBatch} batch @param {SourceIngestionCursor} startingCursor @returns {Promise<Result<{ readonly items: readonly SourceItemVersion[], readonly rightsAssessments: readonly SourceRightsAssessment[], readonly contentReferences: readonly SourceContentReference[], readonly generationInputs: readonly { readonly itemId: string, readonly itemVersionId: string, readonly contentDigest: string, readonly content: string }[], readonly stagedKeys: readonly string[] }, SourceIngestionFailure>>} */
   async #processBatch(lease, plan, grant, batch, startingCursor) {
     if (!validBatch(batch)) return fail({ kind: "BrowserRunResponseInvalid", field: "batch" });
     /** @type {SourceItemVersion[]} */ const items = [];
     /** @type {SourceRightsAssessment[]} */ const rightsAssessments = [];
     /** @type {SourceContentReference[]} */ const contentReferences = [];
+    /** @type {{ readonly itemId: string, readonly itemVersionId: string, readonly contentDigest: string, readonly content: string }[]} */ const generationInputs = [];
     /** @type {string[]} */ const stagedKeys = [];
     let decodedBytes = startingCursor.decodedBytes;
     for (const page of batch.pages) {
@@ -133,13 +147,14 @@ export class SourceIngestionRunner {
       items.push(freeze({ ownerId: lease.ownerId, sourceId: lease.sourceId, sourceRevision: lease.sourceRevision, itemId, versionId, canonicalUrl: page.canonicalUrl, title: page.title, description: page.description, contentDigest: contentDigest.value, provenance: freeze([{ method: "cloudflare-browser-run", reference: page.canonicalUrl }, { method: "rights-registry", reference: grant.registryId }]), observedAt: page.observedAt, publishedAt: null }));
       rightsAssessments.push(freeze({ id: rightsId, ownerId: lease.ownerId, sourceId: lease.sourceId, sourceRevision: lease.sourceRevision, itemId, itemVersionId: versionId, capabilities: freeze(Object.entries(grant.capabilities).map(([capability, evidence]) => freeze({ capability, outcome: evidence.outcome }))), evidence: freeze(Object.values(grant.capabilities).map((evidence) => freeze({ reference: evidence.evidenceReference, observedAt: evidence.observedAt }))), assessedAt: plan.assessedAt, expiresAt: grant.expiresAt }));
       contentReferences.push(freeze({ id: contentId, ownerId: lease.ownerId, sourceId: lease.sourceId, sourceRevision: lease.sourceRevision, itemId, itemVersionId: versionId, objectKey: staged.value.objectKey, contentDigest: contentDigest.value, rightsAssessmentId: rightsId, state: /** @type {const} */ ("processing-ready"), createdAt: page.observedAt }));
+      generationInputs.push(freeze({ itemId, itemVersionId: versionId, contentDigest: contentDigest.value, content: page.readableText }));
     }
-    return { ok: true, value: freeze({ items: freeze(items), rightsAssessments: freeze(rightsAssessments), contentReferences: freeze(contentReferences), stagedKeys: freeze(stagedKeys) }) };
+    return { ok: true, value: freeze({ items: freeze(items), rightsAssessments: freeze(rightsAssessments), contentReferences: freeze(contentReferences), generationInputs: freeze(generationInputs), stagedKeys: freeze(stagedKeys) }) };
   }
 
   /** @param {SourceIngestionLease} lease @param {SourceIngestionCursor} cursor @param {import("../src/features/source-library/ingestion-contracts.js").SourceCrawlPlan} plan @param {string} stopReason */
   async #commitEmpty(lease, cursor, plan, stopReason) {
-    return this.#dependencies.repository.commit({ lease, crawlAssessment: { id: this.#id("crawl"), ownerId: lease.ownerId, sourceId: lease.sourceId, sourceRevision: lease.sourceRevision, policyVersion: plan.policyVersion, selectedDepth: plan.selectedDepth, evidence: plan.depthEvidence === null ? [] : [plan.depthEvidence], outcome: "partial", assessedAt: plan.assessedAt }, rightsAssessments: [], items: [], contentReferences: [], state: "partial", stopReason, pagesProcessed: cursor.pagesProcessed, decodedBytes: cursor.decodedBytes, resumeCursor: cursor, committedAt: this.#time() });
+    return this.#dependencies.repository.commit({ lease, crawlAssessment: { id: this.#id("crawl"), ownerId: lease.ownerId, sourceId: lease.sourceId, sourceRevision: lease.sourceRevision, policyVersion: plan.policyVersion, selectedDepth: plan.selectedDepth, evidence: plan.depthEvidence === null ? [] : [plan.depthEvidence], outcome: "partial", assessedAt: plan.assessedAt }, rightsAssessments: [], items: [], contentReferences: [], state: "partial", generationState: "not-requested", stopReason, pagesProcessed: cursor.pagesProcessed, decodedBytes: cursor.decodedBytes, resumeCursor: cursor, committedAt: this.#time() });
   }
 
   /** @template T @param {TrustedSourceIngestionJob} job @param {Result<T, SourceIngestionFailure>} failure */

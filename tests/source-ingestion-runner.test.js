@@ -32,9 +32,9 @@ function batch(nextCursor = null) {
   return { pages: [{ canonicalUrl: "https://publisher.example/course/", status: 200, title: "Course", description: "Description", readableText: "A useful lesson.", visibleLinks: [], redirectChain: [], peerAddress: "8.8.8.8", observedAt: now }], nextCursor, measuredMilliseconds: 900, stopReason: nextCursor === null ? null : "BrowserRunExtractionLimitExceeded" };
 }
 
-/** @param {{ rightsResult?: Result<ServerRightsGrant, SourceIngestionFailure>, reserveResult?: Result<BrowserRunReservation, SourceIngestionFailure>, acquireResult?: Result<BrowserRunAcquisitionBatch, SourceIngestionFailure>, commitResult?: Result<{readonly state:"completed"|"partial"}, SourceIngestionFailure>, reconcileResult?: Result<null, SourceIngestionFailure> }} [overrides] */
+/** @param {{ rightsResult?: Result<ServerRightsGrant, SourceIngestionFailure>, reserveResult?: Result<BrowserRunReservation, SourceIngestionFailure>, acquireResult?: Result<BrowserRunAcquisitionBatch, SourceIngestionFailure>, commitResult?: Result<{readonly state:"completed"|"partial"}, SourceIngestionFailure>, reconcileResult?: Result<null, SourceIngestionFailure>, generationStateResult?: Result<null, SourceIngestionFailure>, generationEnqueue?: (command: unknown) => Promise<{ readonly ok: true, readonly value: unknown } | { readonly ok: false, readonly error: { readonly kind: string }}> }} [overrides] */
 function setup(overrides = {}) {
-  const calls = { metadata: 0, reserve: 0, lease: 0, acquire: 0, reconcile: 0, stage: 0, remove: 0 };
+  const calls = { metadata: 0, reserve: 0, lease: 0, acquire: 0, reconcile: 0, stage: 0, remove: 0, generation: 0, generationState: 0 };
   /** @type {SourceIngestionCommit[]} */ const commits = [];
   /** @type {readonly string[]} */ let stagedKeys = [];
   let sequence = 0;
@@ -45,6 +45,7 @@ function setup(overrides = {}) {
       loadRunnable: async () => ({ ok: true, value: job() }),
       lease: async (value) => { calls.lease += 1; return { ok: true, value }; },
       recordMetadataOnly: async () => { calls.metadata += 1; return { ok: true, value: null }; },
+      markGenerationState: async () => { calls.generationState += 1; return overrides.generationStateResult ?? { ok: true, value: null }; },
       commit: async (value) => { commits.push(value); return overrides.commitResult ?? { ok: true, value: { state: value.state } }; },
     },
     rightsRegistry: { resolve: async () => overrides.rightsResult ?? { ok: true, value: rights() } },
@@ -58,6 +59,8 @@ function setup(overrides = {}) {
       remove: async () => { calls.remove += 1; return { ok: true, value: null }; },
     },
     digest: async (bytes) => ({ ok: true, value: `sha256:${bytes.byteLength}` }),
+    generationEnqueue: overrides.generationEnqueue,
+    logger: () => {},
     createId: () => String(++sequence), now: () => now, leaseDurationMs: 300_000,
   });
   return { runner, calls, commits, getStagedKeys: () => stagedKeys };
@@ -74,6 +77,27 @@ Deno.test("runner resolves server rights, reserves capacity, stores Browser Run 
   assertEquals(fixture.calls.reconcile, 1);
   assertEquals(fixture.commits[0].items[0].provenance[0].method, "cloudflare-browser-run");
   assertEquals(fixture.commits[0].resumeCursor, null);
+});
+
+Deno.test("runner invokes one bounded generation enqueue only after eligible content commit", async () => {
+  /** @type {unknown[]} */ const enqueued = [];
+  const fixture = setup({ generationEnqueue: async (command) => { enqueued.push(command); return { ok: true, value: null }; } });
+  const result = await fixture.runner.run({ ownerId: "owner-a", jobId: "job-a" });
+  assertEquals(result.ok, true);
+  assertEquals(enqueued.length, 1);
+  const command = /** @type {{ readonly ownerId: string, readonly items: readonly { readonly content: string }[] }} */ (enqueued[0]);
+  assertEquals(command.ownerId, "owner-a");
+  assertEquals(command.items[0].content, "A useful lesson.");
+  assertEquals(fixture.commits[0].generationState, "queued");
+  assertEquals(fixture.calls.generationState, 1);
+});
+
+Deno.test("runner records a generation enqueue failure as a failed generation state", async () => {
+  const fixture = setup({ generationEnqueue: async () => ({ ok: false, error: { kind: "LearningGenerationEnqueueFailed" } }) });
+  const result = await fixture.runner.run({ ownerId: "owner-a", jobId: "job-a" });
+  assertEquals(result.ok, true);
+  assertEquals(fixture.commits[0].generationState, "queued");
+  assertEquals(fixture.calls.generationState, 1);
 });
 
 Deno.test("runner records missing rights metadata and performs no capacity or Browser work", async () => {

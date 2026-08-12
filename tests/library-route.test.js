@@ -48,6 +48,13 @@ function baseModel() {
       message: null,
     },
     queue: [],
+    reviewQueue: {
+      state: /** @type {const} */ ("success"),
+      sources: [],
+      tasks: [],
+      message: null,
+      pendingTaskId: null,
+    },
     page: /** @type {const} */ ("collection"),
     recallAvailable: true,
     now: "2026-07-22T09:00:00.000Z",
@@ -119,6 +126,38 @@ Deno.test("Library preserves a dedicated scheduled Review queue subpage", () => 
   );
 });
 
+Deno.test("Library Review queue explains automatic generation and exposes human Keep/Discard controls", () => {
+  const html = renderLibraryRoute({
+    ...baseModel(),
+    page: "review-queue",
+    reviewQueue: {
+      state: "success",
+      sources: [{ sourceId: "source-a", title: "Harmony source", status: "ready-for-review", generationId: "generation-a", pendingTaskCount: 1, reviewedTaskCount: 0, failureKind: null }],
+      tasks: [{ id: "task-a", sourceId: "source-a", kind: "short-response", prompt: "Explain the cadence.", explanation: "The cited unit supports this.", sourceAnchorIds: ["unit-a:anchor"], choices: null, correctChoiceIds: null, expectedConcepts: ["cadence"], minimumWords: 1, stimulus: null, responseKind: "text", status: "pending-review", revision: 1 }],
+      message: null,
+      pendingTaskId: null,
+    },
+  });
+  for (const expected of ["Questions generated; human review required", "Explain the cadence.", "Keep", "Discard", "unit-a:anchor", "data-learning-review-decision=\"approve\"", "data-learning-review-decision=\"reject\""]) assert(html.includes(expected), `Missing ${expected}.`);
+});
+
+Deno.test("Library Review queue keeps the pending status truthful while generation is queued", () => {
+  const html = renderLibraryRoute({
+    ...baseModel(),
+    page: "review-queue",
+    reviewQueue: {
+      state: "success",
+      sources: [{ sourceId: "source-a", title: "Harmony source", status: "queued", generationId: null, pendingTaskCount: 0, reviewedTaskCount: 0, failureKind: null }],
+      tasks: [],
+      message: null,
+      pendingTaskId: null,
+    },
+  });
+  assert(html.includes("Questions generating soon"), "Queued status must be explicit.");
+  assert(html.includes("require human review afterward"), "Queue must set the review expectation.");
+  assert(!html.includes("Review queue is empty"), "Queued generation must not look empty.");
+});
+
 Deno.test("Library controller distinguishes empty catalog from unavailable service", async () => {
   let response = Response.json({
     result: { items: [], interestAreas: [], nextCursor: null },
@@ -129,6 +168,7 @@ Deno.test("Library controller distinguishes empty catalog from unavailable servi
     escapeHtml: (value) => value,
     formatDate: (value) => value,
     createId: () => "id-a",
+    now: () => "2026-07-22T09:00:00.000Z",
     confirmDisable: () => true,
     createObserver: () => null,
     onNotice: () => {},
@@ -159,6 +199,31 @@ Deno.test("Library controller distinguishes empty catalog from unavailable servi
   assert(error.includes("Try again"), "Read failure must remain actionable.");
 });
 
+Deno.test("Library controller loads generated review status independently of the source catalog", async () => {
+  const queue = { sources: [{ sourceId: "source-a", title: "Harmony source", status: "queued", generationId: null, pendingTaskCount: 0, reviewedTaskCount: 0, failureKind: null }], tasks: [] };
+  const page = createLibraryPage({
+    fetch: (input) => {
+      const path = new URL(String(input)).pathname;
+      return Promise.resolve(path.endsWith("review-queue") ? Response.json({ result: queue }) : Response.json({ result: { items: [source], interestAreas: [], nextCursor: null } }));
+    },
+    gatewayBaseUrl: "https://app.example/",
+    escapeHtml: (value) => value,
+    formatDate: (value) => value,
+    createId: () => "id-a",
+    now: () => "2026-07-22T09:00:00.000Z",
+    confirmDisable: () => true,
+    createObserver: () => null,
+    onNotice: () => {},
+    onError: () => {},
+    rerender: () => {},
+  });
+  await page.load();
+  await page.loadReviewQueue();
+  const html = page.render({ queue: [], page: "review-queue", recallAvailable: true, now: "2026-07-22T09:00:00.000Z" });
+  assert(html.includes("Questions generating soon"), "Controller must expose queued generation status.");
+  assert(html.includes("Harmony source"), "Controller must preserve source title in the status projection.");
+});
+
 Deno.test("Library retains prior pages when a continuation fails", async () => {
   let call = 0;
   const page = createLibraryPage({
@@ -185,6 +250,7 @@ Deno.test("Library retains prior pages when a continuation fails", async () => {
     escapeHtml: (value) => value,
     formatDate: (value) => value,
     createId: () => "id-a",
+    now: () => "2026-07-22T09:00:00.000Z",
     confirmDisable: () => true,
     createObserver: () => null,
     onNotice: () => {},

@@ -383,6 +383,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       offlineYouTubeDetail.includes("Watch link unavailable") &&
       !offlineYouTubeDetail.includes("Watch on YouTube</a>"),
     "An offline live YouTube detail must retain the offline notice and unavailable watch action.",
+  );
   const selectedSearchHtml = page.render({
     selectedItemId: searchedIds[0],
     online: true,

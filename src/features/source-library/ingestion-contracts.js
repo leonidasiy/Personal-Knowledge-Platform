@@ -262,6 +262,7 @@
  *   readonly items: readonly SourceItemVersion[],
  *   readonly contentReferences: readonly SourceContentReference[],
  *   readonly state: "completed" | "partial",
+ *   readonly generationState: "not-requested" | "queued",
  *   readonly stopReason: string | null,
  *   readonly pagesProcessed: number,
  *   readonly decodedBytes: number,

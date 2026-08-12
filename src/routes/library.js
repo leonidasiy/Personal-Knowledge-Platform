@@ -1,6 +1,9 @@
 // @ts-check
 
 /** @import { LibrarySource, SourceInterestArea, SourceSearchMode } from "../features/source-library/contracts.js" */
+/** @import { LearningChoice, LearningReviewQueueStatus, LearningReviewQueueTask } from "../features/learning-generation/contracts.js" */
+
+/** @typedef {{ readonly state: "idle" | "loading" | "success" | "error" | "offline", readonly sources: readonly { readonly sourceId: string, readonly title: string, readonly status: LearningReviewQueueStatus, readonly generationId: string | null, readonly pendingTaskCount: number, readonly reviewedTaskCount: number, readonly failureKind: string | null }[], readonly tasks: readonly LearningReviewQueueTask[], readonly message: string | null, readonly pendingTaskId: string | null }} LibraryReviewQueueModel */
 
 /**
  * @typedef {{
@@ -19,6 +22,7 @@
  * @typedef {{
  *   readonly collection: SourceCollectionModel,
  *   readonly queue: readonly { readonly promptId: string, readonly title: string, readonly dueAt: string | null, readonly reviewCount: number }[],
+ *   readonly reviewQueue: LibraryReviewQueueModel,
  *   readonly page: "collection" | "review-queue",
  *   readonly recallAvailable: boolean,
  *   readonly now: string,
@@ -147,13 +151,12 @@ function renderSource(model, source) {
 
 /** @param {LibraryRouteModel} model */
 function renderQueue(model) {
-  if (!model.recallAvailable) {
-    return `<div class="state-panel review-state"><h2>Review queue needs attention</h2><p>Your source catalog remains available. Open Review to recover incompatible scheduling history.</p><a class="button secondary" href="#review">Open Review</a></div>`;
-  }
-  if (model.queue.length === 0) {
-    return `<div class="state-panel review-state"><h2>Review queue is empty</h2><p>Scheduled prompts will appear here after your first finalized recall.</p></div>`;
-  }
-  return `<ol class="queue-list">${
+  const generated = renderGeneratedReview(model);
+  const scheduled = !model.recallAvailable
+    ? `<div class="state-panel review-state"><h2>Review queue needs attention</h2><p>Your source catalog remains available. Open Review to recover incompatible scheduling history.</p><a class="button secondary" href="#review">Open Review</a></div>`
+    : model.queue.length === 0
+    ? `<div class="state-panel review-state"><h2>Scheduled review is empty</h2><p>Scheduled prompts will appear here after your first finalized recall.</p></div>`
+    : `<ol class="queue-list">${
     model.queue.map((item) => {
       const due =
         item.dueAt === null || Date.parse(item.dueAt) <= Date.parse(model.now)
@@ -172,6 +175,41 @@ function renderQueue(model) {
       }</li>`;
     }).join("")
   }</ol>`;
+  return `${generated}${scheduled}`;
+}
+
+/** @param {LibraryRouteModel} model */
+function renderGeneratedReview(model) {
+  const queue = model.reviewQueue;
+  if (queue.state === "loading" || queue.state === "idle") {
+    return `<div class="state-panel review-state" role="status" aria-busy="true"><h2>Preparing generated questions</h2><p>Checking whether questions are generating or ready for human review.</p></div>`;
+  }
+  if (queue.state === "error" || queue.state === "offline") {
+    return `<div class="state-panel review-state" role="alert"><h2>Generated questions could not load</h2><p>${model.escapeHtml(queue.message ?? "Reconnect to check generation status and review items.")}</p></div>`;
+  }
+  const statusList = queue.sources.length === 0 ? "" : `<section class="review-generation-status" aria-labelledby="generated-status-title"><h2 id="generated-status-title">Question generation</h2><ul class="queue-list">${queue.sources.map((source) => `<li class="queue-row" data-generation-source="${model.escapeHtml(source.sourceId)}"><div><strong>${model.escapeHtml(source.title)}</strong><span data-generation-status="${model.escapeHtml(source.status)}">${model.escapeHtml(generationStatusText(source.status))}</span></div><span>${source.pendingTaskCount > 0 ? `${source.pendingTaskCount} awaiting review` : source.reviewedTaskCount > 0 ? `${source.reviewedTaskCount} reviewed` : "No questions ready yet"}</span></li>`).join("")}</ul></section>`;
+  const tasks = queue.tasks.length === 0 ? "" : `<section class="generated-review-tasks" aria-labelledby="generated-review-title"><h2 id="generated-review-title">Human review required</h2><p>Keep the questions that are grounded and useful. Discard the rest before they enter study.</p><div class="data-list">${queue.tasks.map((task) => renderGeneratedTask(model, task, queue.pendingTaskId)).join("")}</div></section>`;
+  const waiting = queue.sources.some((source) => source.status === "queued" || source.status === "generating");
+  if (statusList === "" && tasks === "") return `<div class="state-panel review-state"><h2>No generated questions yet</h2><p>Approve an eligible source in Discover. Questions will appear here after automatic generation and human review preparation.</p></div>`;
+  return `${statusList}${tasks}${waiting ? `<div class="discover-notice" role="status"><p>Questions generating soon. They will require human review afterward.</p></div>` : ""}`;
+}
+
+/** @param {LibraryRouteModel} model @param {LearningReviewQueueTask} task @param {string | null} pendingTaskId */
+function renderGeneratedTask(model, task, pendingTaskId) {
+  const choices = task.choices === null ? "" : `<ul>${task.choices.map((/** @type {LearningChoice} */ choice) => `<li>${model.escapeHtml(choice.label)}${task.correctChoiceIds?.includes(choice.id) ? " · expected" : ""}</li>`).join("")}</ul>`;
+  const concepts = task.expectedConcepts === null ? "" : `<p>Expected concepts: ${model.escapeHtml(task.expectedConcepts.join(", "))}</p>`;
+  const stimulus = task.stimulus === null ? "" : `<details><summary>Symbolic stimulus</summary><pre>${model.escapeHtml(typeof task.stimulus === "string" ? task.stimulus : JSON.stringify(task.stimulus))}</pre></details>`;
+  return `<article class="data-card generated-review-card" data-generated-review-task="${model.escapeHtml(task.id)}"><p class="eyebrow">${model.escapeHtml(task.kind)}</p><h3>${model.escapeHtml(task.prompt)}</h3>${choices}${concepts}${stimulus}<p>Evidence anchors: ${model.escapeHtml(task.sourceAnchorIds.join(", "))}</p><p>${model.escapeHtml(task.explanation)}</p><div class="button-row"><button class="button" type="button" data-learning-review-decision="approve" data-learning-task-id="${model.escapeHtml(task.id)}" data-learning-task-revision="${task.revision}" ${pendingTaskId !== null ? "disabled" : ""}>${pendingTaskId === task.id ? "Keeping..." : "Keep"}</button><button class="button secondary" type="button" data-learning-review-decision="reject" data-learning-task-id="${model.escapeHtml(task.id)}" data-learning-task-revision="${task.revision}" ${pendingTaskId !== null ? "disabled" : ""}>${pendingTaskId === task.id ? "Deciding..." : "Discard"}</button></div></article>`;
+}
+
+/** @param {LearningReviewQueueStatus} status */
+function generationStatusText(status) {
+  if (status === "queued") return "Questions generating soon; human review will follow.";
+  if (status === "generating") return "Questions are being generated; human review will follow.";
+  if (status === "ready-for-review") return "Questions generated; human review required.";
+  if (status === "reviewed") return "Review complete; approved questions can enter study.";
+  if (status === "failed") return "Generation needs attention; the source remains available.";
+  return "Automatic question generation is unavailable for this source.";
 }
 
 /** @param {LibraryRouteModel} model */
@@ -182,7 +220,8 @@ function validate(model) {
   if (
     !Array.isArray(model.collection.items) ||
     !Array.isArray(model.collection.interestAreas) ||
-    !Array.isArray(model.queue) || typeof model.escapeHtml !== "function" ||
+    !Array.isArray(model.queue) || !Array.isArray(model.reviewQueue.sources) ||
+    !Array.isArray(model.reviewQueue.tasks) || typeof model.escapeHtml !== "function" ||
     typeof model.formatDate !== "function"
   ) throw new TypeError("Library model is invalid.");
 }

@@ -152,9 +152,9 @@ export class D1SourceIngestionRepository {
       )),
       ...cursorStatements(this.#database, commit, guard, guardValues),
       this.#database.prepare(
-        "UPDATE source_ingestion_jobs SET state = ?, stop_reason = ?, pages_processed = ?, decoded_bytes = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE owner_id = ? AND job_id = ? AND source_id = ? AND source_revision = ? AND state = 'leased' AND lease_token = ?",
+        "UPDATE source_ingestion_jobs SET state = ?, generation_state = ?, generation_failure = NULL, stop_reason = ?, pages_processed = ?, decoded_bytes = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE owner_id = ? AND job_id = ? AND source_id = ? AND source_revision = ? AND state = 'leased' AND lease_token = ?",
       ).bind(
-        commit.state, commit.stopReason, commit.pagesProcessed, commit.decodedBytes,
+        commit.state, commit.generationState, commit.stopReason, commit.pagesProcessed, commit.decodedBytes,
         commit.committedAt, commit.lease.ownerId, commit.lease.jobId,
         commit.lease.sourceId, commit.lease.sourceRevision, commit.lease.leaseToken,
       ),
@@ -165,6 +165,18 @@ export class D1SourceIngestionRepository {
         return { ok: false, error: { kind: "IngestionJobLeaseConflict" } };
       }
       return { ok: true, value: freeze({ state: commit.state }) };
+    } catch (error) {
+      if (error instanceof Error) return { ok: false, error: { kind: "IngestionPersistenceFailed" } };
+      throw error;
+    }
+  }
+
+  /** @param {{ readonly ownerId: string, readonly jobId: string, readonly state: "completed" | "failed", readonly failureKind: string | null, readonly updatedAt: string }} command @returns {Promise<Result<null, SourceIngestionFailure>>} */
+  async markGenerationState(command) {
+    if (!isNonEmptyText(command?.ownerId) || !isNonEmptyText(command.jobId) || (command.state !== "completed" && command.state !== "failed") || (command.failureKind !== null && !isNonEmptyText(command.failureKind)) || !isNonEmptyText(command.updatedAt)) return { ok: false, error: { kind: "IngestionPersistenceFailed" } };
+    try {
+      const result = await this.#database.prepare("UPDATE source_ingestion_jobs SET generation_state = ?, generation_failure = ?, updated_at = ? WHERE owner_id = ? AND job_id = ? AND state IN ('completed', 'partial')").bind(command.state, command.failureKind, command.updatedAt, command.ownerId, command.jobId).run();
+      return result.meta?.changes === 1 ? { ok: true, value: null } : { ok: false, error: { kind: "IngestionPersistenceFailed" } };
     } catch (error) {
       if (error instanceof Error) return { ok: false, error: { kind: "IngestionPersistenceFailed" } };
       throw error;

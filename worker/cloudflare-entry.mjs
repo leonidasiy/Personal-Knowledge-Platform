@@ -9,7 +9,7 @@ export {
 } from "./main.js";
 
 export default {
-  async fetch(request, environment) {
+  async fetch(request, environment, context) {
     const routed = createUnifiedWorkerRouter({
       assets: environment.ASSETS,
       createApiWorker: () =>
@@ -17,6 +17,7 @@ export default {
           fetch: globalThis.fetch,
           now: () => new Date(),
           subtle: globalThis.crypto.subtle,
+          waitUntil: (promise) => context.waitUntil(promise),
           randomBytes: (length) =>
             globalThis.crypto.getRandomValues(new Uint8Array(length)),
           browserLauncher: {

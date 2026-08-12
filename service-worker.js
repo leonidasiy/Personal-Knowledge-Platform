@@ -140,8 +140,8 @@ async function resolveFreshRequest(request) {
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     try {
-      const cached = await cache.match(request);
-      if (cached !== undefined) return cached;
+      const fallback = await cache.match(request);
+      if (fallback !== undefined) return fallback;
     } catch (cacheError) {
       if (!(cacheError instanceof Error)) throw cacheError;
     }
@@ -151,6 +151,11 @@ async function resolveFreshRequest(request) {
 }
 
 async function resolveSameOriginRequest(request) {
+  const requestUrl = new URL(request.url);
+  const networkFirst = request.mode === "navigate" ||
+    NETWORK_FIRST_PATHS.has(requestUrl.pathname);
+  if (networkFirst) return resolveFreshRequest(request);
+
   let cache;
   let cached;
   try {
@@ -165,9 +170,6 @@ async function resolveSameOriginRequest(request) {
     }
   }
 
-  const requestUrl = new URL(request.url);
-  const networkFirst = request.mode === "navigate" ||
-    NETWORK_FIRST_PATHS.has(requestUrl.pathname);
   const fetched = fetch(
     request,
     networkFirst ? { cache: "no-store" } : undefined,
@@ -181,15 +183,6 @@ async function resolveSameOriginRequest(request) {
     }
     return response;
   });
-  if (networkFirst) {
-    try {
-      return await fetched;
-    } catch {
-      if (cached !== undefined) return cached;
-      await notifyOfflineFailure("OfflineCacheMiss");
-      return Response.error();
-    }
-  }
   if (cached !== undefined) return cached;
   try {
     return await fetched;

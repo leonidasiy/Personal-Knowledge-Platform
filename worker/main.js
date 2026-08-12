@@ -24,6 +24,7 @@ import { D1SourceLibraryRepository } from "./source-library-d1.js";
 import { D1ManualMaterialRepository } from "./manual-material-d1.js";
 import { R2SourceContentStore } from "./source-content-r2.js";
 import { SourcePolicyEvaluator } from "../src/features/source-library/ingestion-policy.js";
+import { SourceRightsApprovalService } from "../src/features/source-library/rights-approval.js";
 import { D1SourceIngestionRepository } from "./source-ingestion-d1.js";
 import { D1SourceRightsRegistry } from "./source-rights-registry-d1.js";
 import { D1BrowserRunCapacityLedger } from "./browser-run-capacity-d1.js";
@@ -37,6 +38,16 @@ import {
   DurableYouTubeOAuthStore,
   YouTubeOAuthDurableObject,
 } from "./youtube-oauth-store.js";
+import { D1LearningGenerationRepository } from "./learning-generation-d1.js";
+import { D1LearningBudgetLedger } from "./learning-budget-d1.js";
+import { createDeepSeekV4FlashAdapter } from "./deepseek-v4-flash-adapter.js";
+import { LearningGenerationService } from "../src/features/learning-generation/service.js";
+import { LearningReviewService } from "../src/features/learning-generation/review.js";
+import { LearningReviewQueueService } from "../src/features/learning-generation/queue.js";
+import { LearningRevocationService } from "../src/features/learning-generation/revocation.js";
+import { LearningGenerationStatusService } from "../src/features/learning-generation/status.js";
+import { LearningGenerationEnqueuer } from "./learning-generation-enqueuer.js";
+import { createLearningCostModel } from "./learning-generation-cost.js";
 
 /** @import { Result, WorkerFailure } from "./contracts.js" */
 
@@ -64,6 +75,9 @@ import {
  *   readonly YOUTUBE_OAUTH_ENCRYPTION_KEY?: unknown,
  *   readonly YOUTUBE_OAUTH_STORE?: unknown,
  *   readonly YOUTUBE_OAUTH_LEDGER?: unknown,
+ *   readonly DEEPSEEK_API_KEY?: unknown,
+ *   readonly DEEPSEEK_INPUT_USD_PER_MILLION?: unknown,
+ *   readonly DEEPSEEK_OUTPUT_USD_PER_MILLION?: unknown,
  *   readonly TRANSCRIPT_AUTHORIZATION?: unknown,
  *   readonly TRANSCRIPT_AUTHORIZATION_LEDGER?: unknown,
  *   readonly SOURCE_LIBRARY_DB?: unknown,
@@ -133,6 +147,7 @@ import {
  *   readonly now: () => Date,
  *   readonly subtle: SubtleCrypto,
  *   readonly randomBytes?: (length: number) => Uint8Array,
+ *   readonly waitUntil?: (promise: Promise<unknown>) => void,
  *   readonly browserLauncher?: { readonly limits: (binding: unknown) => Promise<unknown>, readonly launch: (binding: unknown) => Promise<unknown> },
  * }} CloudflarePlatform
  */
@@ -396,8 +411,59 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       maximumBytes: /** @type {NonNullable<typeof manualConfiguration>} */ (manualConfiguration).maximumBytes,
       maximumCharacters: /** @type {NonNullable<typeof manualConfiguration>} */ (manualConfiguration).maximumCharacters,
     });
+  /** @type {import("../src/features/learning-generation/contracts.js").LearningLogger} */
+  const learningLogger = (entry) => console.info(JSON.stringify(entry));
+  const sourceRightsRegistry = sourceRepository === null
+    ? null
+    : new D1SourceRightsRegistry({
+      database: /** @type {import("./source-rights-registry-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase)),
+      now: () => platform.now().toISOString(),
+      logger: learningLogger,
+    });
+  const sourceRightsApproval = sourceRightsRegistry === null
+    ? null
+    : new SourceRightsApprovalService({
+      repository: { approve: (record, fingerprint) => sourceRightsRegistry.approve(record, fingerprint) },
+      createId: () => hex(/** @type {(length: number) => Uint8Array} */ (platform.randomBytes)(16)),
+      now: () => platform.now().toISOString(),
+      logger: learningLogger,
+    });
+  const learningPolicy = Object.freeze({
+    version: "learning-generation-v1",
+    unitization: Object.freeze({ version: "unitization-v1", maximumContentCharacters: 250_000, maximumWordsPerUnit: 80, maximumUnits: 32, maximumExcerptCharacters: 8_000 }),
+    maximumProviderInputCharacters: 8_000,
+    maximumProviderUnits: 8,
+    maximumTasks: 12,
+    maximumOutputTokens: 512,
+    factualSamplingRatePercent: 30,
+    samplingVersion: "factual-sampling-v1",
+    providerInstruction: "Return only a JSON object with bounded, evidence-grounded learning tasks. Preserve unit and source anchor IDs.",
+    monthlyBudgetUsd: 2,
+  });
+  const learningDatabase = configuration.value.sourceLibraryDatabase;
+  const learningRepository = learningDatabase === null
+    ? null
+    : new D1LearningGenerationRepository({ database: learningDatabase, logger: learningLogger });
+  const learningGenerationService = learningRepository === null || learningDatabase === null
+    ? null
+    : new LearningGenerationService({
+      repository: learningRepository,
+      provider: createDeepSeekV4FlashAdapter({ apiKey: configuration.value.deepSeekApiKey, endpoint: "https://api.deepseek.com/chat/completions", model: "deepseek-v4-flash", maximumInputCharacters: learningPolicy.maximumProviderInputCharacters, maximumOutputTokens: learningPolicy.maximumOutputTokens, timeoutMs: 15_000, fetch: platform.fetch, now: () => platform.now().getTime(), logger: learningLogger }),
+      budget: new D1LearningBudgetLedger({ database: learningDatabase, logger: learningLogger }),
+      costModel: createLearningCostModel(configuration.value.learningCost),
+      createId: () => hex(/** @type {(length:number)=>Uint8Array} */ (platform.randomBytes)(16)),
+      now: () => platform.now().toISOString(),
+      logger: learningLogger,
+    });
+  const learningEnqueuer = learningGenerationService === null
+    ? null
+    : new LearningGenerationEnqueuer({ generate: (command) => learningGenerationService.generate(command), now: () => platform.now().toISOString(), logger: learningLogger, maximumItems: 8 });
+  const learningStatus = learningRepository === null ? null : new LearningGenerationStatusService({ repository: learningRepository, logger: learningLogger });
+  const learningReview = learningRepository === null ? null : new LearningReviewService({ repository: learningRepository, now: () => platform.now().toISOString(), logger: learningLogger });
+  const learningReviewQueue = learningRepository === null ? null : new LearningReviewQueueService({ repository: learningRepository, logger: learningLogger });
+  const learningRevocation = learningRepository === null ? null : new LearningRevocationService({ repository: learningRepository, now: () => platform.now().toISOString(), logger: learningLogger });
   const browserConfiguration = configuration.value.browserRun;
-  const sourceIngestion = sourceRepository === null || manualContentStore === null ||
+  const sourceIngestion = sourceRepository === null || sourceRightsRegistry === null || manualContentStore === null ||
       browserConfiguration === null || platform.browserLauncher === undefined
     ? null
     : new SourceIngestionRunner({
@@ -406,7 +472,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         now: () => platform.now().toISOString(),
       }),
       repository: new D1SourceIngestionRepository(/** @type {import("./source-ingestion-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase))),
-      rightsRegistry: new D1SourceRightsRegistry({ database: /** @type {import("./source-rights-registry-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase)), now: () => platform.now().toISOString() }),
+      rightsRegistry: sourceRightsRegistry,
       capacity: new D1BrowserRunCapacityLedger({
         database: /** @type {import("./browser-run-capacity-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase)),
         now: () => platform.now().toISOString(),
@@ -428,6 +494,8 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       createId: () => hex(/** @type {(length: number) => Uint8Array} */ (platform.randomBytes)(16)),
       now: () => platform.now().toISOString(),
       leaseDurationMs: 300_000,
+      generationEnqueue: learningEnqueuer === null ? undefined : (command) => learningEnqueuer.enqueue({ .../** @type {Record<string, unknown>} */ (command), policy: learningPolicy }),
+      logger: learningLogger,
     });
   const youtubeConfiguration = configuration.value.youtube;
   const youtubeAdapter = youtubeConfiguration.status === "unavailable"
@@ -552,8 +620,13 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       centralSearch: observedCentralSearch,
       sourceLibrary,
       sourceCatalog,
+      sourceRightsApproval,
       sourceIngestion,
+      waitUntil: platform.waitUntil,
       manualMaterial,
+      learningGeneration: learningRepository === null || learningStatus === null || learningReview === null || learningRevocation === null
+        ? null
+        : { status: (command) => learningStatus.get(command), review: { decide: (command) => learningReview.decide(command), queue: (ownerId) => learningReviewQueue === null ? Promise.resolve({ ok: false, error: { kind: "LearningReviewQueuePersistenceFailed" } }) : learningReviewQueue.list(ownerId) }, revoke: { revoke: (command) => learningRevocation.revoke(command) } },
     },
   );
 
@@ -751,6 +824,8 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
  *   readonly sourceCursorSecret: string | null,
  *   readonly manualMaterial: null | { readonly bucket: import("./source-content-r2.js").R2BucketPort, readonly maximumBytes: number, readonly maximumCharacters: number, readonly mediaTypes: ReadonlySet<string>, readonly capacityPolicy: {readonly accountScope:string,readonly storedBytesLimit:number,readonly classAMonthlyLimit:number,readonly classBMonthlyLimit:number,readonly observationMaximumAgeMs:number} },
  *   readonly browserRun: null | { readonly binding: object | Function, readonly accountScope: string },
+ *   readonly deepSeekApiKey: string | null,
+ *   readonly learningCost: { readonly inputUsdPerMillionTokens: number, readonly outputUsdPerMillionTokens: number },
  * }, DiscoveryCompositionFailure>}
  */
 function parseEnvironment(environment) {
@@ -802,6 +877,14 @@ function parseEnvironment(environment) {
   if (!braveApiKey.ok) {
     return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "BRAVE_SEARCH_API_KEY" } };
   }
+  const deepSeekApiKey = optionalSecret(environment.DEEPSEEK_API_KEY);
+  if (!deepSeekApiKey.ok) {
+    return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "DEEPSEEK_API_KEY" } };
+  }
+  const learningInputRate = optionalRate(environment.DEEPSEEK_INPUT_USD_PER_MILLION, 1);
+  if (!learningInputRate.ok) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "DEEPSEEK_INPUT_USD_PER_MILLION" } };
+  const learningOutputRate = optionalRate(environment.DEEPSEEK_OUTPUT_USD_PER_MILLION, 1);
+  if (!learningOutputRate.ok) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "DEEPSEEK_OUTPUT_USD_PER_MILLION" } };
   const taddy = taddyCredentials(
     environment.TADDY_USER_ID,
     environment.TADDY_API_KEY,
@@ -885,6 +968,8 @@ function parseEnvironment(environment) {
       transcriptLanguages,
       youtube: resolveYoutubeConfiguration(environment),
       braveApiKey: braveApiKey.value,
+      deepSeekApiKey: deepSeekApiKey.value,
+      learningCost: Object.freeze({ inputUsdPerMillionTokens: learningInputRate.value, outputUsdPerMillionTokens: learningOutputRate.value }),
       taddy: taddy.value,
       transcriptAuthorization: transcriptAuthorization.value,
       sourceLibraryDatabase: environment.SOURCE_LIBRARY_DB === undefined
@@ -909,6 +994,13 @@ function optionalSecret(value) {
   return typeof value === "string" && value.trim() !== ""
     ? { ok: true, value }
     : { ok: false, error: { kind: "SecretInvalid" } };
+}
+
+/** @param {unknown} value @param {number} defaultValue @returns {Result<number, { readonly kind: "RateInvalid" }>} */
+function optionalRate(value, defaultValue) {
+  if (value === undefined) return { ok: true, value: defaultValue };
+  if (typeof value !== "string" || value.trim() === "" || !Number.isFinite(Number(value)) || Number(value) <= 0) return { ok: false, error: { kind: "RateInvalid" } };
+  return { ok: true, value: Number(value) };
 }
 
 /** @param {unknown} userId @param {unknown} apiKey @returns {Result<{readonly userId:string,readonly apiKey:string}|null,{readonly kind:"SecretPairInvalid",readonly field:string}>} */

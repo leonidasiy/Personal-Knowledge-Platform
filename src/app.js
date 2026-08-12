@@ -623,7 +623,10 @@ async function loadActiveRoute() {
   }
   if (activeView === "library") {
     await loadLibraryRoute();
-    if (libraryPage === "review-queue") await ensureRecallRuntime();
+    if (libraryPage === "review-queue") {
+      await ensureRecallRuntime();
+      await libraryPageController?.loadReviewQueue();
+    }
   }
   if (activeView === "discover") {
     if (discoveryPage === null) {
@@ -697,6 +700,7 @@ async function loadLibraryRoute() {
         escapeHtml,
         formatDate,
         createId: () => crypto.randomUUID(),
+        now: () => new Date().toISOString(),
         confirmDisable: (source) =>
           confirm(
             `Remove "${source.title}" from future ingestion and Feed selection? Study and review history will be preserved.`,

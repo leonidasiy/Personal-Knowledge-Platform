@@ -11,6 +11,8 @@ function worker(overrides = {}) {
     authenticate: overrides.authenticate ?? (async () => ({ ok: true, value: { ownerId: "owner-a", email: "owner@example.com" } })),
     acquireRss: async () => ({ ok: false, error: { kind: "DiscoveryFetchUnavailable" } }),
     sourceIngestion: overrides.sourceIngestion ?? null,
+    sourceRightsApproval: overrides.sourceRightsApproval ?? null,
+    waitUntil: overrides.waitUntil,
     manualMaterial: overrides.manualMaterial ?? null,
     wikimediaTimedText: overrides.wikimediaTimedText ?? null,
   });
@@ -18,6 +20,70 @@ function worker(overrides = {}) {
 
 /** @param {string} path @param {unknown} body */
 function request(path, body) { return new Request(`https://app.example${path}`, { method: "POST", headers: { origin: "https://app.example", "content-type": "application/json" }, body: JSON.stringify(body) }); }
+
+Deno.test("rights approval authenticates, derives owner, and starts the bounded ingestion job once", async () => {
+  let approvalCalls = 0;
+  let ingestionCalls = 0;
+  /** @type {Promise<unknown>[]} */
+  const scheduled = [];
+  const response = await worker({
+    sourceRightsApproval: {
+      approve: async (command) => {
+        approvalCalls += 1;
+        assertEquals(/** @type {{ readonly ownerId: string }} */ (/** @type {unknown} */ (command)).ownerId, "owner-a");
+        return /** @type {const} */ ({ ok: true, value: { approvalId: "approval-a", registryId: "registry-a", sourceId: "source-a", sourceRevision: 1, jobId: "job-a", requeued: true, reused: false } });
+      },
+    },
+    sourceIngestion: {
+      run: async (command) => {
+        ingestionCalls += 1;
+        const owned = /** @type {{ readonly ownerId: string, readonly jobId: string }} */ (/** @type {unknown} */ (command));
+        assertEquals(owned.ownerId, "owner-a");
+        assertEquals(owned.jobId, "job-a");
+        return /** @type {const} */ ({ ok: true, value: { state: "completed", itemsStored: 1 } });
+      },
+    },
+    waitUntil: (promise) => { scheduled.push(promise); },
+  }).fetch(request("/api/source-library/rights/approve", { sourceId: "source-a", sourceRevision: 1 }));
+  assertEquals(response.status, 200);
+  assertEquals(approvalCalls, 1);
+  assertEquals(scheduled.length, 1);
+  await Promise.all(scheduled);
+  assertEquals(ingestionCalls, 1);
+});
+
+Deno.test("rights approval does not schedule ingestion for an idempotent replay or a non-requeued job", async () => {
+  let ingestionCalls = 0;
+  /** @type {Promise<unknown>[]} */
+  const scheduled = [];
+  const sourceRightsApproval = {
+    approve: async () => /** @type {const} */ ({ ok: true, value: { approvalId: "approval-a", registryId: "registry-a", sourceId: "source-a", sourceRevision: 1, jobId: "job-a", requeued: true, reused: true } }),
+  };
+  let response = await worker({ sourceRightsApproval, sourceIngestion: { run: async () => { ingestionCalls += 1; return /** @type {const} */ ({ ok: true, value: { state: "completed", itemsStored: 0 } }); } }, waitUntil: (promise) => { scheduled.push(promise); } }).fetch(request("/api/source-library/rights/approve", { sourceId: "source-a", sourceRevision: 1 }));
+  assertEquals(response.status, 200);
+  assertEquals(scheduled.length, 0);
+  assertEquals(ingestionCalls, 0);
+
+  response = await worker({ sourceRightsApproval: { approve: async () => /** @type {const} */ ({ ok: true, value: { approvalId: "approval-b", registryId: "registry-b", sourceId: "source-a", sourceRevision: 1, jobId: null, requeued: false, reused: false } }) }, sourceIngestion: { run: async () => { ingestionCalls += 1; return /** @type {const} */ ({ ok: true, value: { state: "completed", itemsStored: 0 } }); } }, waitUntil: (promise) => { scheduled.push(promise); } }).fetch(request("/api/source-library/rights/approve", { sourceId: "source-a", sourceRevision: 1 }));
+  assertEquals(response.status, 200);
+  assertEquals(scheduled.length, 0);
+  assertEquals(ingestionCalls, 0);
+});
+
+Deno.test("rights approval authenticates before persistence and reports named boundaries", async () => {
+  let approvals = 0;
+  const denied = await worker({
+    authenticate: async () => ({ ok: false, error: { kind: "DiscoveryClientUnauthenticated" } }),
+    sourceRightsApproval: { approve: async () => { approvals += 1; return /** @type {const} */ ({ ok: false, error: { kind: "RightsApprovalPersistenceFailed" } }); } },
+  }).fetch(request("/api/source-library/rights/approve", { sourceId: "source-a", sourceRevision: 1 }));
+  assertEquals(denied.status, 401);
+  assertEquals(approvals, 0);
+
+  const conflict = await worker({ sourceRightsApproval: { approve: async () => /** @type {const} */ ({ ok: false, error: { kind: "RightsApprovalRevisionStale" } }) } }).fetch(request("/api/source-library/rights/approve", { sourceId: "source-a", sourceRevision: 1 }));
+  assertEquals(conflict.status, 409);
+  const body = await conflict.json();
+  assertEquals(body.error, "RightsApprovalRevisionStale");
+});
 
 Deno.test("ingestion routes authenticate before source, R2, or provider work", async () => {
   let work = 0;
