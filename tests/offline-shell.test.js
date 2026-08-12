@@ -238,6 +238,19 @@ Deno.test("offline upgrade retires only older Resonance caches", async () => {
       serviceWorker.indexOf("upgradeShell()"),
     "The worker lifecycle must install the complete graph before old-cache cleanup.",
   );
+  assert(
+      serviceWorker.includes("const NETWORK_FIRST_PATHS = new Set(") &&
+      serviceWorker.includes('request.mode === "navigate"') &&
+      serviceWorker.includes('networkFirst ? { cache: "no-store" } : undefined') &&
+      serviceWorker.includes('"/asset-manifest.json"') &&
+      serviceWorker.includes('"/service-worker.js"'),
+    "Navigations and build identity assets must refresh from the network before using the offline cache.",
+  );
+  assert(
+    serviceWorker.indexOf("if (networkFirst)") <
+      serviceWorker.indexOf("if (cached !== undefined) return cached;"),
+    "Network-first requests must prefer the fresh response and only fall back to cached content after failure.",
+  );
 });
 
 Deno.test("authenticated discovery API responses never enter the offline cache", async () => {

@@ -145,39 +145,10 @@ export function createDiscoveryPage(dependencies) {
         cursor: null,
         selectedItemId: route.selectedItemId,
         online: route.online,
+        starterOnly: route.online && centralRouteItems === null,
       });
       if (projected.ok) {
-        const projectedModel = toDiscoverRouteModel(
-          projected.value,
-          dependencies.escapeHtml,
-        );
-        const visibleItems = centralRouteItems ?? [...projectedModel.items];
-        const items = visibleItems.filter((item) =>
-          !suppressed.has(item.candidate.canonicalIdentity)
-        );
-        routeItems.clear();
-        for (const item of items) routeItems.set(item.id, item);
-        return renderDiscoverRoute(
-          freeze({
-            ...projectedModel,
-            items: freeze(items),
-            state: searchFailure === null
-              ? items.length === 0
-                ? /** @type {const} */ ("empty")
-                : /** @type {const} */ ("success")
-              : /** @type {const} */ ("partial"),
-            stateMessage: searchFailure,
-            areas: freeze(
-              interestAreas.map((area) =>
-                freeze({ id: area.id, title: area.title })
-              ),
-            ),
-            pendingId: pendingDecisionItemId,
-            canAct: sourceActionsAvailable && route.online,
-            search: searchModel(route.online),
-            markup: dependencies.markup,
-          }),
-        );
+        return renderItems(projected.value, route, centralRouteItems);
       }
       if (
         projected.error.kind === "DiscoveryRuntimeSelectedItemUnknown" &&
@@ -188,22 +159,10 @@ export function createDiscoveryPage(dependencies) {
           cursor: null,
           selectedItemId: null,
           online: route.online,
+          starterOnly: route.online && centralRouteItems === null,
         });
         if (list.ok) {
-          return renderDiscoverRoute(freeze({
-            ...toDiscoverRouteModel(list.value, dependencies.escapeHtml),
-            page: /** @type {const} */ ("detail"),
-            selectedItemId: route.selectedItemId,
-            areas: freeze(
-              interestAreas.map((area) =>
-                freeze({ id: area.id, title: area.title })
-              ),
-            ),
-            pendingId: pendingDecisionItemId,
-            canAct: sourceActionsAvailable && route.online,
-            search: searchModel(route.online),
-            markup: dependencies.markup,
-          }));
+          return renderItems(list.value, route, centralRouteItems);
         }
       }
       return renderDiscoverRoute({
@@ -279,6 +238,53 @@ export function createDiscoveryPage(dependencies) {
     approve,
     reject,
   });
+
+  /**
+   * Render one stable item projection. Central search results are intentionally
+   * kept in memory until the user approves them, so they must remain the
+   * source of truth while a result detail is open.
+   *
+   * @param {import("./discovery-runtime.js").DiscoveryRenderModel} projected
+   * @param {{readonly selectedItemId:string|null,readonly online:boolean}} route
+   * @param {import("../routes/discover.js").DiscoverRouteItem[]|null} liveItems
+   */
+  function renderItems(projected, route, liveItems) {
+    const projectedModel = toDiscoverRouteModel(
+      projected,
+      dependencies.escapeHtml,
+    );
+    const visibleItems = liveItems ?? [...projectedModel.items];
+    const items = visibleItems.filter((item) =>
+      !suppressed.has(item.candidate.canonicalIdentity)
+    );
+    routeItems.clear();
+    for (const item of items) routeItems.set(item.id, item);
+    return renderDiscoverRoute(
+      freeze({
+        ...projectedModel,
+        page: route.selectedItemId !== null
+          ? /** @type {const} */ ("detail")
+          : /** @type {const} */ ("list"),
+        items: freeze(items),
+        state: searchFailure === null
+          ? items.length === 0
+            ? /** @type {const} */ ("empty")
+            : /** @type {const} */ ("success")
+          : /** @type {const} */ ("partial"),
+        stateMessage: searchFailure,
+        selectedItemId: route.selectedItemId,
+        areas: freeze(
+          interestAreas.map((area) =>
+            freeze({ id: area.id, title: area.title })
+          ),
+        ),
+        pendingId: pendingDecisionItemId,
+        canAct: sourceActionsAvailable && route.online,
+        search: searchModel(route.online),
+        markup: dependencies.markup,
+      }),
+    );
+  }
 
   /** @param {unknown} command */
   async function search(command) {
