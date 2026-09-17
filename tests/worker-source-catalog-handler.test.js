@@ -11,10 +11,12 @@ function assertEquals(actual, expected) {
   }
 }
 
-/** @param {Partial<{ readonly browseFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly searchFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly rejectFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure }>} [options] */
+/** @param {Partial<{ readonly browseFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly searchFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly rejectFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly browseMode: "throw" | "hang" | "malformed" | "malformed-page", readonly authFailure: "DiscoveryClientUnauthenticated" | "DiscoveryAccessTokenInvalid" }>} [options] */
 function fixture(options = {}) {
   /** @type {Record<string, unknown>[]} */
   const commands = [];
+  /** @type {Record<string, unknown>[]} */
+  const logs = [];
   const source = {
     id: "source-1",
     ownerId: "owner-a",
@@ -38,12 +40,16 @@ function fixture(options = {}) {
   const worker = createDiscoveryWorker({
     allowedOrigin: "https://app.example",
     maximumCommandBytes: 4096,
+    maximumBackendOperationMs: 5,
   }, {
-    authenticate: () =>
-      Promise.resolve({
+    authenticate: () => options.authFailure === undefined
+      ? Promise.resolve({
         ok: true,
         value: { ownerId: "owner-a", email: "member@example.test" },
-      }),
+      })
+      : Promise.resolve({ ok: false, error: { kind: options.authFailure } }),
+    createRequestId: () => "corr-source-catalog",
+    requestLogger: (entry) => { logs.push(entry); return { ok: true, value: null }; },
     acquireRss: () =>
       Promise.resolve({
         ok: false,
@@ -76,6 +82,10 @@ function fixture(options = {}) {
     sourceCatalog: {
       browse: async (command) => {
         commands.push(/** @type {Record<string, unknown>} */ (command));
+        if (options.browseMode === "throw") throw new Error("D1 unavailable");
+        if (options.browseMode === "hang") return await new Promise(() => {});
+        if (options.browseMode === "malformed") return /** @type {never} */ ({ ok: true });
+        if (options.browseMode === "malformed-page") return /** @type {never} */ ({ ok: true, value: { items: [{}], interestAreas: [], nextCursor: null } });
         if (options.browseFailure !== undefined) {
           return { ok: false, error: options.browseFailure };
         }
@@ -89,6 +99,9 @@ function fixture(options = {}) {
         if (options.searchFailure !== undefined) {
           return { ok: false, error: options.searchFailure };
         }
+        if (/** @type {Record<string, unknown>} */ (command).scope === "knowledge") {
+          return { ok: true, value: [{ knowledge: { knowledgeId: "knowledge-1", sourceId: source.id, sourceTitle: source.title, summary: "A cadence resolves tension.", sourceUrl: source.canonicalUrl, evidenceAnchorIds: ["anchor-1"], questionLocked: true }, score: 0.84, matchedBy: /** @type {const} */ ("semantic") }] };
+        }
         return { ok: true, value: [{ source, score: 1 }] };
       },
       suppressed: async (command) => {
@@ -101,7 +114,7 @@ function fixture(options = {}) {
       },
     },
   });
-  return { worker, commands };
+  return { worker, commands, logs };
 }
 
 Deno.test("source catalog GET routes derive owner and validate query parameters", async () => {
@@ -113,6 +126,7 @@ Deno.test("source catalog GET routes derive owner and validate query parameters"
     ),
   );
   assertEquals(browse.status, 200);
+  assertEquals(browse.headers.get("x-resonance-request-id"), "corr-source-catalog");
   const browseBody = await browse.json();
   assertEquals(browseBody.ownerId, "owner-a");
   assertEquals(commands[0].ownerId, "owner-a");
@@ -138,6 +152,20 @@ Deno.test("source catalog GET routes derive owner and validate query parameters"
   assertEquals(defaultCombined.status, 200);
   assertEquals(commands[2].query, "motion");
   assertEquals(commands[2].mode, "combined");
+});
+
+Deno.test("knowledge search route derives owner, forwards scope, and validates knowledge results", async () => {
+  const { worker, commands } = fixture();
+  const response = await worker.fetch(new Request(
+    "https://worker.example/api/source-library/search?q=cadence&mode=semantic&scope=knowledge&limit=10",
+    { headers: { origin: "https://app.example" } },
+  ));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.ownerId, "owner-a");
+  assertEquals(body.result[0].knowledge.knowledgeId, "knowledge-1");
+  assertEquals(commands[0].scope, "knowledge");
+  assertEquals(commands[0].ownerId, "owner-a");
 });
 
 Deno.test("source rejection derives owner and never accepts one from the client", async () => {
@@ -201,6 +229,49 @@ Deno.test("catalog routes map unavailable and cursor failures without false succ
     ),
   );
   assertEquals(wrongMethod.status, 405);
+});
+
+Deno.test("source catalog dependency timeout returns a bounded typed failure and lifecycle logs", async () => {
+  const { worker, logs } = fixture({ browseMode: "hang" });
+  let fallbackTimer;
+  const fallback = new Promise((resolve) => { fallbackTimer = setTimeout(() => resolve(null), 100); });
+  const response = await Promise.race([
+    worker.fetch(new Request("https://worker.example/api/source-library?limit=10")),
+    fallback,
+  ]);
+  clearTimeout(fallbackTimer);
+  if (!(response instanceof Response)) throw new Error("The current handler did not return a bounded response.");
+  assertEquals(response.status, 504);
+  assertEquals((await response.json()).error, "SourceCatalogDependencyTimedOut");
+  assertEquals(logs.some((entry) => entry.event === "dependency-failure" && entry.failureKind === "SourceCatalogDependencyTimedOut"), true);
+  assertEquals(logs.some((entry) => entry.event === "request-failure" && entry.status === 504), true);
+});
+
+Deno.test("source catalog dependency exceptions and malformed results fail closed with diagnostics", async () => {
+  const thrown = fixture({ browseMode: "throw" });
+  const thrownResponse = await thrown.worker.fetch(new Request("https://worker.example/api/source-library?limit=10"));
+  assertEquals(thrownResponse.status, 503);
+  assertEquals((await thrownResponse.json()).error, "SourceCatalogDependencyFailed");
+  assertEquals(thrown.logs.some((entry) => entry.failureKind === "SourceCatalogDependencyFailed"), true);
+
+  const malformed = fixture({ browseMode: "malformed" });
+  const malformedResponse = await malformed.worker.fetch(new Request("https://worker.example/api/source-library?limit=10"));
+  assertEquals(malformedResponse.status, 503);
+  assertEquals((await malformedResponse.json()).error, "SourceCatalogResponseInvalid");
+  assertEquals(malformed.logs.some((entry) => entry.failureKind === "SourceCatalogResponseInvalid"), true);
+
+  const malformedPage = fixture({ browseMode: "malformed-page" });
+  const malformedPageResponse = await malformedPage.worker.fetch(new Request("https://worker.example/api/source-library?limit=10"));
+  assertEquals(malformedPageResponse.status, 503);
+  assertEquals((await malformedPageResponse.json()).error, "SourceCatalogResponseInvalid");
+});
+
+Deno.test("authentication failures are logged without owner or token data", async () => {
+  const { worker, logs } = fixture({ authFailure: "DiscoveryAccessTokenInvalid" });
+  const response = await worker.fetch(new Request("https://worker.example/api/source-library?limit=10"));
+  assertEquals(response.status, 401);
+  assertEquals(logs.some((entry) => entry.event === "request-auth-failure" && entry.failureKind === "DiscoveryAccessTokenInvalid"), true);
+  assertEquals(logs.some((entry) => Object.hasOwn(entry, "ownerId")), false);
 });
 
 Deno.test("suppression checks are authenticated, owner-derived, and bounded commands", async () => {

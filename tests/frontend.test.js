@@ -36,21 +36,22 @@ Deno.test("learning shell is local, theme-aware, and keyboard reachable", async 
   );
 });
 
-Deno.test("feed presentation uses assigned daily progress and responsive local media", async () => {
+Deno.test("active learner owns Feed rendering while app retains local history contracts", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
-  assert(
-    source.includes("dailyLearningService.calculateProgress(") &&
-      source.includes("<progress") &&
-      source.includes("Daily studied") &&
-      source.includes("assigned lessons studied today"),
-    "Daily progress must come from fixed assignments and durable study facts.",
+  const learner = await Deno.readTextFile(
+    new URL("src/features/learning-generation/learner.js", root),
   );
   assert(
-    source.includes("srcset=") &&
-      source.includes("(max-width: 800px) 100vw") &&
-      source.includes('loading="lazy"') &&
-      source.includes('decoding="async"'),
-    "Feed media must be responsive, dimensioned, lazy, and async-decoded.",
+    source.includes("if (learnerController !== null) return learnerController.renderFeed();") &&
+      learner.includes("Preparing today's five knowledge cards") &&
+      learner.includes("data-action=\"complete-learner-feed\""),
+    "The active Feed must be rendered and controlled by the learner controller.",
+  );
+  assert(
+    source.includes("dailyLearningRepository") &&
+      source.includes("restoreLocalState") &&
+      !source.includes("function renderFeedItem"),
+    "Removing fixture Feed markup must not remove persisted local history restoration.",
   );
   assert(
     !/\b(?:XP|streak|daily plan|ranking score)\b/i.test(source),
@@ -135,25 +136,10 @@ Deno.test("feed reveals immutable daily assignments and retains the 24-hour rank
     "The local cursor lifetime must be exactly 24 hours.",
   );
   assert(
-    source.includes('data-feed-reveal') &&
-      source.includes("revealedStudyItems += 1") &&
+    source.includes("await ensureDailyStudySet()") &&
       source.includes("syncVisibleAssignment()") &&
-      source.includes("if (!hasHiddenAssignedItems()) return;"),
-    "The scroll boundary must reveal the frozen daily assignment without ranking again.",
-  );
-  assert(
-    source.includes('rootMargin: "400px 0px"') &&
-      source.includes("feedRevealObserver?.disconnect()") &&
-      source.includes("void loadMore(false)") &&
-      source.includes('data-action="load-more"'),
-    "Automatic reveal needs a guarded observer and a manual capability fallback.",
-  );
-  assert(
-    !source.slice(
-      source.indexOf("async function loadMore"),
-      source.indexOf("async function beginNewSession"),
-    ).includes("feedService.getPage"),
-    "Daily assignment reveal must not call the feed service.",
+      !source.includes("function renderFeedItem"),
+    "Daily assignment persistence must remain, without rendering the retired fixture feed.",
   );
   for (
     const failure of [
@@ -172,152 +158,31 @@ Deno.test("feed reveals immutable daily assignments and retains the 24-hour rank
   }
 });
 
-Deno.test("feed reveal observer is single-use, independent, and capability-safe", async () => {
+Deno.test("active learner Feed completion has no legacy visibility tracker", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
-  const start = source.slice(
-    source.indexOf("function startStudyTracking()"),
-    source.indexOf("/** @param {string} candidateId */", source.indexOf("function startStudyTracking()")),
+  const learner = await Deno.readTextFile(
+    new URL("src/features/learning-generation/learner.js", root),
   );
-  class Button {
-    hidden = true;
-  }
-  const fallback = new Button();
-  const sentinel = { kind: "sentinel" };
-  const card = { kind: "card" };
-  /** @type {unknown[]} */
-  const observed = [];
-  const disconnected = [];
-  /** @type {((entries: { isIntersecting: boolean, intersectionRatio: number, target: unknown }[]) => void)[]} */
-  const callbacks = [];
-  /** @type {unknown[]} */
-  const options = [];
-  class Observer {
-    /** @param {(entries: { isIntersecting: boolean, intersectionRatio: number, target: unknown }[]) => void} callback @param {unknown} option */
-    constructor(callback, option) {
-      callbacks.push(callback);
-      options.push(option);
-    }
-    /** @param {unknown} target */
-    observe(target) {
-      observed.push(target);
-    }
-    disconnect() {
-      disconnected.push(true);
-    }
-  }
-  /** @type {boolean[]} */
-  const loadCalls = [];
-  const createHarness = new Function(
-    "activeView",
-    "root",
-    "globalThis",
-    "HTMLButtonElement",
-    "IntersectionObserver",
-    "schedulePassiveExposure",
-    "cancelPassiveExposure",
-    "loadMore",
-    "renderMessagesOnly",
-    `let studyObserver = null; let feedRevealObserver = null; let notice = "";
-    ${start}
-    startStudyTracking();
-    return {
-      get notice() { return notice; },
-      get studyObserver() { return studyObserver; },
-      get feedRevealObserver() { return feedRevealObserver; },
-      resetReveal() { feedRevealObserver?.disconnect(); feedRevealObserver = null; },
-      startStudyTracking,
-    };`,
+  assert(
+    !source.includes("startStudyTracking") &&
+      !source.includes("data-feed-reveal") &&
+      !source.includes("passiveExposure"),
+    "The retired Feed observer must not target learner cards or schedule legacy exposure writes.",
   );
-  const pageRoot = {
-    /** @param {string} selector */
-    querySelector(selector) {
-      return selector.includes("load-more") ? fallback : sentinel;
-    },
-    querySelectorAll() {
-      return [card];
-    },
-  };
-  const result = createHarness(
-    "feed",
-    pageRoot,
-    { IntersectionObserver: Observer },
-    Button,
-    Observer,
-    () => {},
-    () => {},
-    /** @param {boolean} restoreFocus */
-    async (restoreFocus) => loadCalls.push(restoreFocus),
-    () => {},
+  assert(
+    learner.includes('data-action="complete-learner-feed"') &&
+      learner.includes("Bottom reached: mark all five cards studied."),
+    "The learner owns the explicit Feed completion transition.",
   );
-  assertEquals(callbacks.length, 2);
-  assertEquals(observed[0], card);
-  assertEquals(observed[1], sentinel);
-  assertEquals(JSON.stringify(options[1]), JSON.stringify({ rootMargin: "400px 0px" }));
-  assertEquals(fallback.hidden, true);
-  result.resetReveal();
-  result.startStudyTracking();
-  callbacks[1]([{ isIntersecting: true, intersectionRatio: 1, target: sentinel }]);
-  assertEquals(loadCalls.length, 0);
-  callbacks[3]([{ isIntersecting: true, intersectionRatio: 1, target: sentinel }]);
-  callbacks[3]([{ isIntersecting: true, intersectionRatio: 1, target: sentinel }]);
-  assertEquals(JSON.stringify(loadCalls), JSON.stringify([false]));
-  assertEquals(disconnected.length, 2);
-  assert(result.studyObserver !== result.feedRevealObserver, "Passive and reveal observers must remain distinct.");
-
-  let messages = 0;
-  fallback.hidden = true;
-  const unavailable = createHarness(
-    "feed",
-    pageRoot,
-    {},
-    Button,
-    Observer,
-    () => {},
-    () => {},
-    async () => {},
-    () => messages += 1,
-  );
-  assertEquals(fallback.hidden, false);
-  assertEquals(messages, 1);
-  assertEquals(unavailable.notice, "Passive tracking is unavailable; manual study still works.");
-
-  let constructions = 0;
-  class RevealFailureObserver extends Observer {
-    /** @param {(entries: { isIntersecting: boolean, intersectionRatio: number, target: unknown }[]) => void} callback @param {unknown} option */
-    constructor(callback, option) {
-      constructions += 1;
-      if (constructions === 2) throw new Error("ObserverConstructionFailed");
-      super(callback, option);
-    }
-  }
-  fallback.hidden = true;
-  createHarness(
-    "feed",
-    pageRoot,
-    { IntersectionObserver: RevealFailureObserver },
-    Button,
-    RevealFailureObserver,
-    () => {},
-    () => {},
-    async () => {},
-    () => {},
-  );
-  assertEquals(fallback.hidden, false);
 });
 
-Deno.test("quiz writes are single-flight and theme changes preserve deliberate focus", async () => {
+Deno.test("theme changes preserve deliberate focus without legacy quiz handlers", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
   const experienceActions = await Deno.readTextFile(
     new URL("src/startup/experience-actions.js", root),
   );
   const styles = await Deno.readTextFile(new URL("src/styles.css", root));
-  assert(
-    source.includes("pendingWrites.has(pendingKey)") &&
-      source.includes("pendingWrites.add(pendingKey)") &&
-      source.includes('button[type="submit"]') &&
-      source.includes("submitButton.disabled = true"),
-    "Quiz submission state must survive rerenders and disable the active control.",
-  );
+  assert(!source.includes("features/questions/grading.js"), "The retired local quiz grader must not load from the app shell.");
   assert(
     experienceActions.includes("render(`theme-${mode}`, null)") &&
       !source.includes(
@@ -354,13 +219,6 @@ Deno.test("manual study remains single-flight until durable persistence complete
     handler.indexOf("await studyService.record(command)") <
       handler.indexOf("render("),
     "Study status may render only after the durable service call completes.",
-  );
-  assert(
-    source.includes(
-      "studied || pendingWrites.has(studyKey(candidate.id, 1))",
-    ) &&
-      source.includes("pendingWrites.has(`review:${prompt.id}`)"),
-    "Replacement controls must remain disabled throughout pending writes.",
   );
 });
 
@@ -618,85 +476,83 @@ Deno.test("all approved theme text tokens meet WCAG AA contrast", async () => {
 
 Deno.test("Feed and Review keep study and quiz controls exclusive", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
-  const reviewRoute = await Deno.readTextFile(
-    new URL("src/routes/review.js", root),
+  const learner = await Deno.readTextFile(
+    new URL("src/features/learning-generation/learner.js", root),
   );
   const libraryRoute = await Deno.readTextFile(
     new URL("src/routes/library.js", root),
   );
-  const feedStart = source.indexOf("function renderFeedItem");
-  const quizStart = source.indexOf("function renderQuiz", feedStart);
-  const reviewStart = source.indexOf("function renderReviewView", quizStart);
-  const libraryStart = source.indexOf(
-    "function renderLibraryView",
-    reviewStart,
-  );
-  const feed = source.slice(feedStart, quizStart);
-  const review = reviewRoute;
   assert(
-    feed.includes('data-action="mark-studied"'),
-    "Feed must expose manual study.",
-  );
-  assert(!feed.includes("renderQuiz("), "Feed must not render a quiz.");
-  assert(
-    review.includes("data-review-answer") &&
-      review.includes("renderCurrentQuestion("),
-    "Review must render one active question through its lazy route.",
+    learner.includes("data-learner-feed-sentinel") &&
+      learner.includes('data-action="complete-learner-feed"') &&
+      learner.includes("Reach the bottom to study all five"),
+    "Feed must expose the fixed five-card bottom-sentinel study transition.",
   );
   assert(
-    !review.includes("mark-studied"),
-    "Review must not render study controls.",
+    learner.includes("data-learner-review") &&
+      learner.includes('data-action="refresh-learner-review"') &&
+      learner.includes("Answer every question before refreshing") &&
+      learner.includes("answerText") &&
+      learner.includes('question.kind === "fill-blank"'),
+    "Review must render paired questions, including fill-blank input, and lock refresh until completion.",
   );
   assert(
-    !source.includes("Mark studied ("),
-    "Study controls must not contain countdown text.",
+    !learner.includes("mark-studied") &&
+      !learner.includes("renderQuiz("),
+    "The learner surface must not expose the retired manual-study or feed-quiz controls.",
   );
   assert(
-    source.includes('kind: "manual_study"') &&
-      source.includes("studyRepository.list(LOCAL_OWNER_ID"),
-    "Manual study must be durable and drive factual progress.",
+    libraryRoute.includes("Related knowledge") &&
+      libraryRoute.includes("data-library-knowledge-remove") &&
+      !libraryRoute.includes("Review queue") &&
+      !libraryRoute.includes("data-learning-review-decision"),
+    "Library must show source knowledge management without a human approval queue.",
   );
   assert(
-    libraryRoute.includes("Search saved sources") &&
-      libraryRoute.includes("Review queue") &&
-      !libraryRoute.includes("mark-studied"),
-    "Library must separate source management from study and recall controls.",
+    source.includes("learnerController?.hasDueReview()") &&
+      source.includes("nav-notification-dot"),
+    "The top-level Review tab must expose its due-review notification.",
   );
 });
 
-Deno.test("Review and Library terminate route failures and isolate recall recovery", async () => {
+Deno.test("Learner Review and Library terminate route failures independently", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
   const libraryRoute = await Deno.readTextFile(
     new URL("src/routes/library.js", root),
   );
-  const reviewRecovery = await Deno.readTextFile(
-    new URL("src/startup/review-recovery.js", root),
+  const libraryPage = await Deno.readTextFile(
+    new URL("src/startup/library-page.js", root),
   );
   assert(
     source.includes("await loadLibraryRoute();") &&
-      source.includes('libraryPage === "review-queue"') &&
-      source.includes("await ensureRecallRuntime();"),
-    "The source catalog must load without recall while the queue initializes recall explicitly.",
+      source.includes("await learnerController?.loadReview();") &&
+      !source.includes('import("./routes/review.js")'),
+    "Library and top-level Review must use their current controllers without reviving the retired Review route.",
+  );
+  const libraryLoader = source.slice(
+    source.indexOf("async function loadLibraryRoute()"),
+    source.indexOf("async function startFeedSession()"),
+  );
+  assert(
+    libraryLoader.includes("if (libraryRouteLoad !== null)") &&
+      libraryLoader.includes("await libraryRouteLoad;") &&
+      libraryLoader.includes("if (libraryPageController !== null) return;"),
+    "A repeated Library navigation must await a pending initial load while avoiding an unnecessary reload after completion.",
   );
   assert(
     source.includes('data-action="retry-route"') &&
-      source.includes('data-action="quarantine-reviews"') &&
-      source.includes("runLocalDataExport") &&
-      source.includes("Export and continue") &&
-      reviewRecovery.includes(
-        'dependencies.location.hash = "library/review-queue"',
-      ) &&
-      reviewRecovery.includes("dependencies.location.reload();"),
-    "Failed route loads and incompatible review history need explicit recovery controls.",
+      libraryPage.includes("listKnowledge") &&
+      libraryPage.includes("data-library-knowledge-remove"),
+    "Failed route loads and individual knowledge removal need explicit controls.",
   );
   assert(
-    libraryRoute.includes("Your source catalog remains available") &&
-      libraryRoute.includes("Review queue needs attention"),
-    "Library must distinguish collection access from recall-derived status.",
+    libraryRoute.includes("Knowledge cards and paired questions appear in Feed and Review") &&
+      !libraryRoute.includes("Review queue needs attention"),
+    "Library must distinguish source management from the top-level Review surface.",
   );
 });
 
-Deno.test("every fatal local restore outcome replaces route opening placeholders with recovery", async () => {
+Deno.test("fatal local restore keeps export/reset recovery without legacy review replay", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
   assert(
     source.includes(
@@ -720,19 +576,20 @@ Deno.test("every fatal local restore outcome replaces route opening placeholders
     "Fatal recovery must be non-technical and offer backup and reset actions.",
   );
   assert(
-    source.includes("reason: replayed.error.kind") &&
-      source.includes("recallSourceRecords.get(command.idempotencyKey)"),
-    "Replay failures must preserve their named reason and exact source record for targeted quarantine.",
+    source.includes("runLocalDataExport") &&
+      !source.includes("createBrowserReviewRecovery") &&
+      !source.includes("quarantine-reviews"),
+    "Recovery must retain export/reset while omitting the unreachable legacy Review quarantine path.",
   );
 });
 
-Deno.test("Milestone 2C controls expose approved targets, question variety, and queue ownership", async () => {
+Deno.test("Learner controls expose approved targets and batch ownership", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
-  const reviewRoute = await Deno.readTextFile(
-    new URL("src/routes/review.js", root),
-  );
   const libraryRoute = await Deno.readTextFile(
     new URL("src/routes/library.js", root),
+  );
+  const learner = await Deno.readTextFile(
+    new URL("src/features/learning-generation/learner.js", root),
   );
   assert(
     source.includes("data-daily-settings-form") &&
@@ -741,49 +598,30 @@ Deno.test("Milestone 2C controls expose approved targets, question variety, and 
       source.includes("Changes apply to the next assigned set."),
     "Daily learning settings must expose the approved atomic target pair.",
   );
-  for (
-    const kind of [
-      "single-choice",
-      "multiple-choice",
-      "fill-blank",
-      "free-response",
-      "case-study",
-    ]
-  ) {
-    assert(
-      reviewRoute.includes(`"${kind}"`),
-      `${kind} must have an accessible Review rendering path.`,
-    );
-  }
   assert(
-    source.includes("10 * 60_000") &&
-      source.includes("Recall ready after") &&
-      !source.includes("Mark studied ("),
-    "Prompt availability must use a static ten-minute timestamp without countdown controls.",
+    !source.includes('import("./routes/review.js")') &&
+      !source.includes("features/questions/grading.js"),
+    "The app shell must not retain a second Review renderer or local grader.",
   );
   assert(
-    !reviewRoute.includes("Review queue") &&
-      libraryRoute.includes("Review queue") &&
-      libraryRoute.includes('href="#library/review-queue"') &&
-      source.includes('section === "scheduled"') &&
-      source.includes("resolveScheduledReview") &&
-      source.includes("This scheduled prompt is no longer available.") &&
-      source.includes("This prompt has not entered scheduled review.") &&
-      source.includes("This prompt is next due"),
-    "The scheduled queue must belong to the Library route.",
+    learner.includes("data-action=\"complete-learner-feed\"") &&
+      !source.includes("function renderFeedItem"),
+    "The learner controller must own Feed completion without reviving fixture cards.",
   );
   assert(
-    source.includes("promptRuntime.generateDue(studied)") &&
-      source.includes("generation.value.prompts") &&
-      source.includes("const generatedPrompts = promptRuntime.listPrompts") &&
-      !source.includes("generatedPromptIds"),
-    "Daily recall must draw from the persisted learned prompt bank.",
+    !libraryRoute.includes("Review queue") &&
+      learner.includes("data-learner-feed-sentinel") &&
+      learner.includes("Reach the bottom to study all five") &&
+      learner.includes("Questions unlock after a Feed batch is studied"),
+    "The Review tab must own paired questions and unlock them after Feed completion.",
   );
   assert(
-    source.includes(
-      "fact.learningDay >= sevenDayCutoff && fact.learningDay <= day",
-    ),
-    "Seven-day recall accuracy must exclude future learning-day records.",
+    learner.includes("gateway.loadReview(day())") &&
+      learner.includes("gateway.answerReview") &&
+      learner.includes("next interval") &&
+      learner.includes("Math.max(0, review.value.dueCount") &&
+      learner.includes("const alreadyAnswered = answers.has(questionId)"),
+    "Review must draw from the persisted paired-question batch and retain interval feedback.",
   );
 });
 
@@ -890,6 +728,9 @@ Deno.test("every project-owned CSS class is used or documented as dynamic", asyn
     await Deno.readTextFile(new URL("src/routes/review.js", root)),
     await Deno.readTextFile(new URL("src/routes/library.js", root)),
     await Deno.readTextFile(new URL("src/routes/discover.js", root)),
+    await Deno.readTextFile(
+      new URL("src/features/learning-generation/learner.js", root),
+    ),
     await Deno.readTextFile(new URL("index.html", root)),
   ].join("\n");
   const documentedDynamic = new Set([
@@ -939,43 +780,21 @@ Deno.test("notifications are dismissible, pausable, and semantically announced",
   );
 });
 
-Deno.test("correct feedback animation is gated by persisted answer state", async () => {
+Deno.test("app delegates Review answer feedback to the learner controller", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
-  const answerHandler = source.slice(
-    source.indexOf("async function answerQuiz"),
-    source.indexOf("async function persistFinalizedRecall"),
-  );
-  const persistenceIndex = answerHandler.indexOf(
-    "await persistFinalizedRecall",
-  );
-  const feedbackIndex = answerHandler.lastIndexOf(
-    "answerFeedbackByPrompt.set(promptId",
-  );
-  const cueIndex = answerHandler.indexOf("void playAnswerCue(");
-  assert(
-    persistenceIndex >= 0,
-    "The durable finalized-recall boundary must exist.",
+  const learner = await Deno.readTextFile(
+    new URL("src/features/learning-generation/learner.js", root),
   );
   assert(
-    feedbackIndex > persistenceIndex && cueIndex > persistenceIndex,
-    "Animation state and audio may be created only after durable persistence.",
-  );
-  assertEquals(
-    source.includes('answerFeedback.animate ? " animate-confirmation"'),
-    true,
+    source.includes("learnerController.bind(root)") &&
+      !source.includes("async function answerQuiz") &&
+      learner.includes("gateway.answerReview"),
+    "Only the learner controller may submit paired Review answers.",
   );
 });
 
-Deno.test("rerender and dismissal paths preserve a deliberate focus target", async () => {
+Deno.test("rerender paths preserve a deliberate focus target", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
-  assert(
-    source.includes("focusLessonHeading(candidateId);"),
-    "Not-now dismissal must move focus before reporting its status.",
-  );
-  assert(
-    source.includes('render(`card-heading:${candidateId}`, "feed-title")'),
-    "A newly disabled studied control must move focus to its lesson heading.",
-  );
   assert(
     source.includes("document.activeElement === preferred") &&
       source.includes("workspace instanceof HTMLElement"),

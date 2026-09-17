@@ -72,7 +72,17 @@ export class D1SourceRightsRegistry {
       return fail({ kind: "RightsRegistryEvidenceRevoked" });
     }
     if (active.length === 0) return fail({ kind: "RightsRegistryRecordMissing" });
-    if (active.length !== 1) return fail({ kind: "RightsRegistryEvidenceConflicting" });
+    if (active.length !== 1) {
+      const context = freeze({
+        ownerId: job.ownerId,
+        sourceId: job.sourceId,
+        sourceRevision: job.sourceRevision,
+        registryIds: freeze(active.map((entry) => entry.registryId).sort()),
+      });
+      return sameCapabilityOutcomes(active)
+        ? fail({ kind: "RightsRegistryEvidenceAmbiguous", context })
+        : fail({ kind: "RightsRegistryEvidenceConflicting", context });
+    }
     const selected = active[0];
     if (selected.expiresAt !== null && Date.parse(selected.expiresAt) <= Date.parse(now)) {
       return fail({ kind: "RightsRegistryEvidenceExpired" });
@@ -301,6 +311,14 @@ function validApprovalRecord(value) {
 /** @param {unknown} value @returns {boolean} */
 function capabilityRecord(value) {
   return isRecord(value) && value.outcome === "allowed" && isNonEmptyText(value.evidenceReference) && isIsoDateTime(value.observedAt) && isIsoDateTime(value.expiresAt);
+}
+
+/** @param {readonly (ServerRightsGrant & { readonly state: "active" | "superseded" | "revoked" })[]} entries @returns {boolean} */
+function sameCapabilityOutcomes(entries) {
+  const first = entries[0];
+  if (first === undefined) return false;
+  const capabilities = /** @type {const} */ (["storage", "display", "transformation"]);
+  return entries.every((entry) => capabilities.every((capability) => entry.capabilities[capability].outcome === first.capabilities[capability].outcome));
 }
 
 /** @param {unknown} value @returns {value is RightsApprovalResult} */

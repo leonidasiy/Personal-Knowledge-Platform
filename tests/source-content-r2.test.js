@@ -17,6 +17,8 @@ class Bucket {
   /** @param {string} key @param {Uint8Array} value @param {{ readonly httpMetadata: { readonly contentType: string }, readonly customMetadata: Readonly<Record<string, string>> }} options */
   async put(key, value, options) { if (this.failPut) throw new Error("put"); this.puts.push({ key, value, options }); }
   /** @param {string} key */
+  async get(key) { const found = this.puts.find((entry) => entry.key === key); return found === undefined ? null : { customMetadata: found.options.customMetadata, arrayBuffer: async () => found.value.buffer.slice(found.value.byteOffset, found.value.byteOffset + found.value.byteLength) }; }
+  /** @param {string} key */
   async delete(key) { if (this.failDelete) throw new Error("delete"); this.deletes.push(key); }
 }
 
@@ -88,6 +90,9 @@ Deno.test("R2 source content uses a server object ID and private owner metadata"
     ).measuredStoredBytes,
     command().content.byteLength,
   );
+  const imageBundle = await new R2SourceContentStore({ bucket, capacity: usage.port, capacityOwnerId: "owner-a" }).stage({ ...command(), objectId: "opaque-images", mediaType: "application/x-knowledge-images" });
+  assertEquals(imageBundle.ok, true);
+  assertEquals(bucket.puts[1].options.httpMetadata.contentType, "application/x-knowledge-images");
 });
 
 Deno.test("R2 source content marks provider failures uncertain and blocks false cleanup success", async () => {
@@ -130,4 +135,42 @@ Deno.test("R2 source content stops before provider work when capacity rejects", 
   if (result.ok) throw new Error("Expected capacity failure.");
   assertEquals(result.error.kind, "R2StorageCapacityExceeded");
   assertEquals(bucket.puts.length, 0);
+});
+
+Deno.test("R2 content reads return owned bytes and account for missing objects", async () => {
+  const usage = capacity();
+  const store = new R2SourceContentStore({
+    bucket: { put: async () => {}, delete: async () => {}, get: async (key) => key.endsWith("missing") ? null : { customMetadata: { owner: "owner-a" }, arrayBuffer: async () => new Uint8Array([7, 8]).buffer } },
+    capacity: usage.port, capacityOwnerId: "owner-a",
+  });
+  const found = await store.read("owner-a", "source-content/owned");
+  if (!found.ok) throw new Error(found.error.kind);
+  assertEquals(found.value.join(","), "7,8");
+  const missing = await store.read("owner-a", "source-content/missing");
+  if (missing.ok || missing.error.kind !== "SourceContentNotFound") throw new Error("Expected missing object.");
+  assertEquals(/** @type {{outcome:string}} */ (usage.reconciliations[1]).outcome, "completed");
+});
+
+Deno.test("R2 source content refuses another owner's object before reading bytes", async () => {
+  let arrayBufferReads = 0;
+  const usage = capacity();
+  const store = new R2SourceContentStore({
+    bucket: { put: async () => {}, delete: async () => {}, get: async () => ({ customMetadata: { owner: "owner-b" }, arrayBuffer: async () => { arrayBufferReads += 1; return new Uint8Array([7]).buffer; } }) },
+    capacity: usage.port, capacityOwnerId: "owner-a",
+  });
+  const result = await store.read("owner-a", "source-content/opaque-a");
+  if (result.ok || result.error.kind !== "SourceContentOwnerMismatch") throw new Error("Expected owner mismatch.");
+  assertEquals(arrayBufferReads, 0);
+  assertEquals(/** @type {{outcome:string}} */ (usage.reconciliations[0]).outcome, "completed");
+});
+
+Deno.test("R2 source content fails closed when ownership metadata is absent", async () => {
+  let arrayBufferReads = 0;
+  const store = new R2SourceContentStore({
+    bucket: { put: async () => {}, delete: async () => {}, get: async () => ({ customMetadata: {}, arrayBuffer: async () => { arrayBufferReads += 1; return new Uint8Array([7]).buffer; } }) },
+    capacity: capacity().port, capacityOwnerId: "owner-a",
+  });
+  const result = await store.read("owner-a", "source-content/opaque-a");
+  if (result.ok || result.error.kind !== "SourceContentOwnerMismatch") throw new Error("Expected metadata owner rejection.");
+  assertEquals(arrayBufferReads, 0);
 });

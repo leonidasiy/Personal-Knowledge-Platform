@@ -135,7 +135,20 @@ export class D1R2CapacityLedger {
         reservation.reservationId,
       ).run();
       if (!result.success) return fail({ kind: "R2UsageReconciliationFailed" });
-      if (result.meta?.changes !== 1) return fail({ kind: "R2CapacityConflict" });
+      let applied = result.meta?.changes === 1;
+      if (!applied) {
+        try {
+          const current = await this.#dependencies.database.prepare(
+            "SELECT state, outcome, measured_stored_bytes FROM source_r2_reservations WHERE account_scope = ? AND reservation_id = ? LIMIT 1",
+          ).bind(reservation.accountScope, reservation.reservationId).first();
+          const expectedState = outcome === "uncertain" ? "uncertain" : "closed";
+          applied = isRecord(current) && current.state === expectedState && current.outcome === outcome && current.measured_stored_bytes === measuredStoredBytes;
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          return fail({ kind: "R2UsageReconciliationFailed" });
+        }
+      }
+      if (!applied) return fail({ kind: "R2CapacityConflict" });
       return outcome === "uncertain"
         ? fail({ kind: "R2CapacityUsageUncertain" })
         : { ok: true, value: null };

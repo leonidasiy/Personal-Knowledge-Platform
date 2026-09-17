@@ -7,11 +7,47 @@ import {
   isRecord,
 } from "./contracts.js";
 
-/** @import { LibrarySource, Result, SourceCatalogPage, SourceInterestArea, SourceSearchHit, SourceSuppression } from "./contracts.js" */
+/** @import { KnowledgeSearchHit, LibrarySource, Result, SourceCatalogPage, SourceInterestArea, SourceSearchHit, SourceSearchScope, SourceSuppression } from "./contracts.js" */
 
 /** @typedef {{ readonly kind: "SourceGatewayCommandInvalid", readonly field: string } | { readonly kind: "SourceGatewayUnauthenticated" } | { readonly kind: "SourceGatewayUnauthorized" } | { readonly kind: "SourceGatewayUnavailable" } | { readonly kind: "SourceGatewayTimedOut" } | { readonly kind: "SourceGatewayResponseInvalid" } | { readonly kind: "SourceGatewayRejected", readonly failureKind: string }} SourceGatewayFailure */
+/** @typedef {{ readonly runId: string }} WorkflowStartProjection */
+/** @typedef {{ readonly robotsUrl: string, readonly targetUrl: string, readonly httpStatus: number, readonly availability: "present" | "absent" | "unavailable", readonly content: string, readonly checkedAt: string, readonly matchedRule: string | null }} WorkflowRobotsEvidence */
+/** @typedef {{ readonly runId: string, readonly state: string, readonly revision: number, readonly counts: Readonly<{ readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }>, readonly extractionStartedAt: string | null, readonly extractionDeadlineAt: string | null, readonly elapsedMs: number | null, readonly remainingMs: number | null, readonly decisionRequired: string | null, readonly failureKind: string | null, readonly robotsEvidence: WorkflowRobotsEvidence | null }} WorkflowRunStatus */
+/** @typedef {{ readonly sourceId: string, readonly run: WorkflowRunStatus | null, readonly reasonCode: string | null, readonly message: string | null }} WorkflowSourceStatus */
 
 const freeze = Object.freeze;
+const WORKFLOW_PROCESSING_STATES = new Set([
+  "source-added",
+  "rights-assessment",
+  "robots-check",
+  "extraction-loop",
+  "extraction-finalized",
+  "per-point-quiz-loop",
+]);
+
+/**
+ * Count sources whose workflow is actively progressing toward retained knowledge.
+ * Waiting-for-user, upload-required, completed, and abandoned states are intentionally excluded.
+ *
+ * @param {readonly WorkflowSourceStatus[]} statuses
+ * @returns {number}
+ */
+export function countProcessingWorkflowStatuses(statuses) {
+  if (!Array.isArray(statuses)) throw new TypeError("Workflow statuses are invalid.");
+  const sourceIds = new Set();
+  for (const status of statuses) {
+    if (
+      !isRecord(status) || !isNonEmptyText(status.sourceId) ||
+      (status.run !== null &&
+        (!isRecord(status.run) || !isNonEmptyText(status.run.state)))
+    ) throw new TypeError("Workflow status is invalid.");
+    const state = status.run === null ? null : /** @type {string} */ (status.run.state);
+    if (state !== null && WORKFLOW_PROCESSING_STATES.has(state)) {
+      sourceIds.add(status.sourceId);
+    }
+  }
+  return sourceIds.size;
+}
 
 export class SourceLibraryGatewayClient {
   /** @type {typeof fetch} */ #fetch;
@@ -60,22 +96,39 @@ export class SourceLibraryGatewayClient {
     return sourcePage(result);
   }
 
-  /** @param {unknown} command @returns {Promise<Result<readonly SourceSearchHit[], SourceGatewayFailure>>} */
+  /**
+   * @overload
+   * @param {{ readonly query: string, readonly mode?: "keyword" | "semantic" | "combined", readonly externalProcessingAllowed?: boolean, readonly limit: number, readonly scope: "knowledge" }} command
+   * @returns {Promise<Result<readonly KnowledgeSearchHit[], SourceGatewayFailure>>}
+   */
+  /**
+   * @overload
+   * @param {{ readonly query: string, readonly mode?: "keyword" | "semantic" | "combined", readonly externalProcessingAllowed?: boolean, readonly limit: number, readonly scope?: "sources" }} command
+   * @returns {Promise<Result<readonly SourceSearchHit[], SourceGatewayFailure>>}
+   */
+  /** @param {unknown} command @returns {Promise<Result<readonly (SourceSearchHit | KnowledgeSearchHit)[], SourceGatewayFailure>>} */
   async search(command) {
     if (
       !isRecord(command) || !isNonEmptyText(command.query) ||
+      (command.externalProcessingAllowed !== undefined && typeof command.externalProcessingAllowed !== "boolean") ||
       (command.mode !== undefined && command.mode !== "keyword" &&
         command.mode !== "semantic" && command.mode !== "combined") ||
+      (command.scope !== undefined && command.scope !== "sources" &&
+        command.scope !== "knowledge") ||
       typeof command.limit !== "number" || !Number.isInteger(command.limit) ||
       command.limit < 1
     ) {
       return invalid("command");
     }
+    /** @type {SourceSearchScope} */
+    const scope = command.scope ?? "sources";
     const params = new URLSearchParams({
       q: command.query.trim(),
       mode: command.mode ?? "combined",
+      scope,
       limit: String(command.limit),
     });
+    if (command.externalProcessingAllowed === true) params.set("externalProcessingAllowed", "true");
     const response = await this.#request(
       `api/source-library/search?${params}`,
       "GET",
@@ -84,6 +137,15 @@ export class SourceLibraryGatewayClient {
     if (!response.ok) return response;
     const values = isRecord(response.value) ? response.value.result : null;
     if (!Array.isArray(values)) return bad();
+    if (scope === "knowledge") {
+      /** @type {KnowledgeSearchHit[]} */ const hits = [];
+      for (const value of values) {
+        const parsed = parseKnowledgeSearchHit(value);
+        if (parsed === null) return bad();
+        hits.push(parsed);
+      }
+      return { ok: true, value: freeze(hits) };
+    }
     /** @type {SourceSearchHit[]} */ const hits = [];
     for (const value of values) {
       if (
@@ -117,7 +179,7 @@ export class SourceLibraryGatewayClient {
     return source === null ? bad() : { ok: true, value: source };
   }
 
-  /** @param {unknown} command @returns {Promise<Result<{ readonly source: LibrarySource, readonly reused: boolean }, SourceGatewayFailure>>} */
+  /** @param {unknown} command @returns {Promise<Result<{ readonly source: LibrarySource, readonly reused: boolean, readonly workflow: WorkflowStartProjection | null }, SourceGatewayFailure>>} */
   async approve(command) {
     if (!isRecord(command) || Object.hasOwn(command, "ownerId")) {
       return invalid("command");
@@ -132,29 +194,72 @@ export class SourceLibraryGatewayClient {
     if (!isRecord(value) || typeof value.reused !== "boolean") return bad();
     const source = parseSource(value.source);
     if (source === null) return bad();
-    return { ok: true, value: freeze({ source, reused: value.reused }) };
+    const workflowValue = isRecord(response.value) ? response.value.workflow : null;
+    const workflow = workflowValue === undefined || workflowValue === null
+      ? null
+      : parseWorkflowStart(workflowValue);
+    if (workflowValue != null && workflow === null) return bad();
+    return { ok: true, value: freeze({ source, reused: value.reused, workflow }) };
   }
 
-  /** @param {unknown} command @returns {Promise<Result<{ readonly status: "processing-ready", readonly reused: boolean }, SourceGatewayFailure>>} */
-  async uploadManualMaterial(command) {
-    if (!isRecord(command) || Object.hasOwn(command, "ownerId")) {
-      return invalid("command");
-    }
-    const response = await this.#request(
-      "api/source-library/manual-material",
-      "POST",
-      command,
-    );
+  /** @param {unknown} command @returns {Promise<Result<{ readonly source: LibrarySource, readonly runId: string, readonly reused: boolean }, SourceGatewayFailure>>} */
+  async createPrivateDocument(command) {
+    if (!isRecord(command) || Object.hasOwn(command, "ownerId") || !isNonEmptyText(command.title) || !isNonEmptyText(command.fileName) || !isNonEmptyText(command.idempotencyKey) || !isRecord(command.rightsAttestation)) return invalid("command");
+    const response = await this.#request("api/source-library/private-documents", "POST", command);
     if (!response.ok) return response;
     const value = isRecord(response.value) ? response.value.result : null;
-    if (
-      !isRecord(value) || value.status !== "processing-ready" ||
-      typeof value.reused !== "boolean"
-    ) return bad();
-    return {
-      ok: true,
-      value: freeze({ status: "processing-ready", reused: value.reused }),
-    };
+    if (!isRecord(value) || !isNonEmptyText(value.runId) || typeof value.reused !== "boolean" || !isRecord(value.source) || value.source.origin !== "private-document") return bad();
+    const source = parseSource(value.source);
+    if (source === null || new URL(source.canonicalUrl).origin !== this.#base.origin || !new URL(source.canonicalUrl).pathname.startsWith("/api/private-documents/")) return bad();
+    return { ok: true, value: freeze({ source, runId: value.runId, reused: value.reused }) };
+  }
+
+  /** @param {unknown} command @returns {Promise<Result<{ readonly materialId: string, readonly runId: string }, SourceGatewayFailure>>} */
+  async uploadWorkflowMaterial(command) {
+    if (!isRecord(command) || Object.hasOwn(command, "ownerId") || !isNonEmptyText(command.runId) || !isNonEmptyText(command.sourceId) || !Number.isSafeInteger(/** @type {number} */ (command.sourceRevision)) || /** @type {number} */ (command.sourceRevision) < 1 || !isPublicHttpsUrl(command.sourceUrl) || !isNonEmptyText(command.mediaType) || !isNonEmptyText(command.fileName) || !isNonEmptyText(command.idempotencyKey) || !isRecord(command.rightsAttestation) || (command.mode !== undefined && command.mode !== "text" && command.mode !== "image")) return invalid("command");
+    const mode = command.mode ?? "text";
+    let response;
+    if (command.file instanceof Blob) {
+      const form = new FormData();
+      for (const [key, value] of Object.entries({
+        runId: command.runId,
+        sourceId: command.sourceId,
+        sourceRevision: String(command.sourceRevision),
+        sourceUrl: command.sourceUrl,
+        mediaType: command.mediaType,
+        fileName: command.fileName,
+        mode,
+        idempotencyKey: command.idempotencyKey,
+        rightsAttestation: JSON.stringify(command.rightsAttestation),
+      })) form.set(key, value);
+      form.set("file", command.file, command.fileName);
+      response = await this.#request("api/knowledge-workflows/material", "POST", form);
+    } else if (typeof command.content === "string") {
+      response = await this.#request("api/knowledge-workflows/material", "POST", { runId: command.runId, sourceId: command.sourceId, sourceRevision: command.sourceRevision, sourceUrl: command.sourceUrl, mediaType: command.mediaType, fileName: command.fileName, mode, idempotencyKey: command.idempotencyKey, rightsAttestation: command.rightsAttestation, content: command.content });
+    } else return invalid("content");
+    if (!response.ok) return response;
+    const value = isRecord(response.value) ? response.value.result : null;
+    if (!isRecord(value) || value.status !== "attached" || !isNonEmptyText(value.materialId) || !isNonEmptyText(value.runId) || typeof value.reused !== "boolean") return bad();
+    return { ok: true, value: freeze({ materialId: value.materialId, runId: value.runId }) };
+  }
+
+  /** @param {string} sourceId @returns {Promise<Result<WorkflowSourceStatus, SourceGatewayFailure>>} */
+  async workflowStatus(sourceId) {
+    if (!isNonEmptyText(sourceId)) return invalid("sourceId");
+    const response = await this.#request(`api/knowledge-workflows/source-status?sourceId=${encodeURIComponent(sourceId)}`, "GET", null);
+    if (!response.ok) return response;
+    const value = isRecord(response.value) ? response.value.result : null;
+    return parseWorkflowSourceStatus(value);
+  }
+
+  /** @param {{ readonly runId: string, readonly expectedRevision: number, readonly idempotencyKey: string }} command @returns {Promise<Result<WorkflowRunStatus, SourceGatewayFailure>>} */
+  async retryWorkflow(command) {
+    if (!isRecord(command) || !isNonEmptyText(command.runId) || !Number.isSafeInteger(command.expectedRevision) || command.expectedRevision < 1 || !isNonEmptyText(command.idempotencyKey)) return invalid("command");
+    const response = await this.#request("api/knowledge-workflows/control", "POST", { runId: command.runId, expectedRevision: command.expectedRevision, action: "resume", idempotencyKey: command.idempotencyKey });
+    if (!response.ok) return response;
+    const value = isRecord(response.value) ? response.value.result : null;
+    const run = parseWorkflowRunStatus(value);
+    return run === null ? bad() : { ok: true, value: run };
   }
 
   /** @param {unknown} command @returns {Promise<Result<{ readonly suppression: SourceSuppression, readonly reused: boolean }, SourceGatewayFailure>>} */
@@ -220,10 +325,11 @@ export class SourceLibraryGatewayClient {
     };
   }
 
-  /** @param {string} path @param {"GET" | "POST"} method @param {unknown} body @returns {Promise<Result<unknown, SourceGatewayFailure>>} */
+  /** @param {string} path @param {"GET" | "POST"} method @param {unknown | FormData} body @returns {Promise<Result<unknown, SourceGatewayFailure>>} */
   async #request(path, method, body) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const multipart = body instanceof FormData;
     /** @type {Response} */ let response;
     try {
       response = await (0, this.#fetch)(new URL(path, this.#base), {
@@ -231,9 +337,9 @@ export class SourceLibraryGatewayClient {
         credentials: "same-origin",
         headers: {
           accept: "application/json",
-          ...(body === null ? {} : { "content-type": "application/json" }),
+          ...(body === null || multipart ? {} : { "content-type": "application/json" }),
         },
-        body: body === null ? null : JSON.stringify(body),
+        body: body === null ? null : multipart ? body : JSON.stringify(body),
         cache: "no-store",
         signal: controller.signal,
       });
@@ -271,6 +377,7 @@ export class SourceLibraryGatewayClient {
     }
     return { ok: true, value: document };
   }
+
 }
 
 /** @param {unknown} value @returns {Result<SourceCatalogPage, SourceGatewayFailure>} */
@@ -343,6 +450,72 @@ function parseSource(value) {
       identityEvidence: freeze([...value.identityEvidence]),
     }),
   );
+}
+
+/** @param {unknown} value @returns {KnowledgeSearchHit | null} */
+function parseKnowledgeSearchHit(value) {
+  if (
+    !isRecord(value) || typeof value.score !== "number" ||
+    !Number.isFinite(value.score) ||
+    (value.matchedBy !== "exact" && value.matchedBy !== "semantic" &&
+      value.matchedBy !== "combined") || !isRecord(value.knowledge) ||
+    !isNonEmptyText(value.knowledge.knowledgeId) ||
+    !isNonEmptyText(value.knowledge.sourceId) ||
+    !isNonEmptyText(value.knowledge.sourceTitle) ||
+    !isNonEmptyText(value.knowledge.summary) ||
+    !isPublicHttpsUrl(value.knowledge.sourceUrl) ||
+    !Array.isArray(value.knowledge.evidenceAnchorIds) ||
+    value.knowledge.evidenceAnchorIds.some((item) => !isNonEmptyText(item)) ||
+    typeof value.knowledge.questionLocked !== "boolean"
+  ) return null;
+  return freeze({
+    knowledge: freeze({
+      knowledgeId: value.knowledge.knowledgeId,
+      sourceId: value.knowledge.sourceId,
+      sourceTitle: value.knowledge.sourceTitle,
+      summary: value.knowledge.summary,
+      sourceUrl: value.knowledge.sourceUrl,
+      evidenceAnchorIds: freeze([...value.knowledge.evidenceAnchorIds]),
+      questionLocked: value.knowledge.questionLocked,
+    }),
+    score: value.score,
+    matchedBy: value.matchedBy,
+  });
+}
+
+/** @param {unknown} value @returns {WorkflowStartProjection | null} */
+function parseWorkflowStart(value) {
+  return isRecord(value) && isNonEmptyText(value.runId) && typeof value.reused === "boolean"
+    ? freeze({ runId: value.runId })
+    : null;
+}
+
+/** @param {unknown} value @returns {WorkflowRunStatus | null} */
+function parseWorkflowRunStatus(value) {
+  if (!isRecord(value) || !isNonEmptyText(value.runId) || !isNonEmptyText(value.state) || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1 || !isRecord(value.counts)) return null;
+  const counts = value.counts;
+  if (![counts.pages, counts.knowledgePoints, counts.acceptedQuizzes, counts.pendingQuizzes].every((count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)) return null;
+  if ((value.extractionStartedAt !== null && !isIsoDateTime(value.extractionStartedAt)) || (value.extractionDeadlineAt !== null && !isIsoDateTime(value.extractionDeadlineAt)) || (value.elapsedMs !== null && (typeof value.elapsedMs !== "number" || !Number.isFinite(value.elapsedMs) || value.elapsedMs < 0)) || (value.remainingMs !== null && (typeof value.remainingMs !== "number" || !Number.isFinite(value.remainingMs) || value.remainingMs < 0)) || (value.decisionRequired !== null && !isNonEmptyText(value.decisionRequired)) || (value.failureKind !== null && !isNonEmptyText(value.failureKind))) return null;
+  const pages = /** @type {number} */ (counts.pages);
+  const knowledgePoints = /** @type {number} */ (counts.knowledgePoints);
+  const acceptedQuizzes = /** @type {number} */ (counts.acceptedQuizzes);
+  const pendingQuizzes = /** @type {number} */ (counts.pendingQuizzes);
+  const robotsEvidence = value.robotsEvidence === undefined || value.robotsEvidence === null ? null : parseWorkflowRobotsEvidence(value.robotsEvidence);
+  if (value.robotsEvidence !== undefined && value.robotsEvidence !== null && robotsEvidence === null) return null;
+  return freeze({ runId: value.runId, state: value.state, revision: value.revision, counts: freeze({ pages, knowledgePoints, acceptedQuizzes, pendingQuizzes }), extractionStartedAt: value.extractionStartedAt, extractionDeadlineAt: value.extractionDeadlineAt, elapsedMs: value.elapsedMs, remainingMs: value.remainingMs, decisionRequired: value.decisionRequired, failureKind: value.failureKind, robotsEvidence });
+}
+
+/** @param {unknown} value @returns {WorkflowRobotsEvidence | null} */
+function parseWorkflowRobotsEvidence(value) {
+  if (!isRecord(value) || !isNonEmptyText(value.robotsUrl) || !isPublicHttpsUrl(value.robotsUrl) || !isNonEmptyText(value.targetUrl) || !isPublicHttpsUrl(value.targetUrl) || typeof value.httpStatus !== "number" || !Number.isSafeInteger(value.httpStatus) || !(value.httpStatus >= 200 && value.httpStatus <= 299 || value.httpStatus === 403 || value.httpStatus === 404 || value.httpStatus === 410) || (value.availability !== "present" && value.availability !== "absent" && value.availability !== "unavailable") || typeof value.content !== "string" || value.content.length > 262_144 || (value.availability === "absent" ? value.content !== "" || (value.httpStatus !== 404 && value.httpStatus !== 410) : value.availability === "unavailable" ? value.content !== "" || value.httpStatus !== 403 : value.httpStatus < 200 || value.httpStatus > 299) || !isIsoDateTime(value.checkedAt) || (value.matchedRule !== null && !isNonEmptyText(value.matchedRule))) return null;
+  return freeze({ robotsUrl: value.robotsUrl, targetUrl: value.targetUrl, httpStatus: value.httpStatus, availability: value.availability, content: value.content, checkedAt: value.checkedAt, matchedRule: value.matchedRule });
+}
+
+/** @param {unknown} value @returns {Result<WorkflowSourceStatus, SourceGatewayFailure>} */
+function parseWorkflowSourceStatus(value) {
+  if (!isRecord(value) || !isNonEmptyText(value.sourceId) || (value.reasonCode !== null && !isNonEmptyText(value.reasonCode)) || (value.message !== null && !isNonEmptyText(value.message))) return bad();
+  const run = value.run === null ? null : parseWorkflowRunStatus(value.run);
+  return value.run !== null && run === null ? bad() : { ok: true, value: freeze({ sourceId: value.sourceId, run, reasonCode: value.reasonCode, message: value.message }) };
 }
 
 /** @param {unknown} value @returns {SourceSuppression | null} */

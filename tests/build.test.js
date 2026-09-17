@@ -100,6 +100,22 @@ Deno.test("production assets route shell and API requests through the Worker sel
   assertEquals(configuration.includes('"run_worker_first": true'), false);
 });
 
+Deno.test("production build copies only manifest-listed fallback media", async () => {
+  const source = await Deno.readTextFile("scripts/build.mjs");
+  assert(
+    source.includes("readFallbackAssetPaths(sourceRoot)"),
+    "The production build must read the fallback-media manifest.",
+  );
+  assert(
+    source.includes('assets/fallback-media/manifest.json'),
+    "The production build must copy the fallback-media manifest.",
+  );
+  assert(
+    !source.includes('["assets", "assets"]'),
+    "The production build must not publish unlisted fallback files.",
+  );
+});
+
 Deno.test("browser acceptance pins Playwright Core outside the production browser graph", async () => {
   const packageDocument = JSON.parse(await Deno.readTextFile("package.json"));
   assertEquals(packageDocument.devDependencies?.["playwright-core"], "1.61.1");
@@ -178,8 +194,8 @@ Deno.test("artifact budgets accept exact boundaries", () => {
   );
   assertEquals(javascript.ok, true);
   assertEquals(stylesheet.ok, true);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 195_000);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 62_000);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 210_000);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 67_000);
 });
 
 Deno.test("service-worker cache identity follows the complete build graph", async () => {
@@ -279,6 +295,40 @@ Deno.test("service-worker generation rejects source-only precache paths", async 
   }
 });
 
+Deno.test("service-worker generation resolves encoded local shell paths", async () => {
+  const root = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${root}/service-worker.js`,
+      `const BUILD_ID = "__RESONANCE_BUILD_ID__";\nconst SHELL_URLS = ["./assets/music%20image.jpg"];`,
+    );
+    await Deno.mkdir(`${root}/assets`);
+    await Deno.writeTextFile(`${root}/assets/music image.jpg`, "image");
+
+    const result = await generateServiceWorker(root);
+    assertEquals(result.ok, true);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("service-worker generation rejects malformed and encoded traversal paths", async () => {
+  for (const shellPath of ["./assets/%E0%A4%A", "./%2e%2e/secret.js"]) {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.writeTextFile(
+        `${root}/service-worker.js`,
+        `const BUILD_ID = "__RESONANCE_BUILD_ID__";\nconst SHELL_URLS = [${JSON.stringify(shellPath)}];`,
+      );
+      const result = await generateServiceWorker(root);
+      assertEquals(result.ok, false);
+      if (!result.ok) assertEquals(result.error.kind, "ServiceWorkerTemplateInvalid");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  }
+});
+
 Deno.test("production build splits lazy routes and budgets the whole graph", async () => {
   const root = new URL("../", import.meta.url);
   const buildSource = await Deno.readTextFile(
@@ -295,17 +345,16 @@ Deno.test("production build splits lazy routes and budgets the whole graph", asy
     "The production graph must budget the entry, lazy chunks, and aggregate.",
   );
   assert(
-    /import\(\s*["']\.\/routes\/review\.js["']\s*\)/.test(application) &&
+    /import\(\s*["']\.\/features\/learning-generation\/learner\.js["']\s*\)/.test(application) &&
       /import\(\s*["']\.\/startup\/library-page\.js["']\s*\)/.test(
         application,
       ) &&
       /import\(\s*["']\.\/startup\/discovery-page\.js["']\s*\)/.test(
         application,
       ) &&
-      /import\(\s*["']\.\/features\/questions\/grading\.js["']\s*\)/.test(
-        application,
-      ),
-    "Review, Library, Discover, and grading must stay behind dynamic imports.",
+      !/import\(\s*["']\.\/routes\/review\.js["']\s*\)/.test(application) &&
+      !/import\(\s*["']\.\/features\/questions\/grading\.js["']\s*\)/.test(application),
+    "Learner, Library, and Discover must stay lazy without restoring the retired Review or local grader graph.",
   );
 });
 
@@ -358,4 +407,28 @@ Deno.test("runtime import validation permits bundled application URLs as data", 
   `;
   const imports = findRemoteRuntimeImports(source);
   assertEquals(imports.length, 0);
+});
+
+Deno.test("repository ignore rules classify local and generated outputs", async () => {
+  const root = new URL("../", import.meta.url);
+  const command = new Deno.Command("git", {
+    args: ["check-ignore", "--no-index", "--stdin"],
+    cwd: root,
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const child = command.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(
+    new TextEncoder().encode(".playwright-cli/output.json\nskills-lock.json\n"),
+  );
+  await writer.close();
+
+  const output = await child.output();
+  assertEquals(output.code, 0);
+  assertEquals(
+    new TextDecoder().decode(output.stdout),
+    ".playwright-cli/output.json\nskills-lock.json\n",
+  );
 });

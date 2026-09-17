@@ -95,6 +95,133 @@ Deno.test("source gateway invokes injected fetch without rebinding its receiver"
   assertEquals(requests, 2);
 });
 
+Deno.test("source gateway returns the workflow run from approval and uploads pasted material as JSON", async () => {
+  /** @type {Request | null} */ let received = null;
+  const client = gateway(async (request) => {
+    received = request;
+    if (request.url.endsWith("/approve")) return Response.json({ result: { source, reused: false }, workflow: { runId: "run-a", reused: false } });
+    return Response.json({ result: { status: "attached", materialId: "material-a", runId: "run-a", reused: false } });
+  });
+  const approved = await client.approve({ submittedUrl: source.submittedUrl, canonicalUrl: source.canonicalUrl, title: source.title, description: source.description, adapter: source.adapter, interestAreaIds: source.interestAreaIds, identityEvidence: source.identityEvidence, identityStatus: "resolved", idempotencyKey: "approve-workflow" });
+  assertEquals(approved.ok, true);
+  if (!approved.ok) throw new Error(approved.error.kind);
+  assertEquals(approved.value.workflow?.runId, "run-a");
+  const uploaded = await client.uploadWorkflowMaterial({ runId: "run-a", sourceId: source.id, sourceRevision: 1, sourceUrl: source.canonicalUrl, mediaType: "text/plain", fileName: "pasted-text.txt", idempotencyKey: "material-a", content: "A pasted concept.", rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "learner copy", reference: "attestation-a" } });
+  assertEquals(uploaded.ok, true);
+  const receivedRequest = /** @type {Request} */ (/** @type {unknown} */ (received));
+  assertEquals(receivedRequest.headers.get("content-type"), "application/json");
+  const body = /** @type {Record<string, unknown>} */ (await receivedRequest.json());
+  assertEquals(body.ownerId, undefined);
+  assertEquals(body.content, "A pasted concept.");
+  assertEquals(body.mode, "text");
+});
+
+Deno.test("private document creation rejects owner injection and validates an attach-ready response", async () => {
+  let calls = 0;
+  const documentSource = { ...source, origin: "private-document", canonicalUrl: "https://app.example/api/private-documents/source-a", submittedUrl: "https://app.example/api/private-documents/source-a" };
+  const client = gateway(async (request) => {
+    calls += 1;
+    assertEquals(new URL(request.url).pathname, "/api/source-library/private-documents");
+    assertEquals(request.method, "POST");
+    const body = await request.json();
+    assertEquals(body.ownerId, undefined);
+    return Response.json({ result: { source: documentSource, runId: "private-run", reused: false } });
+  });
+  const command = { title: "Lecture", fileName: "lecture.pdf", idempotencyKey: "create-doc", rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "permission", reference: "attestation" } };
+  assertEquals((await client.createPrivateDocument({ ...command, ownerId: "other" })).ok, false);
+  assertEquals(calls, 0);
+  const result = await client.createPrivateDocument(command);
+  if (!result.ok) throw new Error(result.error.kind);
+  assertEquals(result.value.runId, "private-run");
+  assertEquals(result.value.source.canonicalUrl, documentSource.canonicalUrl);
+  const malformed = await gateway(async () => Response.json({ result: { source, reused: false } })).createPrivateDocument(command);
+  assertEquals(malformed.ok, false);
+});
+
+Deno.test("source gateway reads the user-facing workflow blocker explanation", async () => {
+  let requested = "";
+  const client = gateway((request) => {
+    requested = request.url;
+    return Promise.resolve(Response.json({ result: {
+      sourceId: "source-a",
+      run: {
+        runId: "run-a",
+        state: "awaiting-upload",
+        revision: 3,
+        counts: { pages: 1, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0 },
+        extractionStartedAt: "2026-08-20T00:00:00.000Z",
+        extractionDeadlineAt: "2026-08-20T00:30:00.000Z",
+        elapsedMs: 1_000,
+        remainingMs: 1_799_000,
+        decisionRequired: "upload-material",
+        failureKind: "KnowledgePagePaywallDetected",
+      },
+      reasonCode: "paywall-or-login",
+      message: "This source could not be scraped because it is behind a paywall or requires sign-in. Upload authorized text, PDF, PPTX, or a transcript instead.",
+    } }));
+  });
+  const result = await client.workflowStatus("source-a");
+  assertEquals(result.ok, true);
+  if (!result.ok) throw new Error(result.error.kind);
+  assertEquals(result.value.reasonCode, "paywall-or-login");
+  assertEquals(result.value.run?.state, "awaiting-upload");
+  assertEquals(new URL(requested).searchParams.get("sourceId"), "source-a");
+});
+
+Deno.test("source gateway posts an owner-free workflow retry command and validates its public result", async () => {
+  /** @type {Request | null} */ let received = null;
+  const client = gateway(async (request) => {
+    received = request;
+    return Response.json({ result: {
+      runId: "run-a",
+      state: "extraction-loop",
+      revision: 4,
+      counts: { pages: 0, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0 },
+      extractionStartedAt: "2026-08-20T00:00:00.000Z",
+      extractionDeadlineAt: "2026-08-20T00:30:00.000Z",
+      elapsedMs: 1_000,
+      remainingMs: 1_799_000,
+      decisionRequired: null,
+      failureKind: null,
+      robotsEvidence: null,
+    } });
+  });
+  const result = await client.retryWorkflow({ runId: "run-a", expectedRevision: 3, idempotencyKey: "retry-a" });
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.value.state, "extraction-loop");
+  const request = /** @type {Request} */ (/** @type {unknown} */ (received));
+  assertEquals(request.url.endsWith("/api/knowledge-workflows/control"), true);
+  const body = /** @type {Record<string, unknown>} */ (await request.json());
+  assertEquals(body.action, "resume");
+  assertEquals(body.ownerId, undefined);
+});
+
+Deno.test("source gateway uses multipart for a PDF or slide-deck material file", async () => {
+  const client = gateway(async (request) => {
+    assertEquals(request.headers.get("content-type")?.startsWith("multipart/form-data"), true);
+    const form = await request.formData();
+    assertEquals(form.get("runId"), "run-a");
+    assertEquals(form.get("mediaType"), "application/pdf");
+    assertEquals(form.get("file") instanceof File, true);
+    return Response.json({ result: { status: "attached", materialId: "material-pdf", runId: "run-a", reused: false } });
+  });
+  const uploaded = await client.uploadWorkflowMaterial({ runId: "run-a", sourceId: source.id, sourceRevision: 1, sourceUrl: source.canonicalUrl, mediaType: "application/pdf", fileName: "lesson.pdf", idempotencyKey: "material-pdf", file: new File([new Uint8Array([37, 80, 68, 70, 45])], "lesson.pdf", { type: "application/pdf" }), rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "learner copy", reference: "attestation-pdf" } });
+  assertEquals(uploaded.ok, true);
+});
+
+Deno.test("source gateway carries image mode and the raster file through multipart", async () => {
+  const client = gateway(async (request) => {
+    const form = await request.formData();
+    assertEquals(form.get("mode"), "image");
+    assertEquals(form.get("mediaType"), "image/png");
+    assertEquals(form.get("file") instanceof File, true);
+    return Response.json({ result: { status: "attached", materialId: "material-image", runId: "run-a", reused: false } });
+  });
+  const uploaded = await client.uploadWorkflowMaterial({ runId: "run-a", sourceId: source.id, sourceRevision: 1, sourceUrl: source.canonicalUrl, mediaType: "image/png", fileName: "chapter5-page-001.png", mode: "image", idempotencyKey: "material-image", file: new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], "chapter5-page-001.png", { type: "image/png" }), rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "learner-owned", reference: "attestation-image" } });
+  assertEquals(uploaded.ok, true);
+});
+
 Deno.test("source gateway reads a validated bounded catalog page", async () => {
   let requested = "";
   const client = gateway((request) => {
@@ -142,6 +269,18 @@ Deno.test("source gateway validates search results and disabled sources", async 
   assertEquals(invalid.error.kind, "SourceGatewayResponseInvalid");
 });
 
+Deno.test("source gateway forwards explicit external processing consent without inventing it", async () => {
+  let requested = "";
+  const client = gateway(async (request) => {
+    requested = request.url;
+    return Response.json({ result: [] });
+  });
+  await client.search({ query: "harmony", mode: "combined", limit: 10, externalProcessingAllowed: true });
+  assertEquals(new URL(requested).searchParams.get("externalProcessingAllowed"), "true");
+  await client.search({ query: "harmony", mode: "keyword", limit: 10 });
+  assertEquals(new URL(requested).searchParams.has("externalProcessingAllowed"), false);
+});
+
 Deno.test("source gateway defaults omitted search mode to Combined", async () => {
   let requested = "";
   const result = await gateway((request) => {
@@ -150,6 +289,33 @@ Deno.test("source gateway defaults omitted search mode to Combined", async () =>
   }).search({ query: "harmony", limit: 10 });
   assertEquals(result.ok, true);
   assertEquals(new URL(requested).searchParams.get("mode"), "combined");
+});
+
+Deno.test("source gateway parses cross-source knowledge search results and forwards scope", async () => {
+  let requested = "";
+  const result = await gateway((request) => {
+    requested = request.url;
+    return Promise.resolve(Response.json({ result: [{
+      knowledge: {
+        knowledgeId: "knowledge-a",
+        sourceId: "source-a",
+        sourceTitle: "Music learning source",
+        summary: "A cadence resolves harmonic tension.",
+        sourceUrl: source.canonicalUrl,
+        evidenceAnchorIds: ["anchor-a"],
+        questionLocked: true,
+      },
+      score: 0.84,
+      matchedBy: "semantic",
+    }] }));
+  }).search({ query: "cadence", scope: "knowledge", mode: "semantic", limit: 10 });
+  assertEquals(result.ok, true);
+  if (!result.ok) throw new Error(result.error.kind);
+  assertEquals(result.value[0].knowledge.knowledgeId, "knowledge-a");
+  assertEquals(result.value[0].matchedBy, "semantic");
+  const params = new URL(requested).searchParams;
+  assertEquals(params.get("scope"), "knowledge");
+  assertEquals(params.get("mode"), "semantic");
 });
 
 Deno.test("source gateway mutations omit owner and expose server rejection", async () => {

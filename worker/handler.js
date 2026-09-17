@@ -1,13 +1,17 @@
 // @ts-check
 
 import { isRecord, validateRssAcquisitionCommand } from "./contracts.js";
+import { isWorkflowRobotsEvidence } from "../src/features/knowledge-workflows/workflow.js";
+import { createDiscoveryRequestLogger } from "./request-logging.js";
 
 /** @import { AccessIdentity, Result, RssAcquisitionResult, WorkerFailure } from "./contracts.js" */
-/** @import { LibrarySource, SourceCatalogPage, SourceIngestionJob, SourceLibraryFailure, SourceSearchHit, SourceSuppression } from "../src/features/source-library/contracts.js" */
+/** @import { LibrarySource, SourceCatalogPage, SourceIngestionJob, SourceLibraryFailure, SourceSearchHit, KnowledgeSearchHit, SourceSuppression } from "../src/features/source-library/contracts.js" */
 /** @import { RightsApprovalFailure, RightsApprovalResult } from "../src/features/source-library/rights-approval.js" */
+/** @import { SourceRightsProfile } from "../src/features/source-library/rights-profile.js" */
+/** @import { DiscoveryRequestLogEntry, DiscoveryRequestLogFailure } from "./request-logging.js" */
 
 /**
- * @param {{ readonly allowedOrigin: string, readonly maximumCommandBytes: number }} configuration
+ * @param {{ readonly allowedOrigin: string, readonly maximumCommandBytes: number, readonly maximumMaterialBytes?: number, readonly maximumBackendOperationMs?: number }} configuration
  * @param {{
  *   readonly authenticate: (request: Request) => Promise<Result<AccessIdentity, WorkerFailure>>,
  *   readonly acquireRss: (command: import("./contracts.js").RssAcquisitionCommand, ownerId: string) => Promise<Result<RssAcquisitionResult, WorkerFailure | { readonly kind: "TranscriptAuthorizationPersistenceFailed" }>>,
@@ -17,6 +21,7 @@ import { isRecord, validateRssAcquisitionCommand } from "./contracts.js";
  *   },
  *   readonly sourceLibrary?: null | {
  *     readonly approve: (command: unknown) => Promise<Result<{ readonly source: LibrarySource, readonly job: SourceIngestionJob | null, readonly reused: boolean }, SourceLibraryFailure>>,
+ *     readonly createPrivateDocument?: (command: unknown) => Promise<Result<{ readonly source: LibrarySource, readonly job: SourceIngestionJob | null, readonly reused: boolean }, SourceLibraryFailure>>,
  *     readonly revise: (command: unknown) => Promise<Result<LibrarySource, SourceLibraryFailure>>,
  *     readonly disable: (command: unknown) => Promise<Result<LibrarySource, SourceLibraryFailure>>,
  *     readonly restore: (command: unknown) => Promise<Result<LibrarySource, SourceLibraryFailure>>,
@@ -27,48 +32,117 @@ import { isRecord, validateRssAcquisitionCommand } from "./contracts.js";
  *   },
  *   readonly sourceCatalog?: null | {
  *     readonly browse: (command: unknown) => Promise<Result<SourceCatalogPage, SourceLibraryFailure>>,
- *     readonly search: (command: unknown) => Promise<Result<readonly SourceSearchHit[], SourceLibraryFailure>>,
+ *     readonly search: (command: unknown) => Promise<Result<unknown, SourceLibraryFailure>>,
  *     readonly suppressed: (command: unknown) => Promise<Result<readonly string[], SourceLibraryFailure>>,
  *     readonly active: (command: unknown) => Promise<Result<readonly string[], SourceLibraryFailure>>
  *   },
  *   readonly sourceIngestion?: null | { readonly run: (command: unknown) => Promise<Result<{ readonly state: "completed" | "partial", readonly itemsStored: number }, import("../src/features/source-library/ingestion-contracts.js").SourceIngestionFailure>> },
+ *   readonly sourceRightsProfileFor?: (canonicalUrl: string) => SourceRightsProfile | null,
+ *   readonly knowledgeWorkflow?: null | {
+ *     readonly start: (command: unknown) => Promise<Result<{ readonly runId: string, readonly reused: boolean }, { readonly kind: string }>>,
+ *     readonly status: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly sourceStatus?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly control: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly material?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly rightsApproved?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly revokeSource?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>
+ *   },
+ *   readonly privateDocumentRead?: null | ReturnType<typeof import("./private-document-read.js").createPrivateDocumentReadService>,
+ *   readonly knowledgeWorkflowBackfill?: null | {
+ *     readonly run: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>
+ *   },
+ *   readonly knowledgeWorkflowReplay?: null | {
+ *     readonly run: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>
+ *   },
+ *   readonly learningMedia?: null | {
+ *     readonly serve: (command: unknown) => Promise<Result<{ readonly bytes: Uint8Array, readonly mediaType: string }, { readonly kind: string }>>
+ *   },
+ *   readonly learningBatches?: null | {
+   *     readonly loadFeed: (ownerId: string, learningDay: string, force?: boolean) => Promise<Result<unknown, { readonly kind: string }>>,
+   *     readonly listKnowledge?: (ownerId: string, sourceId?: string | null) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly completeFeed: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly loadReview: (ownerId: string, learningDay: string, force?: boolean) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly answerReview: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly setPreference: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly removeKnowledge: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly removeSource?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly clearGeneratedContent?: (ownerId: string) => Promise<Result<unknown, { readonly kind: string }>>
+ *   },
  *   readonly waitUntil?: (promise: Promise<unknown>) => void,
  *   readonly manualMaterial?: null | { readonly upload: (command: unknown) => Promise<Result<{ readonly status: "processing-ready", readonly reference: import("../src/features/source-library/ingestion-contracts.js").SourceContentReference, readonly reused: boolean }, import("../src/features/source-library/ingestion-contracts.js").SourceIngestionFailure>> },
  *   readonly wikimediaTimedText?: null | { readonly retrieve: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>> },
  *   readonly learningGeneration?: null | {
  *     readonly status: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
- *     readonly review: { readonly decide: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>, readonly queue?: (ownerId: string) => Promise<Result<unknown, { readonly kind: string }>> },
+ *     readonly review: { readonly decide: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>, readonly queue?: (ownerId: string) => Promise<Result<unknown, { readonly kind: string }>>, readonly visible?: (ownerId: string) => Promise<Result<unknown, { readonly kind: string }>> },
  *     readonly revoke: { readonly revoke: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>> }
  *   }
+ *   readonly now?: () => string,
+ *   readonly requestLogger?: (entry: DiscoveryRequestLogEntry) => Result<null, DiscoveryRequestLogFailure>,
+ *   readonly createRequestId?: () => string,
  * }} dependencies
  */
 export function createDiscoveryWorker(configuration, dependencies) {
+  const maximumBackendOperationMs = configuration.maximumBackendOperationMs ?? 5_000;
   if (
     !URL.canParse(configuration.allowedOrigin) ||
     new URL(configuration.allowedOrigin).origin !==
       configuration.allowedOrigin ||
     !Number.isInteger(configuration.maximumCommandBytes) ||
     configuration.maximumCommandBytes < 1 ||
+    !Number.isSafeInteger(maximumBackendOperationMs) ||
+    maximumBackendOperationMs < 1 ||
+    maximumBackendOperationMs > 60_000 ||
     typeof dependencies.authenticate !== "function" ||
     typeof dependencies.acquireRss !== "function" ||
     (dependencies.centralSearch != null &&
       (typeof dependencies.centralSearch.capabilities !== "function" ||
         typeof dependencies.centralSearch.search !== "function")) ||
-    (dependencies.waitUntil !== undefined && typeof dependencies.waitUntil !== "function")
+    (dependencies.waitUntil !== undefined && typeof dependencies.waitUntil !== "function") ||
+    (dependencies.requestLogger !== undefined && typeof dependencies.requestLogger !== "function") ||
+    (dependencies.createRequestId !== undefined && typeof dependencies.createRequestId !== "function")
   ) {
     throw new TypeError("Discovery Worker configuration is invalid.");
   }
-  return Object.freeze({
-    /** @param {Request} request */
-    async fetch(request) {
-      const authenticated = await dependencies.authenticate(request);
-      if (!authenticated.ok) return failureResponse(authenticated.error);
+  /** @type {(entry: DiscoveryRequestLogEntry) => Result<null, DiscoveryRequestLogFailure>} */
+  const requestLogger = dependencies.requestLogger ?? createDiscoveryRequestLogger({
+    sink: (record) => console.info(JSON.stringify(record)),
+    now: () => dependencies.now?.() ?? new Date().toISOString(),
+  });
+  const createRequestId = dependencies.createRequestId ?? (() => crypto.randomUUID());
+
+  /** @param {Request} request @param {(ownerId: string) => void} onAuthenticated @param {(entry: Omit<DiscoveryRequestLogEntry, "correlationId" | "route" | "method">) => Result<null, { readonly kind: "DiscoveryRequestLoggingFailed", readonly causeKind: "DiscoveryRequestLogEntryInvalid" | "DiscoveryRequestLogTimestampInvalid" | "DiscoveryRequestLoggerResultInvalid" | "DiscoveryRequestLoggerThrew" }>} emit */
+  async function handleRequest(request, onAuthenticated, emit) {
+      let authenticated;
+      try {
+        authenticated = await dependencies.authenticate(request);
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        const logged = emit({ event: "request-auth-failure", status: 503, failureKind: "AuthenticationDependencyFailed" });
+        if (!logged.ok) return failureResponse(logged.error);
+        return failureResponse({ kind: "DiscoveryAuthenticationFailed" });
+      }
+      if (!isAuthenticationResult(authenticated)) {
+        const logged = emit({ event: "request-auth-failure", status: 503, failureKind: "AuthenticationResultInvalid" });
+        if (!logged.ok) return failureResponse(logged.error);
+        return failureResponse({ kind: "DiscoveryAuthenticationFailed" });
+      }
+      if (!authenticated.ok) {
+        const status = authenticated.error.kind === "DiscoveryClientUnauthenticated" || authenticated.error.kind === "DiscoveryAccessTokenMissing" || authenticated.error.kind === "DiscoveryAccessTokenInvalid" ? 401 : 403;
+        const logged = emit({ event: "request-auth-failure", status, failureKind: authenticated.error.kind });
+        if (!logged.ok) return failureResponse(logged.error);
+        return failureResponse(authenticated.error);
+      }
+      onAuthenticated(authenticated.value.ownerId);
+      const logged = emit({ event: "request-authenticated", ownerId: authenticated.value.ownerId });
+      if (!logged.ok) return failureResponse(logged.error);
       const url = new URL(request.url);
       const rssPath = url.pathname === "/api/discovery/rss";
       const centralSearchPath = url.pathname === "/api/discovery/search";
       const centralCapabilitiesPath =
         url.pathname === "/api/discovery/search/capabilities";
       const sourceAction = sourceLibraryAction(url.pathname);
+      const privateDocumentCreate = url.pathname === "/api/source-library/private-documents";
+      const privateDocumentId = url.pathname.match(/^\/api\/private-documents\/([^/]+)$/)?.[1] ?? null;
       const sourceRightsApproval = url.pathname === "/api/source-library/rights/approve";
       const sourceBrowse = url.pathname === "/api/source-library";
       const sourceSearch = url.pathname === "/api/source-library/search";
@@ -81,20 +155,118 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const wikimediaTimedText = url.pathname === "/api/discovery/wikimedia/timedtext";
       const learningStatus = url.pathname === "/api/learning-generation/status";
       const learningReviewQueue = url.pathname === "/api/learning-generation/review-queue";
+      const learningPublished = url.pathname === "/api/learning-generation/published";
       const learningReview = url.pathname === "/api/learning-generation/review";
       const learningRevocation = url.pathname === "/api/learning-generation/revoke";
+      const learningFeedBatch = url.pathname === "/api/learning-generation/feed-batch";
+      const learningLibraryKnowledge = url.pathname === "/api/learning-generation/library-knowledge";
+      const learningFeedRefresh = url.pathname === "/api/learning-generation/feed-batch/refresh";
+      const learningFeedComplete = url.pathname === "/api/learning-generation/feed-batch/complete";
+      const learningReviewBatch = url.pathname === "/api/learning-generation/review-batch";
+      const learningReviewRefresh = url.pathname === "/api/learning-generation/review-batch/refresh";
+      const learningReviewAnswer = url.pathname === "/api/learning-generation/review-batch/answer";
+      const learningPreference = url.pathname === "/api/learning-generation/knowledge-preference";
+      const learningKnowledgeRemove = url.pathname === "/api/learning-generation/knowledge-remove";
+      const knowledgeWorkflowStatus = url.pathname === "/api/knowledge-workflows/status";
+      const knowledgeWorkflowSourceStatus = url.pathname === "/api/knowledge-workflows/source-status";
+      const knowledgeWorkflowControl = url.pathname === "/api/knowledge-workflows/control";
+      const knowledgeWorkflowMaterial = url.pathname === "/api/knowledge-workflows/material";
+      const knowledgeWorkflowBackfill = url.pathname === "/api/knowledge-workflows/backfill";
+      const knowledgeWorkflowReplay = url.pathname === "/api/knowledge-workflows/replay";
+      const learningMedia = url.pathname === "/api/learning-media";
       if (
         !rssPath && !centralSearchPath &&
-        !centralCapabilitiesPath && sourceAction === null && !sourceRightsApproval && !sourceBrowse &&
+        !centralCapabilitiesPath && sourceAction === null && !privateDocumentCreate && privateDocumentId === null && !sourceRightsApproval && !sourceBrowse &&
         !sourceSearch && !sourceSuppressionCheck && !sourceActiveCheck &&
         !sourceIngestion && !manualMaterial && !wikimediaTimedText &&
-        !learningStatus && !learningReviewQueue && !learningReview && !learningRevocation
+        !learningStatus && !learningReviewQueue && !learningPublished && !learningReview && !learningRevocation &&
+        !learningFeedBatch && !learningLibraryKnowledge && !learningFeedRefresh && !learningFeedComplete && !learningReviewBatch && !learningReviewRefresh && !learningReviewAnswer && !learningPreference && !learningKnowledgeRemove &&
+        !knowledgeWorkflowStatus && !knowledgeWorkflowSourceStatus && !knowledgeWorkflowControl && !knowledgeWorkflowMaterial && !knowledgeWorkflowBackfill && !knowledgeWorkflowReplay && !learningMedia
       ) {
         return json({ error: "Not found." }, 404);
       }
       const origin = request.headers.get("origin");
       if (origin !== null && origin !== configuration.allowedOrigin) {
         return failureResponse({ kind: "DiscoveryOriginRejected" });
+      }
+      if (learningMedia) {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        if (dependencies.learningMedia == null) return mediaFailureResponse({ kind: "LearningMediaUnavailable" });
+        const assetId = url.searchParams.get("assetId");
+        const variant = url.searchParams.get("variant");
+        if (assetId === null || assetId.trim() === "" || (variant !== "feed" && variant !== "thumbnail")) return mediaFailureResponse({ kind: "MediaCommandInvalid" });
+        const served = await dependencies.learningMedia.serve({ ownerId: authenticated.value.ownerId, assetId, variant });
+        if (!served.ok) return mediaFailureResponse(served.error);
+        return new Response(served.value.bytes, { status: 200, headers: { "content-type": served.value.mediaType, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" } });
+      }
+      if (privateDocumentId !== null) {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        if (dependencies.privateDocumentRead == null) return json({ error: "PrivateDocumentReadUnavailable" }, 503);
+        let sourceId;
+        try { sourceId = decodeURIComponent(privateDocumentId); } catch (error) { if (!(error instanceof URIError)) throw error; return json({ error: "PrivateDocumentCommandInvalid" }, 400); }
+        const result = await dependencies.privateDocumentRead.read({ ownerId: authenticated.value.ownerId, sourceId });
+        if (!result.ok) {
+          const status = result.error.kind === "PrivateDocumentNotFound" ? 404 : result.error.kind === "PrivateDocumentNotPrivate" || result.error.kind === "PrivateDocumentDisabled" ? 403 : result.error.kind === "PrivateDocumentCommandInvalid" ? 400 : 503;
+          return json({ error: result.error.kind }, status);
+        }
+        const value = result.value;
+        if (value.status === "pending") return json({ ownerId: authenticated.value.ownerId, result: value }, 200, { "cache-control": "private, no-store" });
+        return new Response(value.bytes, { status: 200, headers: { "content-type": value.mediaType, "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(value.fileName)}`, "x-content-type-options": "nosniff", "cache-control": "private, no-store" } });
+      }
+      if (knowledgeWorkflowStatus) {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        const workflow = dependencies.knowledgeWorkflow;
+        if (workflow == null) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
+        const runId = url.searchParams.get("runId");
+        if (runId === null || runId.trim() === "") return knowledgeWorkflowFailureResponse({ kind: "WorkflowCommandInvalid" });
+        const result = await runBoundedDependency({
+          operation: "knowledge-workflow-status",
+          ownerId: authenticated.value.ownerId,
+          runId,
+          timeoutMs: maximumBackendOperationMs,
+          invoke: () => workflow.status({ ownerId: authenticated.value.ownerId, runId }),
+          validate: isRecord,
+          timeoutFailureKind: "KnowledgeWorkflowDependencyTimedOut",
+          dependencyFailureKind: "KnowledgeWorkflowDependencyFailed",
+          invalidFailureKind: "KnowledgeWorkflowResultInvalid",
+          emit,
+        });
+        if (!result.ok) return knowledgeWorkflowFailureResponse(result.error);
+        const projection = publicWorkflowStatus(result.value, dependencies.now?.());
+        if (projection === null) {
+          const logged = emit({ event: "dependency-failure", operation: "knowledge-workflow-status", ownerId: authenticated.value.ownerId, runId, failureKind: "WorkflowStatusProjectionInvalid" });
+          if (!logged.ok) return failureResponse(logged.error);
+          return knowledgeWorkflowFailureResponse({ kind: "WorkflowStatusProjectionInvalid" });
+        }
+        return json({ ownerId: authenticated.value.ownerId, result: projection }, 200);
+      }
+      if (knowledgeWorkflowSourceStatus) {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        const workflow = dependencies.knowledgeWorkflow;
+        if (workflow?.sourceStatus === undefined) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
+        const sourceStatus = workflow.sourceStatus;
+        const sourceId = url.searchParams.get("sourceId");
+        if (sourceId === null || sourceId.trim() === "") return knowledgeWorkflowFailureResponse({ kind: "WorkflowCommandInvalid" });
+        const result = await runBoundedDependency({
+          operation: "knowledge-workflow-source-status",
+          ownerId: authenticated.value.ownerId,
+          sourceId,
+          timeoutMs: maximumBackendOperationMs,
+          invoke: () => sourceStatus({ ownerId: authenticated.value.ownerId, sourceId }),
+          validate: isRecord,
+          timeoutFailureKind: "KnowledgeWorkflowDependencyTimedOut",
+          dependencyFailureKind: "KnowledgeWorkflowDependencyFailed",
+          invalidFailureKind: "KnowledgeWorkflowResultInvalid",
+          emit,
+        });
+        if (!result.ok) return knowledgeWorkflowFailureResponse(result.error);
+        const projection = publicSourceWorkflowStatus(result.value, authenticated.value.ownerId, dependencies.now?.());
+        if (projection === null) {
+          const logged = emit({ event: "dependency-failure", operation: "knowledge-workflow-source-status", ownerId: authenticated.value.ownerId, sourceId, failureKind: "WorkflowSourceStatusProjectionInvalid" });
+          if (!logged.ok) return failureResponse(logged.error);
+          return knowledgeWorkflowFailureResponse({ kind: "WorkflowSourceStatusProjectionInvalid" });
+        }
+        return json({ ownerId: authenticated.value.ownerId, result: projection }, 200);
       }
       if (learningStatus) {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
@@ -104,11 +276,39 @@ export function createDiscoveryWorker(configuration, dependencies) {
         const result = await dependencies.learningGeneration.status({ ownerId: authenticated.value.ownerId, generationId });
         return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : learningGenerationFailureResponse(result.error);
       }
+      if (learningFeedBatch || learningReviewBatch || learningLibraryKnowledge) {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        if (dependencies.learningBatches == null) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
+        if (learningLibraryKnowledge && dependencies.learningBatches.listKnowledge === undefined) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
+        const learningDay = url.searchParams.get("day");
+        if (!learningLibraryKnowledge && (learningDay === null || learningDay.trim() === "")) return learningBatchFailureResponse({ kind: "LearningBatchCommandInvalid" });
+        const result = learningLibraryKnowledge
+          ? await dependencies.learningBatches.listKnowledge?.(authenticated.value.ownerId, url.searchParams.get("sourceId"))
+          : learningFeedBatch
+          ? await dependencies.learningBatches.loadFeed(authenticated.value.ownerId, /** @type {string} */ (learningDay))
+          : await dependencies.learningBatches.loadReview(authenticated.value.ownerId, /** @type {string} */ (learningDay));
+        if (result === undefined) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
+        return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : learningBatchFailureResponse(result.error);
+      }
+      if (learningFeedRefresh || learningFeedComplete || learningReviewRefresh || learningReviewAnswer || learningPreference || learningKnowledgeRemove) {
+        if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
+        if (dependencies.learningBatches == null) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
+      }
       if (learningReviewQueue) {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
         if (dependencies.learningGeneration?.review.queue === undefined) return json({ error: "LearningGenerationUnavailable" }, 503);
         const result = await dependencies.learningGeneration.review.queue(authenticated.value.ownerId);
         return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : learningGenerationFailureResponse(result.error);
+      }
+      if (learningPublished) {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        if (dependencies.learningGeneration?.review.visible === undefined) return json({ error: "LearningGenerationUnavailable" }, 503);
+        const result = await dependencies.learningGeneration.review.visible(authenticated.value.ownerId);
+        if (!result.ok) return learningGenerationFailureResponse(result.error);
+        const quizzes = publicPublishedQuizzes(result.value);
+        return quizzes === null
+          ? json({ error: "LearningGenerationResponseInvalid" }, 503)
+          : json({ ownerId: authenticated.value.ownerId, result: quizzes }, 200);
       }
       if (centralCapabilitiesPath) {
         if (request.method !== "GET") {
@@ -126,37 +326,62 @@ export function createDiscoveryWorker(configuration, dependencies) {
         if (request.method !== "GET") {
           return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
         }
-        if (dependencies.sourceCatalog == null) {
+        const catalog = dependencies.sourceCatalog;
+        if (catalog == null) {
           return sourceFailureResponse({ kind: "SourceCatalogReadFailed" });
         }
         const limit = Number(url.searchParams.get("limit"));
-        const result = sourceBrowse
-          ? await dependencies.sourceCatalog.browse({
+        const searchScope = url.searchParams.get("scope") ?? "sources";
+        const externalProcessing = url.searchParams.get("externalProcessingAllowed");
+        if (sourceSearch && searchScope !== "sources" && searchScope !== "knowledge") return sourceFailureResponse({ kind: "SourceCatalogCommandInvalid", field: "scope" });
+        if (sourceSearch && externalProcessing !== null && externalProcessing !== "true" && externalProcessing !== "false") return sourceFailureResponse({ kind: "SourceCatalogCommandInvalid", field: "externalProcessingAllowed" });
+        const result = await runBoundedDependency({
+          operation: sourceBrowse ? "source-catalog-browse" : "source-catalog-search",
+          ownerId: authenticated.value.ownerId,
+          timeoutMs: maximumBackendOperationMs,
+          invoke: () => sourceBrowse
+            ? catalog.browse({
             ownerId: authenticated.value.ownerId,
             limit,
             cursor: url.searchParams.get("cursor"),
           })
-          : await dependencies.sourceCatalog.search({
+            : catalog.search({
             ownerId: authenticated.value.ownerId,
             limit,
             query: url.searchParams.get("q"),
             mode: url.searchParams.get("mode") ?? "combined",
-          });
+            scope: searchScope,
+            externalProcessingAllowed: externalProcessing === null ? undefined : externalProcessing === "true",
+          }),
+          validate: sourceBrowse ? isSourceCatalogPage : searchScope === "knowledge" ? isKnowledgeSearchResults : isSourceSearchResults,
+          itemCount: sourceBrowse ? sourceCatalogItemCount : sourceSearchItemCount,
+          timeoutFailureKind: "SourceCatalogDependencyTimedOut",
+          dependencyFailureKind: "SourceCatalogDependencyFailed",
+          invalidFailureKind: "SourceCatalogResponseInvalid",
+          emit,
+        });
         return result.ok
-          ? json(
-            { ownerId: authenticated.value.ownerId, result: result.value },
-            200,
-          )
+          ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200)
           : sourceFailureResponse(result.error);
       }
       if (sourceSuppressionCheck || sourceActiveCheck) {
         if (request.method !== "POST") {
           return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
         }
-        if (dependencies.sourceCatalog == null) {
+        const catalog = dependencies.sourceCatalog;
+        if (catalog == null) {
           return sourceFailureResponse({ kind: "SourceCatalogReadFailed" });
         }
       }
+      if (knowledgeWorkflowMaterial) {
+        if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
+        if (dependencies.knowledgeWorkflow?.material === undefined) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
+        const material = await readWorkflowMaterialRequest(request, configuration.maximumCommandBytes, configuration.maximumMaterialBytes ?? configuration.maximumCommandBytes);
+        if (!material.ok) return knowledgeWorkflowFailureResponse(material.error);
+        const result = await dependencies.knowledgeWorkflow.material({ ...material.value, ownerId: authenticated.value.ownerId });
+        return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : knowledgeWorkflowFailureResponse(result.error);
+      }
+      if ((knowledgeWorkflowBackfill || knowledgeWorkflowReplay) && request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
       if (request.method !== "POST") {
         return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
       }
@@ -186,12 +411,53 @@ export function createDiscoveryWorker(configuration, dependencies) {
         }
         throw error;
       }
+      if (knowledgeWorkflowBackfill) {
+        if (dependencies.knowledgeWorkflowBackfill == null) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId") || Object.hasOwn(document, "configDigests") || Object.keys(document).some((key) => key !== "confirmation" && key !== "verificationMarker")) return knowledgeWorkflowFailureResponse({ kind: "BackfillCommandInvalid" });
+        const result = await dependencies.knowledgeWorkflowBackfill.run(Object.freeze({ ...document, ownerId: authenticated.value.ownerId }));
+        if (!result.ok) return knowledgeWorkflowFailureResponse(result.error);
+        const projection = publicBackfillResult(result.value, authenticated.value.ownerId);
+        return projection === null
+          ? knowledgeWorkflowFailureResponse({ kind: "BackfillResponseInvalid" })
+          : json({ ownerId: authenticated.value.ownerId, result: projection }, 200);
+      }
+      if (knowledgeWorkflowReplay) {
+        if (dependencies.knowledgeWorkflowReplay == null) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId") || Object.hasOwn(document, "configDigests") || Object.keys(document).some((key) => key !== "confirmation" && key !== "verificationMarker")) return knowledgeWorkflowFailureResponse({ kind: "ReplayCommandInvalid" });
+        const result = await dependencies.knowledgeWorkflowReplay.run(Object.freeze({ ...document, ownerId: authenticated.value.ownerId }));
+        if (!result.ok) return knowledgeWorkflowFailureResponse(result.error);
+        const projection = publicReplayResult(result.value, authenticated.value.ownerId);
+        return projection === null
+          ? knowledgeWorkflowFailureResponse({ kind: "ReplayResponseInvalid" })
+          : json({ ownerId: authenticated.value.ownerId, result: projection }, 200);
+      }
+      if (learningFeedRefresh || learningFeedComplete || learningReviewRefresh || learningReviewAnswer || learningPreference || learningKnowledgeRemove) {
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return learningBatchFailureResponse({ kind: "LearningBatchCommandInvalid" });
+        const ownedCommand = Object.freeze({ ...document, ownerId: authenticated.value.ownerId });
+        const learningBatches = dependencies.learningBatches;
+        if (learningBatches == null) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
+        const result = learningFeedRefresh
+          ? await learningBatches.loadFeed(authenticated.value.ownerId, utcDay(dependencies.now?.()), true)
+          : learningFeedComplete
+          ? await learningBatches.completeFeed(ownedCommand)
+          : learningReviewRefresh
+          ? await learningBatches.loadReview(authenticated.value.ownerId, utcDay(dependencies.now?.()), true)
+          : learningReviewAnswer
+          ? await learningBatches.answerReview(ownedCommand)
+          : learningPreference
+          ? await learningBatches.setPreference(ownedCommand)
+          : await learningBatches.removeKnowledge(ownedCommand);
+        return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : learningBatchFailureResponse(result.error);
+      }
       if (sourceRightsApproval) {
         if (dependencies.sourceRightsApproval == null) return rightsApprovalFailureResponse({ kind: "RightsApprovalPersistenceFailed" });
         if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return rightsApprovalFailureResponse({ kind: "RightsApprovalCommandInvalid", field: Object.hasOwn(isRecord(document) ? document : {}, "ownerId") ? "ownerId" : "body" });
         const result = await dependencies.sourceRightsApproval.approve(Object.freeze({ ...document, ownerId: authenticated.value.ownerId }));
         if (!result.ok) return rightsApprovalFailureResponse(result.error);
-        if (result.value.requeued && !result.value.reused && result.value.jobId !== null && dependencies.sourceIngestion !== null && dependencies.sourceIngestion !== undefined) {
+        if (!result.value.reused && dependencies.knowledgeWorkflow?.rightsApproved !== undefined) {
+          const advanced = await dependencies.knowledgeWorkflow.rightsApproved({ ownerId: authenticated.value.ownerId, sourceId: result.value.sourceId, sourceRevision: result.value.sourceRevision });
+          if (!advanced.ok) return knowledgeWorkflowFailureResponse(advanced.error);
+        } else if (result.value.requeued && !result.value.reused && result.value.jobId !== null && dependencies.sourceIngestion !== null && dependencies.sourceIngestion !== undefined) {
           const work = dependencies.sourceIngestion.run({ ownerId: authenticated.value.ownerId, jobId: result.value.jobId });
           const observed = work.then((outcome) => {
             if (!outcome.ok) console.error(JSON.stringify({ event: "source-rights-approval-automatic-ingestion-failure", failureKind: outcome.error.kind }));
@@ -207,6 +473,17 @@ export function createDiscoveryWorker(configuration, dependencies) {
           else dependencies.waitUntil(observed);
         }
         return json({ ownerId: authenticated.value.ownerId, result: result.value }, 200);
+      }
+      if (privateDocumentCreate) {
+        if (dependencies.sourceLibrary?.createPrivateDocument === undefined) return sourceFailureResponse({ kind: "SourceApprovalPersistenceFailed" });
+        if (dependencies.knowledgeWorkflow == null) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return sourceFailureResponse({ kind: "SourceCatalogCommandInvalid", field: Object.hasOwn(isRecord(document) ? document : {}, "ownerId") ? "ownerId" : "body" });
+        const created = await dependencies.sourceLibrary.createPrivateDocument(Object.freeze({ ...document, ownerId: authenticated.value.ownerId, applicationOrigin: configuration.allowedOrigin }));
+        if (!created.ok) return sourceFailureResponse(created.error);
+        const workflow = await dependencies.knowledgeWorkflow.start({ ownerId: authenticated.value.ownerId, sourceId: created.value.source.id, sourceRevision: created.value.source.revision, canonicalSourceIdentity: created.value.source.canonicalUrl, contentSignature: `source-revision:${created.value.source.canonicalUrl}:${created.value.source.revision}`, configDigests: {}, idempotencyKey: `knowledge-workflow:${created.value.source.id}:${created.value.source.revision}`, sourceOrigin: "private-document" });
+        return workflow.ok
+          ? json({ ownerId: authenticated.value.ownerId, result: { source: created.value.source, runId: workflow.value.runId, reused: created.value.reused && workflow.value.reused } }, 200)
+          : knowledgeWorkflowFailureResponse(workflow.error);
       }
       if (sourceAction !== null) {
         if (dependencies.sourceLibrary == null) {
@@ -229,7 +506,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
           ...document,
           ownerId: authenticated.value.ownerId,
         });
-        const result = sourceAction === "approve"
+      const result = sourceAction === "approve"
           ? await dependencies.sourceLibrary.approve(ownedCommand)
           : sourceAction === "revise"
           ? await dependencies.sourceLibrary.revise(ownedCommand)
@@ -242,7 +519,22 @@ export function createDiscoveryWorker(configuration, dependencies) {
           const revoked = await dependencies.learningGeneration.revoke.revoke({ ownerId: authenticated.value.ownerId, sourceId: result.value.id, sourceRevision: result.value.revision, idempotencyKey: `source-disable:${result.value.id}:${result.value.revision}`, reason: "source-disabled", revokedAt: result.value.updatedAt });
           if (!revoked.ok) return learningGenerationFailureResponse(revoked.error);
         }
-        if (result.ok && sourceAction === "approve" && !result.value.reused && result.value.job !== null && dependencies.sourceIngestion !== null && dependencies.sourceIngestion !== undefined && result.value.source.adapter.capabilities.includes("bounded-ingestion")) {
+        if (result.ok && sourceAction === "disable" && dependencies.knowledgeWorkflow?.revokeSource !== undefined) {
+          const revoked = await dependencies.knowledgeWorkflow.revokeSource({ ownerId: authenticated.value.ownerId, sourceId: result.value.id, canonicalSourceIdentity: result.value.canonicalUrl, reason: "source-disabled" });
+          if (!revoked.ok) return knowledgeWorkflowFailureResponse(revoked.error);
+        }
+        if (result.ok && sourceAction === "disable" && dependencies.learningBatches?.removeSource !== undefined) {
+          const removed = await dependencies.learningBatches.removeSource({ ownerId: authenticated.value.ownerId, sourceId: result.value.id, idempotencyKey: `source-content-remove:${result.value.id}:${result.value.revision}` });
+          if (!removed.ok) return learningBatchFailureResponse(removed.error);
+        }
+        /** @type {Result<{ readonly runId: string, readonly reused: boolean }, { readonly kind: string }> | null} */
+        let workflowStart = null;
+        if (result.ok && sourceAction === "approve" && dependencies.knowledgeWorkflow !== null && dependencies.knowledgeWorkflow !== undefined) {
+          const rightsProfile = dependencies.sourceRightsProfileFor?.(result.value.source.canonicalUrl) ?? null;
+          workflowStart = await dependencies.knowledgeWorkflow.start({ ownerId: authenticated.value.ownerId, sourceId: result.value.source.id, sourceRevision: result.value.source.revision, canonicalSourceIdentity: result.value.source.canonicalUrl, contentSignature: `source-revision:${result.value.source.canonicalUrl}:${result.value.source.revision}`, configDigests: {}, idempotencyKey: `knowledge-workflow:${result.value.source.id}:${result.value.source.revision}`, rightsProfile });
+          if (!workflowStart.ok) return knowledgeWorkflowFailureResponse(workflowStart.error);
+        }
+        if (result.ok && sourceAction === "approve" && workflowStart === null && !result.value.reused && result.value.job !== null && dependencies.sourceIngestion !== null && dependencies.sourceIngestion !== undefined && result.value.source.adapter.capabilities.includes("bounded-ingestion")) {
           const work = dependencies.sourceIngestion.run({ ownerId: authenticated.value.ownerId, jobId: result.value.job.id });
           const observed = work.then((outcome) => {
             if (!outcome.ok) console.error(JSON.stringify({ event: "source-library-automatic-ingestion-failure", failureKind: outcome.error.kind }));
@@ -259,10 +551,16 @@ export function createDiscoveryWorker(configuration, dependencies) {
         }
         return result.ok
           ? json(
-            { ownerId: authenticated.value.ownerId, result: result.value },
+            { ownerId: authenticated.value.ownerId, result: result.value, ...(workflowStart === null ? {} : { workflow: workflowStart.value }) },
             200,
           )
           : sourceFailureResponse(result.error);
+      }
+      if (knowledgeWorkflowControl) {
+        if (dependencies.knowledgeWorkflow == null) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return knowledgeWorkflowFailureResponse({ kind: "WorkflowCommandInvalid" });
+        const result = await dependencies.knowledgeWorkflow.control(Object.freeze({ ...document, ownerId: authenticated.value.ownerId }));
+        return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : knowledgeWorkflowFailureResponse(result.error);
       }
       if (learningReview || learningRevocation) {
         if (dependencies.learningGeneration == null) return json({ error: "LearningGenerationUnavailable" }, 503);
@@ -307,24 +605,34 @@ export function createDiscoveryWorker(configuration, dependencies) {
           : ingestionFailureResponse(result.error);
       }
       if (sourceSuppressionCheck || sourceActiveCheck) {
+        const catalog = dependencies.sourceCatalog;
+        if (catalog == null) return sourceFailureResponse({ kind: "SourceCatalogReadFailed" });
         if (!isRecord(document) || Object.hasOwn(document, "ownerId")) {
           return sourceFailureResponse({
             kind: "SourceCatalogCommandInvalid",
             field: "body",
           });
         }
-        const result = sourceActiveCheck
-          ? await dependencies.sourceCatalog?.active({
+        const result = await runBoundedDependency({
+          operation: sourceActiveCheck ? "source-catalog-active" : "source-catalog-suppressed",
+          ownerId: authenticated.value.ownerId,
+          timeoutMs: maximumBackendOperationMs,
+          invoke: () => sourceActiveCheck
+            ? catalog.active({
             ...document,
             ownerId: authenticated.value.ownerId,
           })
-          : await dependencies.sourceCatalog?.suppressed({
+            : catalog.suppressed({
             ...document,
             ownerId: authenticated.value.ownerId,
-          });
-        if (result === undefined) {
-          return sourceFailureResponse({ kind: "SourceCatalogReadFailed" });
-        }
+          }),
+          validate: isStringArray,
+          itemCount: (value) => Array.isArray(value) ? value.length : undefined,
+          timeoutFailureKind: "SourceCatalogDependencyTimedOut",
+          dependencyFailureKind: "SourceCatalogDependencyFailed",
+          invalidFailureKind: "SourceCatalogResponseInvalid",
+          emit,
+        });
         return result.ok
           ? json(
             { ownerId: authenticated.value.ownerId, result: result.value },
@@ -360,8 +668,208 @@ export function createDiscoveryWorker(configuration, dependencies) {
         { ownerId: authenticated.value.ownerId, result: acquired.value },
         200,
       );
+  }
+  return Object.freeze({
+    /** @param {Request} request */
+    async fetch(request) {
+      const correlationId = createRequestId();
+      const requestUrl = new URL(request.url);
+      const route = requestRouteLabel(requestUrl.pathname);
+      const method = requestMethodLabel(request.method);
+      /** @type {string | undefined} */
+      let ownerId;
+      /** @type {(entry: Omit<DiscoveryRequestLogEntry, "correlationId" | "route" | "method">) => Result<null, { readonly kind: "DiscoveryRequestLoggingFailed", readonly causeKind: "DiscoveryRequestLogEntryInvalid" | "DiscoveryRequestLogTimestampInvalid" | "DiscoveryRequestLoggerResultInvalid" | "DiscoveryRequestLoggerThrew" }> } */
+      const emit = (entry) => {
+        let result;
+        try { result = requestLogger({ ...entry, correlationId, route, method }); } catch (error) {
+          return { ok: false, error: { kind: "DiscoveryRequestLoggingFailed", causeKind: "DiscoveryRequestLoggerThrew" } };
+        }
+        if (!isRecord(result) || typeof result.ok !== "boolean") return { ok: false, error: { kind: "DiscoveryRequestLoggingFailed", causeKind: "DiscoveryRequestLoggerResultInvalid" } };
+        if (result.ok) return { ok: true, value: null };
+        if (!isRecord(result.error)) return { ok: false, error: { kind: "DiscoveryRequestLoggingFailed", causeKind: "DiscoveryRequestLoggerResultInvalid" } };
+        const causeKind = result.error.kind;
+        return causeKind === "DiscoveryRequestLogEntryInvalid" || causeKind === "DiscoveryRequestLogTimestampInvalid"
+          ? { ok: false, error: { kind: "DiscoveryRequestLoggingFailed", causeKind } }
+          : { ok: false, error: { kind: "DiscoveryRequestLoggingFailed", causeKind: "DiscoveryRequestLoggerResultInvalid" } };
+      };
+      const entryLogged = emit({ event: "request-entry" });
+      if (!entryLogged.ok) return attachRequestId(failureResponse(entryLogged.error), correlationId);
+      try {
+        const response = await handleRequest(
+          request,
+          (authenticatedOwnerId) => { ownerId = authenticatedOwnerId; },
+          emit,
+        );
+        const logged = emit({
+          event: response.status >= 400 ? "request-failure" : "request-success",
+          ...(ownerId === undefined ? {} : { ownerId }),
+          status: response.status,
+        });
+        if (!logged.ok) return attachRequestId(failureResponse(logged.error), correlationId);
+        return attachRequestId(response, correlationId);
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        const logged = emit({
+          event: "request-failure",
+          ...(ownerId === undefined ? {} : { ownerId }),
+          status: 500,
+          failureKind: "DiscoveryUnhandledError",
+        });
+        if (!logged.ok) return attachRequestId(failureResponse(logged.error), correlationId);
+        return attachRequestId(json({ error: "DiscoveryInternalFailure", correlationId }, 500), correlationId);
+      }
     },
   });
+}
+
+/** @param {Response} response @param {string} correlationId @returns {Response} */
+function attachRequestId(response, correlationId) {
+  const headers = new Headers(response.headers);
+  headers.set("x-resonance-request-id", correlationId);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+/** @param {unknown} value @returns {value is Result<AccessIdentity, WorkerFailure>} */
+function isAuthenticationResult(value) {
+  if (!isRecord(value) || typeof value.ok !== "boolean") return false;
+  if (value.ok) return isRecord(value.value) && isNonEmptyText(value.value.ownerId) && isNonEmptyText(value.value.email);
+  return isRecord(value.error) && isNonEmptyText(value.error.kind);
+}
+
+/** @param {string} pathname @returns {string} */
+function requestRouteLabel(pathname) {
+  if (pathname === "/api/source-library") return "source-library-browse";
+  if (pathname === "/api/source-library/search") return "source-library-search";
+  if (pathname === "/api/knowledge-workflows/status") return "knowledge-workflow-status";
+  if (pathname === "/api/knowledge-workflows/source-status") return "knowledge-workflow-source-status";
+  if (pathname.startsWith("/api/source-library/")) return "source-library";
+  if (pathname.startsWith("/api/knowledge-workflows/")) return "knowledge-workflow";
+  if (pathname.startsWith("/api/learning-generation/")) return "learning-generation";
+  if (pathname.startsWith("/api/discovery/")) return "discovery";
+  return "other-api";
+}
+
+/** @param {string} method @returns {string} */
+function requestMethodLabel(method) {
+  return /^[A-Z]{1,16}$/u.test(method) ? method : "OTHER";
+}
+
+/** @param {unknown} value @returns {value is { readonly ok: boolean, readonly value?: unknown, readonly error?: { readonly kind: string } }} */
+function isResultEnvelope(value) {
+  return isRecord(value) && typeof value.ok === "boolean" && (value.ok
+    ? Object.hasOwn(value, "value")
+    : isRecord(value.error) && isNonEmptyText(value.error.kind));
+}
+
+/** @param {unknown} value @returns {value is SourceCatalogPage} */
+function isSourceCatalogPage(value) {
+  return isRecord(value) && Array.isArray(value.items) && value.items.every(isLibrarySourceRecord) && Array.isArray(value.interestAreas) && value.interestAreas.every(isInterestAreaRecord) && (value.nextCursor === null || typeof value.nextCursor === "string");
+}
+
+/** @param {unknown} value @returns {value is readonly SourceSearchHit[]} */
+function isSourceSearchResults(value) {
+  return Array.isArray(value) && value.every((entry) => isRecord(entry) && isLibrarySourceRecord(entry.source) && typeof entry.score === "number" && Number.isFinite(entry.score));
+}
+
+/** @param {unknown} value @returns {value is readonly KnowledgeSearchHit[]} */
+function isKnowledgeSearchResults(value) {
+  return Array.isArray(value) && value.every((entry) => isRecord(entry) && isRecord(entry.knowledge) && isNonEmptyText(entry.knowledge.knowledgeId) && isNonEmptyText(entry.knowledge.sourceId) && isNonEmptyText(entry.knowledge.sourceTitle) && isNonEmptyText(entry.knowledge.summary) && isPublicHttpsUrl(entry.knowledge.sourceUrl) && Array.isArray(entry.knowledge.evidenceAnchorIds) && entry.knowledge.evidenceAnchorIds.every(isNonEmptyText) && typeof entry.knowledge.questionLocked === "boolean" && typeof entry.score === "number" && Number.isFinite(entry.score) && (entry.matchedBy === "exact" || entry.matchedBy === "semantic" || entry.matchedBy === "combined"));
+}
+
+/** @param {unknown} value @returns {value is LibrarySource} */
+function isLibrarySourceRecord(value) {
+  return isRecord(value) && isNonEmptyText(value.id) && isNonEmptyText(value.ownerId) && isPublicHttpsUrl(value.submittedUrl) && isPublicHttpsUrl(value.canonicalUrl) && isNonEmptyText(value.title) && isNonEmptyText(value.description) && isRecord(value.adapter) && isNonEmptyText(value.adapter.id) && isNonEmptyText(value.adapter.version) && isNonEmptyText(value.adapter.granularity) && Array.isArray(value.adapter.capabilities) && value.adapter.capabilities.every(isNonEmptyText) && Array.isArray(value.interestAreaIds) && value.interestAreaIds.every(isNonEmptyText) && Array.isArray(value.identityEvidence) && value.state === "active" && isIsoDateTime(value.approvedAt) && isIsoDateTime(value.updatedAt) && isPositiveInteger(value.revision);
+}
+
+/** @param {unknown} value @returns {value is { readonly id: string, readonly ownerId: string, readonly title: string, readonly provenance: string }} */
+function isInterestAreaRecord(value) {
+  return isRecord(value) && isNonEmptyText(value.id) && isNonEmptyText(value.ownerId) && isNonEmptyText(value.title) && isNonEmptyText(value.provenance);
+}
+
+/** @param {unknown} value @returns {value is string} */
+function isPublicHttpsUrl(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && parsed.username === "" && parsed.password === "" && parsed.hostname !== "";
+  } catch (error) {
+    if (error instanceof TypeError) return false;
+    throw error;
+  }
+}
+
+/** @param {unknown} value @returns {value is string} */
+function isIsoDateTime(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+/** @param {unknown} value @returns {value is readonly string[]} */
+function isStringArray(value) {
+  return Array.isArray(value) && value.every(isNonEmptyText);
+}
+
+/** @param {unknown} value @returns {number | undefined} */
+function sourceCatalogItemCount(value) {
+  return isSourceCatalogPage(value) ? value.items.length : undefined;
+}
+
+/** @param {unknown} value @returns {number | undefined} */
+function sourceSearchItemCount(value) {
+  return Array.isArray(value) ? value.length : undefined;
+}
+
+/**
+ * Execute one backend dependency with a hard wall-clock bound and a runtime
+ * Result-envelope check. The dependency promise may finish later, but its
+ * response is never allowed to hold the request open past the bound.
+ *
+ * @param {{ readonly operation: string, readonly ownerId?: string, readonly sourceId?: string, readonly runId?: string, readonly timeoutMs: number, readonly invoke: () => Promise<unknown>, readonly validate: (value: unknown) => boolean, readonly itemCount?: (value: unknown) => number | undefined, readonly timeoutFailureKind: string, readonly dependencyFailureKind: string, readonly invalidFailureKind: string, readonly emit: (entry: Omit<DiscoveryRequestLogEntry, "correlationId" | "route" | "method">) => Result<null, { readonly kind: string }> }} options
+ * @returns {Promise<Result<unknown, { readonly kind: string }>>}
+ */
+async function runBoundedDependency(options) {
+  const entryLogged = options.emit({ event: "dependency-entry", operation: options.operation, ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }), ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }), ...(options.runId === undefined ? {} : { runId: options.runId }) });
+  if (!entryLogged.ok) return entryLogged;
+  const timeoutMarker = Symbol("dependency-timeout");
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(timeoutMarker), options.timeoutMs);
+  });
+  try {
+    const observed = await Promise.race([Promise.resolve().then(options.invoke), timeout]);
+    if (observed === timeoutMarker) {
+      const logged = options.emit({ event: "dependency-failure", operation: options.operation, failureKind: options.timeoutFailureKind, ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }), ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }), ...(options.runId === undefined ? {} : { runId: options.runId }) });
+      if (!logged.ok) return logged;
+      return { ok: false, error: { kind: options.timeoutFailureKind } };
+    }
+    if (!isResultEnvelope(observed)) {
+      const logged = options.emit({ event: "dependency-failure", operation: options.operation, failureKind: options.invalidFailureKind, ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }), ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }), ...(options.runId === undefined ? {} : { runId: options.runId }) });
+      if (!logged.ok) return logged;
+      return { ok: false, error: { kind: options.invalidFailureKind } };
+    }
+    if (!observed.ok) {
+      const dependencyError = isRecord(observed.error) && isNonEmptyText(observed.error.kind) ? observed.error.kind : null;
+      const failureKind = dependencyError !== null && /^[A-Za-z0-9._:-]{1,128}$/u.test(dependencyError) ? dependencyError : options.invalidFailureKind;
+      const logged = options.emit({ event: "dependency-failure", operation: options.operation, failureKind, ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }), ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }), ...(options.runId === undefined ? {} : { runId: options.runId }) });
+      if (!logged.ok) return logged;
+      return { ok: false, error: { kind: failureKind } };
+    }
+    if (!options.validate(observed.value)) {
+      const logged = options.emit({ event: "dependency-failure", operation: options.operation, failureKind: options.invalidFailureKind, ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }), ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }), ...(options.runId === undefined ? {} : { runId: options.runId }) });
+      if (!logged.ok) return logged;
+      return { ok: false, error: { kind: options.invalidFailureKind } };
+    }
+    const itemCount = options.itemCount?.(observed.value);
+    const logged = options.emit({ event: "dependency-success", operation: options.operation, ...(itemCount === undefined ? {} : { itemCount }), ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }), ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }), ...(options.runId === undefined ? {} : { runId: options.runId }) });
+    if (!logged.ok) return logged;
+    return { ok: true, value: observed.value };
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    const logged = options.emit({ event: "dependency-failure", operation: options.operation, failureKind: options.dependencyFailureKind, ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }), ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }), ...(options.runId === undefined ? {} : { runId: options.runId }) });
+    if (!logged.ok) return logged;
+    return { ok: false, error: { kind: options.dependencyFailureKind } };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** @param {{ readonly kind: string, readonly failures?: readonly unknown[] }} failure */
@@ -424,6 +932,10 @@ function failureResponse(failure) {
     : failure.kind === "DiscoveryRequestTooLarge" ||
         failure.kind === "DiscoveryPayloadTooLarge"
     ? 413
+    : failure.kind === "DiscoveryAuthenticationFailed"
+    ? 503
+    : failure.kind === "DiscoveryRequestLoggingFailed"
+    ? 503
     : failure.kind === "DiscoveryFetchTimedOut"
     ? 504
     : failure.kind === "DiscoveryFetchUnavailable" ||
@@ -439,7 +951,7 @@ function failureResponse(failure) {
   return json({ error: failure.kind }, status);
 }
 
-/** @param {SourceLibraryFailure} failure */
+/** @param {{ readonly kind: string, readonly field?: string, readonly sourceId?: string, readonly state?: string, readonly revision?: number }} failure */
 function sourceFailureResponse(failure) {
   const status = failure.kind === "SourceOwnerMismatch" ||
       failure.kind === "SourceCursorOwnerMismatch"
@@ -460,13 +972,26 @@ function sourceFailureResponse(failure) {
         failure.kind === "SourceDisablePersistenceFailed" ||
         failure.kind === "SourceSuppressionFailed" ||
         failure.kind === "SourceCatalogReadFailed" ||
+        failure.kind === "SourceCatalogDependencyFailed" ||
+        failure.kind === "SourceCatalogResponseInvalid" ||
         failure.kind === "SourceKeywordSearchUnavailable" ||
         failure.kind === "SourceEmbeddingUnavailable" ||
         failure.kind === "SourceSemanticIndexUnavailable" ||
+        failure.kind === "SourceSemanticConsentRequired" ||
         failure.kind === "SourceSemanticIndexOutOfSync"
     ? 503
+    : failure.kind === "SourceCatalogDependencyTimedOut"
+    ? 504
+    : failure.kind === "DiscoveryRequestLoggingFailed"
+    ? 503
     : 400;
-  return json({ error: failure.kind }, status);
+  const conflict = failure.kind === "SourceStateConflict" &&
+      typeof failure.sourceId === "string" && failure.sourceId.trim() !== "" &&
+      (failure.state === "active" || failure.state === "disabled") &&
+      typeof failure.revision === "number" && Number.isInteger(failure.revision) && failure.revision >= 1
+    ? { sourceId: failure.sourceId, state: failure.state, revision: failure.revision }
+    : {};
+  return json({ error: failure.kind, ...conflict }, status);
 }
 
 /** @param {RightsApprovalFailure} failure */
@@ -491,6 +1016,22 @@ function ingestionFailureResponse(failure) {
   return json({ error: failure.kind }, status);
 }
 
+/** @param {unknown} value @returns {readonly Record<string, unknown>[] | null} */
+function publicPublishedQuizzes(value) {
+  if (!Array.isArray(value)) return null;
+  const quizzes = [];
+  for (const task of value) {
+    if (!isRecord(task) || !isNonEmptyText(task.id) || !isNonEmptyText(task.prompt) || !isNonEmptyText(task.explanation) || !isNonEmptyText(task.kind) || task.status !== "published" || !isPositiveInteger(task.revision) || !Array.isArray(task.sourceAnchorIds) || task.sourceAnchorIds.length === 0 || task.sourceAnchorIds.some((anchor) => !isNonEmptyText(anchor))) return null;
+    if (task.choices !== null && (!Array.isArray(task.choices) || task.choices.length === 0 || task.choices.some((choice) => !isRecord(choice) || !isNonEmptyText(choice.id) || !isNonEmptyText(choice.label)))) return null;
+    if (task.correctChoiceIds !== null && (!Array.isArray(task.correctChoiceIds) || task.correctChoiceIds.length === 0 || task.correctChoiceIds.some((id) => !isNonEmptyText(id)))) return null;
+    const sourceAnchorIds = /** @type {string[]} */ (task.sourceAnchorIds);
+    const choices = task.choices === null ? null : /** @type {{ readonly id: string, readonly label: string }[]} */ (task.choices);
+    const correctChoiceIds = task.correctChoiceIds === null ? null : /** @type {string[]} */ (task.correctChoiceIds);
+    quizzes.push(Object.freeze({ id: task.id, kind: task.kind, prompt: task.prompt, explanation: task.explanation, sourceAnchorIds: Object.freeze([...sourceAnchorIds]), choices: choices === null ? null : Object.freeze(choices.map((choice) => Object.freeze({ id: choice.id, label: choice.label }))), correctChoiceIds: correctChoiceIds === null ? null : Object.freeze([...correctChoiceIds]), status: "published", revision: task.revision }));
+  }
+  return Object.freeze(quizzes);
+}
+
 /** @param {{ readonly kind: string }} failure */
 function learningGenerationFailureResponse(failure) {
   const status = failure.kind === "LearningReviewTaskUnknown"
@@ -500,6 +1041,187 @@ function learningGenerationFailureResponse(failure) {
     : failure.kind.endsWith("PersistenceFailed") || failure.kind === "LearningProviderUnavailable" || failure.kind === "LearningProviderTimeout" || failure.kind === "LearningProviderCredentialMissing" || failure.kind === "LearningBudgetExceeded"
     ? 503
     : 400;
+  return json({ error: failure.kind }, status);
+}
+
+/** @param {{ readonly kind: string }} failure */
+function learningBatchFailureResponse(failure) {
+  const status = failure.kind === "KnowledgePairNotFound"
+    ? 404
+    : failure.kind === "LearningBatchIncomplete" ||
+        failure.kind === "LearningBatchAlreadyClosed" ||
+        failure.kind === "ReviewRefreshLocked" ||
+        failure.kind === "ReviewAnswerNotAllowed"
+    ? 409
+    : failure.kind === "LearningBatchUnavailable" ||
+        failure.kind === "LearningBatchPersistenceFailed" ||
+        failure.kind === "KnowledgePurgeFailed" ||
+        failure.kind === "LearningPreferencePersistenceFailed"
+    ? 503
+    : 400;
+  return json({ error: failure.kind }, status);
+}
+
+/** @param {{ readonly kind: string }} failure */
+function knowledgeWorkflowFailureResponse(failure) {
+  const status = failure.kind === "WorkflowNotFound"
+    ? 404
+    : failure.kind === "WorkflowControlStale" || failure.kind === "WorkflowIdempotencyConflict" || failure.kind === "WorkflowControlInvalid" || failure.kind === "WorkflowMaterialIdempotencyConflict" || failure.kind === "WorkflowMaterialConflict"
+    ? 409
+    : failure.kind === "KnowledgeWorkflowUnavailable" || failure.kind === "KnowledgeWorkflowDependencyFailed" || failure.kind === "KnowledgeWorkflowResultInvalid" || failure.kind === "WorkflowPersistenceFailed" || failure.kind === "WorkflowStatusProjectionInvalid" || failure.kind === "WorkflowSourceStatusProjectionInvalid" || failure.kind === "WorkflowCleanupFailed" || failure.kind === "WorkflowInstanceControlFailed" || failure.kind === "WorkflowInstanceEventFailed" || failure.kind === "WorkflowMaterialPersistenceFailed" || failure.kind === "WorkflowMaterialStorageFailed" || failure.kind === "WorkflowMaterialCleanupFailed" || failure.kind === "WorkflowMaterialAttachFailed" || failure.kind === "BackfillResponseInvalid" || failure.kind === "BackfillSourceListFailed" || failure.kind === "BackfillSourceInvalid" || failure.kind === "BackfillStartFailed" || failure.kind === "BackfillReuseInvalidationFailed" || failure.kind === "BackfillMarkerReadFailed" || failure.kind === "BackfillMarkerWriteFailed" || failure.kind === "BackfillContentResetFailed" || failure.kind === "ReplayResponseInvalid" || failure.kind === "ReplaySourceListFailed" || failure.kind === "ReplaySourceInvalid" || failure.kind === "ReplayStartFailed" || failure.kind === "ReplayReuseInvalidationFailed" || failure.kind === "ReplayMarkerReadFailed" || failure.kind === "ReplayMarkerWriteFailed" || failure.kind === "ReplayContentResetFailed"
+    ? 503
+    : failure.kind === "KnowledgeWorkflowDependencyTimedOut"
+    ? 504
+    : failure.kind === "DiscoveryRequestLoggingFailed"
+    ? 503
+    : 400;
+  return json({ error: failure.kind }, status);
+}
+
+/** @param {unknown} value @param {string} ownerId @returns {{ readonly status: "completed" | "already-completed", readonly ownerId: string, readonly sourceCount: number, readonly runIds: readonly string[] } | null} */
+function publicBackfillResult(value, ownerId) {
+  if (!isRecord(value) || value.ownerId !== ownerId || (value.status !== "completed" && value.status !== "already-completed") || !(typeof value.sourceCount === "number" && Number.isSafeInteger(value.sourceCount) && value.sourceCount >= 0) || !Array.isArray(value.runIds) || value.runIds.length > 1_000 || !value.runIds.every(isNonEmptyText)) return null;
+  return Object.freeze({ status: value.status, ownerId, sourceCount: value.sourceCount, runIds: Object.freeze([...value.runIds]) });
+}
+
+/** @param {unknown} value @param {string} ownerId @returns {{ readonly status: "completed" | "already-completed", readonly ownerId: string, readonly sourceCount: number, readonly runIds: readonly string[], readonly blockedSources: readonly { readonly sourceId: string, readonly title: string, readonly reasonCode: string, readonly message: string }[] } | null} */
+function publicReplayResult(value, ownerId) {
+  if (!isRecord(value) || value.ownerId !== ownerId || (value.status !== "completed" && value.status !== "already-completed") || !(typeof value.sourceCount === "number" && Number.isSafeInteger(value.sourceCount) && value.sourceCount >= 0) || !Array.isArray(value.runIds) || value.runIds.length > 1_000 || !value.runIds.every(isNonEmptyText) || !Array.isArray(value.blockedSources) || value.blockedSources.length > value.sourceCount) return null;
+  const blockedSources = [];
+  for (const source of value.blockedSources) {
+    if (!isRecord(source) || !isNonEmptyText(source.sourceId) || !isNonEmptyText(source.title) || !isNonEmptyText(source.reasonCode) || !isNonEmptyText(source.message)) return null;
+    blockedSources.push(Object.freeze({ sourceId: source.sourceId, title: source.title, reasonCode: source.reasonCode, message: source.message }));
+  }
+  return Object.freeze({ status: value.status, ownerId, sourceCount: value.sourceCount, runIds: Object.freeze([...value.runIds]), blockedSources: Object.freeze(blockedSources) });
+}
+
+/** @param {string | null} failureKind @param {string} state @returns {{ readonly reasonCode: "paywall-or-login" | "robots-blocked" | "robots-check-unavailable" | "audio-video-transcription-unavailable" | "rights-not-verified" | "upload-content" | "retryable-failure", readonly message: string } | null} */
+function workflowStatusReason(failureKind, state) {
+  const normalized = (failureKind ?? "").toLowerCase();
+  if (/extractionplaninvalid/u.test(normalized)) return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped because the planner returned an invalid ExtractionPlan after one correction attempt (ExtractionPlanInvalid). Retry processing to try again." });
+  if (state === "retryable-failure") return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped because the workflow encountered a retryable error. Retry processing to try again." });
+  if (/paywall|authentication|login|authenticated/u.test(normalized)) return Object.freeze({ reasonCode: "paywall-or-login", message: "This source could not be scraped because it is behind a paywall or requires sign-in. Upload authorized text, PDF, PPTX, or a transcript instead." });
+  if (/audio|video|transcri/u.test(normalized)) return Object.freeze({ reasonCode: "audio-video-transcription-unavailable", message: "This source contains audio or video, but native audio/video transcription is not available yet. Upload an authorized transcript or text/document instead." });
+  if (/robotsdenied|robotsblocked/u.test(normalized)) return Object.freeze({ reasonCode: "robots-blocked", message: "This source cannot be scraped because its robots policy blocks the workflow. Upload authorized text, PDF, PPTX, or a transcript instead." });
+  if (/robotstargetunavailable/u.test(normalized)) return Object.freeze({ reasonCode: "robots-check-unavailable", message: "The source's robots.txt returned HTTP 403 and the source page could not be reached by the browser. Upload authorized text, PDF, PPTX, or a transcript instead." });
+  if (/robots/u.test(normalized)) return Object.freeze({ reasonCode: "robots-check-unavailable", message: "This source's robots.txt could not be verified. Upload authorized text, PDF, PPTX, or a transcript instead." });
+  if (state === "awaiting-upload" || /rights|upload|required|registry/u.test(normalized)) return Object.freeze({ reasonCode: "rights-not-verified", message: "Automatic scraping is blocked because permission or access evidence is not verified. Upload authorized text, PDF, PPTX, or a transcript instead." });
+  return null;
+}
+
+/** @param {unknown} value @param {string} ownerId @param {string | undefined} nowValue @returns {{ readonly sourceId: string, readonly run: ReturnType<typeof publicWorkflowStatus>, readonly reasonCode: string | null, readonly message: string | null } | null} */
+function publicSourceWorkflowStatus(value, ownerId, nowValue) {
+  if (!isRecord(value) || value.ownerId !== undefined && value.ownerId !== ownerId || !isNonEmptyText(value.sourceId) || (value.run !== null && !isRecord(value.run))) return null;
+  const run = value.run === null ? null : publicWorkflowStatus(value.run, nowValue);
+  if (value.run !== null && run === null) return null;
+  const reason = run === null ? null : workflowStatusReason(run.failureKind, run.state);
+  return Object.freeze({ sourceId: value.sourceId, run, reasonCode: reason?.reasonCode ?? null, message: reason?.message ?? null });
+}
+
+/** @param {unknown} value @returns {{ readonly robotsUrl: string, readonly targetUrl: string, readonly httpStatus: number, readonly availability: "present" | "absent" | "unavailable", readonly content: string, readonly checkedAt: string, readonly matchedRule: string | null } | null} */
+function publicRobotsEvidence(value) {
+  if (!isWorkflowRobotsEvidence(value)) return null;
+  return Object.freeze({ robotsUrl: value.robotsUrl, targetUrl: value.targetUrl, httpStatus: value.httpStatus, availability: value.availability, content: value.content, checkedAt: value.checkedAt, matchedRule: value.matchedRule });
+}
+
+/** @param {unknown} value @param {string | undefined} nowValue @returns {{ readonly runId: string, readonly state: string, readonly revision: number, readonly counts: { readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }, readonly extractionStartedAt: string | null, readonly extractionDeadlineAt: string | null, readonly elapsedMs: number | null, readonly remainingMs: number | null, readonly decisionRequired: string | null, readonly failureKind: string | null, readonly robotsEvidence: ReturnType<typeof publicRobotsEvidence> } | null} */
+function publicWorkflowStatus(value, nowValue) {
+  if (!isRecord(value) || !isNonEmptyText(value.runId) || !isNonEmptyText(value.state) || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1 || !isRecord(value.counts)) return null;
+  const revision = value.revision;
+  const counts = value.counts;
+  const countValues = [counts.pages, counts.knowledgePoints, counts.acceptedQuizzes, counts.pendingQuizzes];
+  if (!countValues.every((count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0) || (value.extractionStartedAt !== null && !isNonEmptyText(value.extractionStartedAt)) || (value.extractionDeadlineAt !== null && !isNonEmptyText(value.extractionDeadlineAt)) || (value.decisionRequired !== null && !isNonEmptyText(value.decisionRequired)) || (value.failureKind !== null && !isNonEmptyText(value.failureKind))) return null;
+  const pages = /** @type {number} */ (counts.pages);
+  const knowledgePoints = /** @type {number} */ (counts.knowledgePoints);
+  const acceptedQuizzes = /** @type {number} */ (counts.acceptedQuizzes);
+  const pendingQuizzes = /** @type {number} */ (counts.pendingQuizzes);
+  let elapsedMs = null;
+  let remainingMs = null;
+  if (value.extractionStartedAt !== null || value.extractionDeadlineAt !== null) {
+    if (nowValue === undefined || !isNonEmptyText(nowValue) || !Number.isFinite(Date.parse(nowValue)) || value.extractionStartedAt === null || value.extractionDeadlineAt === null) return null;
+    const nowMs = Date.parse(nowValue);
+    const startedMs = Date.parse(value.extractionStartedAt);
+    const deadlineMs = Date.parse(value.extractionDeadlineAt);
+    if (!Number.isFinite(nowMs) || !Number.isFinite(startedMs) || !Number.isFinite(deadlineMs) || deadlineMs < startedMs) return null;
+    elapsedMs = Math.max(0, nowMs - startedMs);
+    remainingMs = Math.max(0, deadlineMs - nowMs);
+  }
+  const robotsEvidence = value.robotsEvidence === undefined || value.robotsEvidence === null ? null : publicRobotsEvidence(value.robotsEvidence);
+  if (value.robotsEvidence !== undefined && value.robotsEvidence !== null && robotsEvidence === null) return null;
+  return Object.freeze({ runId: value.runId, state: value.state, revision, counts: Object.freeze({ pages, knowledgePoints, acceptedQuizzes, pendingQuizzes }), extractionStartedAt: value.extractionStartedAt, extractionDeadlineAt: value.extractionDeadlineAt, elapsedMs, remainingMs, decisionRequired: value.decisionRequired, failureKind: value.failureKind, robotsEvidence });
+}
+
+/** @param {Request} request @param {number} maximumRequestBytes @param {number} maximumMaterialBytes @returns {Promise<Result<Record<string, unknown> & { readonly bytes: Uint8Array }, { readonly kind: string }>>} */
+async function readWorkflowMaterialRequest(request, maximumRequestBytes, maximumMaterialBytes) {
+  const contentType = (request.headers.get("content-type") ?? "").toLowerCase();
+  if (contentType.startsWith("multipart/form-data")) {
+    let form;
+    try { form = await request.formData(); } catch (error) { return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } }; }
+    const file = form.get("file") ?? form.get("material");
+    const textContent = form.get("content");
+    let bytes;
+    let fileName = stringFormValue(form, "fileName") ?? "pasted-text.txt";
+    let mediaType = stringFormValue(form, "mediaType") ?? "text/plain";
+    if (file instanceof Blob) {
+      if (file.size > maximumMaterialBytes) return { ok: false, error: { kind: "MaterialByteLimitExceeded" } };
+      try { bytes = new Uint8Array(await file.arrayBuffer()); } catch (error) { return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } }; }
+      if (file instanceof File && file.name.trim() !== "") fileName = file.name;
+      if (file.type.trim() !== "") mediaType = file.type;
+    } else if (typeof textContent === "string") {
+      bytes = new TextEncoder().encode(textContent);
+      if (bytes.byteLength > maximumMaterialBytes) return { ok: false, error: { kind: "MaterialByteLimitExceeded" } };
+    } else return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
+    const parsed = formRightsAttestation(form);
+    if (!parsed.ok) return parsed;
+    const mode = stringFormValue(form, "mode") ?? "text";
+    if (mode !== "text" && mode !== "image") return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
+    const command = Object.freeze({ runId: stringFormValue(form, "runId"), sourceId: stringFormValue(form, "sourceId"), sourceRevision: Number(stringFormValue(form, "sourceRevision")), sourceUrl: stringFormValue(form, "sourceUrl"), mediaType, fileName, mode, idempotencyKey: stringFormValue(form, "idempotencyKey"), rightsAttestation: parsed.value, bytes });
+    return { ok: true, value: /** @type {Record<string, unknown> & { readonly bytes: Uint8Array }} */ (command) };
+  }
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maximumRequestBytes) return { ok: false, error: { kind: "DiscoveryRequestTooLarge" } };
+  let body;
+  try {
+    const payload = await request.arrayBuffer();
+    if (payload.byteLength > maximumRequestBytes) return { ok: false, error: { kind: "DiscoveryRequestTooLarge" } };
+    body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload));
+  } catch (error) {
+    return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
+  }
+  if (!isRecord(body) || Object.hasOwn(body, "ownerId")) return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
+  let bytes;
+  if (typeof body.content === "string") bytes = new TextEncoder().encode(body.content);
+  else if (typeof body.bytesBase64 === "string") {
+    const decoded = decodeBase64(body.bytesBase64, maximumMaterialBytes);
+    if (decoded === null) return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
+    bytes = decoded;
+  } else return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
+  if (bytes.byteLength > maximumMaterialBytes) return { ok: false, error: { kind: "MaterialByteLimitExceeded" } };
+  const { content: _content, bytesBase64: _bytesBase64, ...metadata } = body;
+  const mode = metadata.mode === undefined ? "text" : metadata.mode;
+  if (mode !== "text" && mode !== "image") return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
+  return { ok: true, value: /** @type {Record<string, unknown> & { readonly bytes: Uint8Array }} */ ({ ...metadata, mode, bytes, mediaType: typeof metadata.mediaType === "string" ? metadata.mediaType : "text/plain", fileName: typeof metadata.fileName === "string" ? metadata.fileName : "pasted-text.txt" }) };
+}
+
+/** @param {FormData} form @param {string} name @returns {string | null} */
+function stringFormValue(form, name) { const value = form.get(name); return typeof value === "string" && value.trim() !== "" ? value.trim() : null; }
+/** @param {FormData} form @returns {Result<Record<string, unknown>, { readonly kind: string }>} */
+function formRightsAttestation(form) {
+  const encoded = stringFormValue(form, "rightsAttestation");
+  if (encoded !== null) {
+    try { const value = JSON.parse(encoded); return isRecord(value) ? { ok: true, value } : { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } }; } catch (error) { return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } }; }
+  }
+  return { ok: true, value: { ownsOrPermitted: form.get("ownsOrPermitted") === "true" || form.get("ownsOrPermitted") === "on", storageAllowed: form.get("storageAllowed") === "true" || form.get("storageAllowed") === "on", transformationAllowed: form.get("transformationAllowed") === "true" || form.get("transformationAllowed") === "on", processingAllowed: form.get("processingAllowed") === "true" || form.get("processingAllowed") === "on", basis: stringFormValue(form, "basis"), reference: stringFormValue(form, "reference") } };
+}
+/** @param {string} value @param {number} maximumBytes @returns {Uint8Array | null} */
+function decodeBase64(value, maximumBytes) {
+  if (value.length > Math.ceil(maximumBytes * 4 / 3) + 4 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value) || value.length % 4 === 1) return null;
+  try { const binary = atob(value); if (binary.length > maximumBytes) return null; const bytes = new Uint8Array(binary.length); for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index); return bytes; } catch (error) { return null; }
+}
+
+/** @param {{ readonly kind: string }} failure */
+function mediaFailureResponse(failure) {
+  const status = failure.kind === "MediaDerivativeNotFound" ? 404 : failure.kind === "MediaDerivativeRevoked" ? 410 : failure.kind === "LearningMediaUnavailable" ? 503 : 400;
   return json({ error: failure.kind }, status);
 }
 
@@ -517,3 +1239,11 @@ function json(body, status, headers = {}) {
 
 /** @param {unknown} value @returns {value is string} */
 function isNonEmptyText(value) { return typeof value === "string" && value.trim() !== ""; }
+/** @param {unknown} value @returns {value is number} */
+function isPositiveInteger(value) { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
+
+/** @param {string | undefined} value @returns {string} */
+function utcDay(value) {
+  const parsed = typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value) : new Date();
+  return parsed.toISOString().slice(0, 10);
+}

@@ -23,6 +23,8 @@ function worker(overrides = {}) {
     sourceIngestion: overrides.sourceIngestion ?? null,
     waitUntil: overrides.waitUntil,
     learningGeneration: overrides.learningGeneration ?? null,
+    knowledgeWorkflowBackfill: overrides.knowledgeWorkflowBackfill ?? null,
+    knowledgeWorkflowReplay: overrides.knowledgeWorkflowReplay ?? null,
   });
 }
 
@@ -168,4 +170,68 @@ Deno.test("review queue route is authenticated and returns bounded pending task 
   const body = /** @type {{ readonly result: { readonly tasks: readonly Record<string, unknown>[] } }} */ (await response.json());
   assertEquals(body.result.tasks[0].prompt, "Explain.");
   assertEquals(body.result.tasks[0].status, "pending-review");
+});
+
+Deno.test("published quiz route returns an authenticated, answerable projection without owner data", async () => {
+  const worker = createDiscoveryWorker({ allowedOrigin: "https://app.example", maximumCommandBytes: 4096 }, {
+    authenticate: async () => ({ ok: true, value: { ownerId: "owner-a", email: "member@example.test" } }),
+    acquireRss: async () => ({ ok: false, error: { kind: "DiscoveryFetchUnavailable" } }),
+    learningGeneration: {
+      status: async () => ({ ok: true, value: {} }),
+      review: {
+        decide: async () => ({ ok: true, value: {} }),
+        queue: async () => ({ ok: true, value: { sources: [], tasks: [] } }),
+        visible: async () => ({ ok: true, value: [{ id: "task-a", sourceId: "source-a", kind: "single-choice", prompt: "Which cadence resolves?", explanation: "The source evidence says authentic cadence.", sourceAnchorIds: ["unit-a:anchor"], choices: [{ id: "choice-a", label: "Authentic" }, { id: "choice-b", label: "Plagal" }], correctChoiceIds: ["choice-a"], expectedConcepts: ["cadence"], minimumWords: null, stimulus: null, responseKind: null, status: "published", revision: 2 }] }),
+      },
+      revoke: { revoke: async () => ({ ok: true, value: {} }) },
+    },
+  });
+  const response = await worker.fetch(new Request("https://worker.example/api/learning-generation/published", { headers: { origin: "https://app.example" } }));
+  if (response.status !== 200) throw new Error(`Unexpected status ${response.status}`);
+  const body = /** @type {Record<string, unknown>} */ (await response.json());
+  const result = /** @type {Record<string, unknown>[]} */ (body.result);
+  if (result.length !== 1 || result[0].prompt !== "Which cadence resolves?") throw new Error("Published quiz projection is missing.");
+  if (Object.hasOwn(result[0], "ownerId") || Object.hasOwn(result[0], "sourceId")) throw new Error("Published quiz projection leaked internal ownership or source identifiers.");
+});
+
+Deno.test("existing-Library backfill route injects the Access owner and exposes only the safe completion projection", async () => {
+  /** @type {unknown} */ let seenCommand = null;
+  const response = await worker({ knowledgeWorkflowBackfill: {
+    run: async (command) => {
+      seenCommand = command;
+      return { ok: true, value: { status: "completed", ownerId: "owner-a", sourceCount: 1, runIds: ["run-a"] } };
+    },
+  } }).fetch(request("/api/knowledge-workflows/backfill", { body: { confirmation: "MILESTONE_5_EXISTING_LIBRARY_BACKFILL", verificationMarker: "MILESTONE_5_LOCAL_VERIFIED" } }));
+  assertEquals(response.status, 200);
+  assertEquals(/** @type {{ readonly ownerId: string }} */ (seenCommand).ownerId, "owner-a");
+  const body = /** @type {{ readonly ownerId: string, readonly result: Record<string, unknown> }} */ (await response.json());
+  assertEquals(body.ownerId, "owner-a");
+  assertEquals(body.result.sourceCount, 1);
+  assertEquals("configDigests" in body.result, false);
+});
+
+Deno.test("existing-Library backfill route rejects caller-supplied ownership or deployment configuration", async () => {
+  let calls = 0;
+  const backfill = { run: async () => { calls += 1; return { ok: /** @type {const} */ (true), value: { status: "completed", ownerId: "owner-a", sourceCount: 0, runIds: [] } }; } };
+  const ownerResponse = await worker({ knowledgeWorkflowBackfill: backfill }).fetch(request("/api/knowledge-workflows/backfill", { body: { ownerId: "attacker", confirmation: "MILESTONE_5_EXISTING_LIBRARY_BACKFILL", verificationMarker: "MILESTONE_5_LOCAL_VERIFIED" } }));
+  const digestResponse = await worker({ knowledgeWorkflowBackfill: backfill }).fetch(request("/api/knowledge-workflows/backfill", { body: { configDigests: { scraper: "attacker" }, confirmation: "MILESTONE_5_EXISTING_LIBRARY_BACKFILL", verificationMarker: "MILESTONE_5_LOCAL_VERIFIED" } }));
+  assertEquals(ownerResponse.status, 400);
+  assertEquals(digestResponse.status, 400);
+  assertEquals(calls, 0);
+});
+
+Deno.test("existing-Library replay route injects the Access owner and exposes blocked-source explanations", async () => {
+  /** @type {unknown} */ let seenCommand = null;
+  const response = await worker({ knowledgeWorkflowReplay: {
+    run: async (command) => {
+      seenCommand = command;
+      return { ok: /** @type {const} */ (true), value: { status: "completed", ownerId: "owner-a", sourceCount: 2, runIds: ["run-a", "run-b"], blockedSources: [{ sourceId: "source-b", title: "Video lesson", reasonCode: "audio-video-transcription-unavailable", message: "Upload a transcript." }] } };
+    },
+  } }).fetch(request("/api/knowledge-workflows/replay", { body: { confirmation: "MILESTONE_5_EXISTING_LIBRARY_REPLAY", verificationMarker: "MILESTONE_5_REPLAY_LOCAL_VERIFIED" } }));
+  assertEquals(response.status, 200);
+  assertEquals(/** @type {{ readonly ownerId: string }} */ (seenCommand).ownerId, "owner-a");
+  const body = /** @type {{ readonly result: Record<string, unknown> }} */ (await response.json());
+  assertEquals(body.result.sourceCount, 2);
+  assertEquals(Array.isArray(body.result.blockedSources), true);
+  assertEquals("configDigests" in body.result, false);
 });

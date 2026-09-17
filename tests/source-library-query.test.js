@@ -47,7 +47,7 @@ const sources = Object.freeze([
   source("disabled", "2026-07-22T11:00:00.000Z", "disabled"),
 ]);
 
-/** @param {Partial<{ readonly catalogRevision: string, readonly decodeFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly embeddingFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly semanticFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly semanticHits: readonly { readonly sourceId: string, readonly ownerId: string, readonly score: number, readonly modelId: string, readonly modelVersion: string, readonly dimensions: number }[] }>} [options] */
+/** @param {Partial<{ readonly catalogRevision: string, readonly decodeFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly semanticFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly privateDerivedCount: number, readonly onSemanticRanker: () => void, readonly semanticHits: readonly { readonly sourceId: string, readonly ownerId: string, readonly score: number, readonly modelId: string, readonly modelVersion: string, readonly dimensions: number }[] }>} [options] */
 function fixture(options = {}) {
   const active = sources.filter((candidate) => candidate.state === "active");
   return new SourceCatalogQueryService({
@@ -85,6 +85,16 @@ function fixture(options = {}) {
             score: 1 - index / 10,
           })),
         }),
+      knowledgeKeywordSearch: ({ ownerId, query, limit }) => Promise.resolve({
+        ok: true,
+        value: ownerId === "owner-a" && query.toLowerCase().includes("cadence")
+          ? [{ knowledge: { knowledgeId: "knowledge-cadence", sourceId: "source-2", sourceTitle: "Source source-2", summary: "A cadence resolves harmonic tension.", sourceUrl: "https://publisher.example/source-2", evidenceAnchorIds: ["anchor-cadence"], questionLocked: true }, score: 1, matchedBy: /** @type {const} */ ("exact") }].slice(0, limit)
+          : [],
+      }),
+      knowledgeSemanticCandidates: ({ ownerId, limit }) => Promise.resolve({
+        ok: true,
+        value: { candidates: ownerId === "owner-a" ? [{ knowledge: { knowledgeId: "knowledge-cadence", sourceId: "source-2", sourceTitle: "Source source-2", summary: "A cadence resolves harmonic tension.", sourceUrl: "https://publisher.example/source-2", evidenceAnchorIds: ["anchor-cadence"], questionLocked: true }, sourceRevision: 1 }].slice(0, limit) : [], privateDerivedCount: options.privateDerivedCount ?? 0 },
+      }),
       activeByIds: ({ ownerId, sourceIds }) =>
         Promise.resolve({
           ok: true,
@@ -115,36 +125,8 @@ function fixture(options = {}) {
         return Promise.resolve({ ok: true, value: JSON.parse(atob(value)) });
       },
     },
-    embedding: {
-      create: () =>
-        options.embeddingFailure === undefined
-          ? Promise.resolve({
-            ok: true,
-            value: {
-              vector: [0.2, 0.8],
-              modelId: "local-model",
-              modelVersion: "1",
-              dimensions: 2,
-            },
-          })
-          : Promise.resolve({ ok: false, error: options.embeddingFailure }),
-    },
-    semanticIndex: {
-      search: () =>
-        options.semanticFailure === undefined
-          ? Promise.resolve({
-            ok: true,
-            value: options.semanticHits ?? [{
-              sourceId: "source-2",
-              ownerId: "owner-a",
-              score: 0.9,
-              modelId: "local-model",
-              modelVersion: "1",
-              dimensions: 2,
-            }],
-          })
-          : Promise.resolve({ ok: false, error: options.semanticFailure }),
-    },
+    semanticRanker: { rank: ({ scope }) => { options.onSemanticRanker?.(); return options.semanticFailure === undefined ? Promise.resolve({ ok: true, value: { matches: scope === "knowledge" ? [{ id: "knowledge-cadence", score: 0.84 }] : (options.semanticHits ?? [{ sourceId: "source-2", score: 0.9 }]).map((hit) => ({ id: hit.sourceId, score: hit.score })) } }) : Promise.resolve({ ok: false, error: options.semanticFailure }); } },
+    maximumSemanticCandidates: 20,
     maximumPageSize: 2,
     maximumQueryLength: 20,
     fusionVersion: "rrf-v1",
@@ -254,6 +236,7 @@ Deno.test("semantic search filters through authoritative active D1 sources", asy
     ownerId: "owner-a",
     query: "rhythmic tension",
     mode: "semantic",
+    externalProcessingAllowed: true,
     limit: 2,
   });
   assertEquals(found.ok, true);
@@ -274,6 +257,7 @@ Deno.test("semantic search filters through authoritative active D1 sources", asy
     ownerId: "owner-a",
     query: "rhythm",
     mode: "semantic",
+    externalProcessingAllowed: true,
     limit: 2,
   });
   assertEquals(stale.ok, false);
@@ -283,27 +267,63 @@ Deno.test("semantic search filters through authoritative active D1 sources", asy
 
 Deno.test("combined search never masks semantic failure", async () => {
   const unavailable = await fixture({
-    embeddingFailure: { kind: "SourceEmbeddingUnavailable" },
+    semanticFailure: { kind: "SourceSemanticIndexUnavailable" },
   }).search({
     ownerId: "owner-a",
     query: "theory",
     mode: "combined",
+    externalProcessingAllowed: true,
     limit: 2,
   });
   assertEquals(unavailable.ok, false);
   if (unavailable.ok) throw new Error("Expected embedding failure.");
-  assertEquals(unavailable.error.kind, "SourceEmbeddingUnavailable");
+  assertEquals(unavailable.error.kind, "SourceSemanticIndexUnavailable");
 
   const combined = await fixture().search({
     ownerId: "owner-a",
     query: "source",
     mode: "combined",
+    externalProcessingAllowed: true,
     limit: 2,
   });
   assertEquals(combined.ok, true);
   if (!combined.ok) throw new Error(combined.error.kind);
   assertEquals(combined.value.length, 2);
   assertEquals(combined.value[0].source.id, "source-2");
+});
+
+Deno.test("semantic and combined search require explicit external-processing consent before ranking", async () => {
+  let calls = 0;
+  for (const mode of /** @type {const} */ (["semantic", "combined"])) {
+    const result = await fixture({ onSemanticRanker: () => calls += 1 }).search({ ownerId: "owner-a", query: "harmony", mode, limit: 2 });
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.error.kind, "SourceSemanticConsentRequired");
+  }
+  assertEquals(calls, 0);
+  const exact = await fixture({ onSemanticRanker: () => calls += 1 }).search({ ownerId: "owner-a", query: "harmony", mode: "keyword", limit: 2 });
+  assertEquals(exact.ok, true);
+  assertEquals(calls, 0);
+});
+
+Deno.test("knowledge search returns exact and thresholded semantic matches across sources", async () => {
+  const exact = await fixture().search({ ownerId: "owner-a", query: "cadence", scope: "knowledge", mode: "keyword", limit: 2 });
+  assertEquals(exact.ok, true);
+  if (!exact.ok) throw new Error(exact.error.kind);
+  assertEquals(exact.value[0].knowledge.knowledgeId, "knowledge-cadence");
+  assertEquals(exact.value[0].matchedBy, "exact");
+
+  const semantic = await fixture().search({ ownerId: "owner-a", query: "harmonic resolution", scope: "knowledge", mode: "semantic", externalProcessingAllowed: true, limit: 2 });
+  assertEquals(semantic.ok, true);
+  if (!semantic.ok) throw new Error(semantic.error.kind);
+  assertEquals(semantic.value.length, 1);
+  assertEquals(semantic.value[0].knowledge.sourceId, "source-2");
+  assertEquals(semantic.value[0].score >= 0.6, true);
+});
+
+Deno.test("semantic knowledge search refuses external ranking when uploaded-derived knowledge exists", async () => {
+  const result = await fixture({ privateDerivedCount: 1 }).search({ ownerId: "owner-a", query: "cadence", scope: "knowledge", mode: "semantic", externalProcessingAllowed: true, limit: 2 });
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.kind, "SourceSemanticConsentRequired");
 });
 
 Deno.test("suppression checks are owner scoped, bounded, and deduplicated", async () => {

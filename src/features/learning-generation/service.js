@@ -138,7 +138,7 @@ export class LearningGenerationService {
       itemId: command.value.itemId,
       itemVersionId: command.value.itemVersionId,
       contentDigest: command.value.contentDigest,
-      generatorVersion: "deepseek-v4-flash-adapter-v1",
+      generatorVersion: "openrouter-glm-5.3-flash-adapter-v1",
       policyVersion: command.value.policy.version,
       samplingVersion: command.value.policy.samplingVersion,
       factualSamplingRatePercent: command.value.policy.factualSamplingRatePercent,

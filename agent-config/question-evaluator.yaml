@@ -1,0 +1,29 @@
+role: question-evaluator
+version: question-evaluator-v4
+model:
+  provider: openrouter
+  name: z-ai/glm-5.3-flash
+procedureVersion: evaluator-procedure-v1
+promptVersion: evaluator-prompt-v2
+inputSchema: quiz-evaluation-handoff-v1
+outputSchema: quiz-evaluation-v1
+allowedTools:
+  - quiz.evidence.lookup
+  - quiz.question.validate
+memory:
+  namespace: question-evaluator
+  visibility: owner-run
+limits:
+  maxTurns: 3
+  maxToolCalls: 6
+  timeoutMs: 30000
+  maxOutputBytes: 131072
+  compactionThresholdTokens: 500000
+retry:
+  maxAttempts: 2
+  backoffMs: 500
+stopRules:
+  - score-passing
+  - score-failing
+  - evaluator-limit-reached
+  - rights-revoked

@@ -122,6 +122,7 @@ export class SourceLibraryService {
     const source = freeze({
       id: sourceId,
       ownerId: validated.value.ownerId,
+      origin: /** @type {const} */ ("web"),
       submittedUrl: validated.value.submittedUrl,
       canonicalUrl: validated.value.canonicalUrl,
       title: validated.value.title,
@@ -164,6 +165,31 @@ export class SourceLibraryService {
       }),
       fingerprint: approvalFingerprint(validated.value),
     });
+  }
+
+  /** @param {unknown} command @returns {Promise<Result<{ readonly source: LibrarySource, readonly job: SourceIngestionJob | null, readonly reused: boolean }, SourceLibraryFailure>>} */
+  async createPrivateDocument(command) {
+    const validated = validatePrivateDocumentCommand(command);
+    if (!validated.ok) return validated;
+    const approvedAt = this.#dependencies.now();
+    if (!isIsoDateTime(approvedAt)) throw new TypeError("Source library clock returned an invalid time.");
+    const sourceId = this.#id("source");
+    const canonicalUrl = new URL(`api/private-documents/${encodeURIComponent(sourceId)}`, validated.value.applicationOrigin).href;
+    const source = freeze({
+      id: sourceId, ownerId: validated.value.ownerId,
+      origin: /** @type {const} */ ("private-document"), submittedUrl: canonicalUrl, canonicalUrl,
+      title: validated.value.title, description: validated.value.fileName,
+      adapter: freeze({ id: "private-document", version: "v1", granularity: "document", capabilities: freeze(["owner-private-document", "processing-attested"]) }),
+      interestAreaIds: freeze([]),
+      identityEvidence: freeze([
+        freeze({ attribute: "owner-attested-processing", value: "storage, transformation, and processing allowed", provenanceUrl: canonicalUrl, observedAt: approvedAt }),
+        freeze({ attribute: "processing-basis", value: validated.value.basis, provenanceUrl: canonicalUrl, observedAt: approvedAt }),
+        freeze({ attribute: "processing-reference", value: validated.value.reference, provenanceUrl: canonicalUrl, observedAt: approvedAt }),
+        freeze({ attribute: "file-name", value: validated.value.fileName, provenanceUrl: canonicalUrl, observedAt: approvedAt }),
+      ]), state: /** @type {const} */ ("active"), approvedAt, updatedAt: approvedAt, revision: 1,
+    });
+    const event = freeze({ id: this.#id("source-event"), ownerId: source.ownerId, sourceId, kind: /** @type {const} */ ("approved"), sourceRevision: 1, idempotencyKey: validated.value.idempotencyKey, occurredAt: approvedAt });
+    return await this.#dependencies.repository.approve({ source, event, job: null, initialItem: null, fingerprint: JSON.stringify(validated.value) });
   }
 
   /** @param {unknown} command @returns {Promise<Result<LibrarySource, SourceLibraryFailure>>} */
@@ -266,6 +292,7 @@ export function validateApprovalCommand(command) {
   if (!isPublicHttpsUrl(command.canonicalUrl)) return invalid("canonicalUrl");
   const adapter = validateAdapter(command.adapter);
   if (!adapter.ok) return adapter;
+  if (adapter.value.id === "private-document") return invalid("adapter.id");
   const areas = uniqueText(command.interestAreaIds);
   if (areas === null || areas.length === 0) return invalid("interestAreaIds");
   const evidence = validateIdentityEvidence(command.identityEvidence);
@@ -287,6 +314,21 @@ export function validateApprovalCommand(command) {
       initialItem: initialItem.value,
     }),
   };
+}
+
+/** @param {unknown} command @returns {Result<{ readonly ownerId: string, readonly title: string, readonly fileName: string, readonly idempotencyKey: string, readonly applicationOrigin: string, readonly basis: string, readonly reference: string }, SourceLibraryFailure>} */
+export function validatePrivateDocumentCommand(command) {
+  if (!isRecord(command)) return invalid("body");
+  for (const field of ["ownerId", "title", "fileName", "idempotencyKey", "applicationOrigin"]) {
+    if (!isNonEmptyText(command[field])) return invalid(field);
+  }
+  if (!isRecord(command.rightsAttestation) || command.rightsAttestation.ownsOrPermitted !== true || command.rightsAttestation.storageAllowed !== true || command.rightsAttestation.transformationAllowed !== true || command.rightsAttestation.processingAllowed !== true || !isNonEmptyText(command.rightsAttestation.basis) || !isNonEmptyText(command.rightsAttestation.reference)) return invalid("rightsAttestation");
+  if (!isPublicHttpsUrl(command.applicationOrigin)) return invalid("applicationOrigin");
+  return { ok: true, value: freeze({
+    ownerId: /** @type {string} */ (command.ownerId).trim(), title: /** @type {string} */ (command.title).trim(), fileName: /** @type {string} */ (command.fileName).trim(),
+    idempotencyKey: /** @type {string} */ (command.idempotencyKey).trim(), applicationOrigin: new URL(/** @type {string} */ (command.applicationOrigin)).href,
+    basis: command.rightsAttestation.basis.trim(), reference: command.rightsAttestation.reference.trim(),
+  }) };
 }
 
 /** @param {unknown} value @returns {Result<SourceApprovalInitialItem | null, Extract<SourceLibraryFailure, { readonly kind: "SourceCatalogCommandInvalid" }>>} */

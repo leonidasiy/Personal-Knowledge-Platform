@@ -34,7 +34,7 @@ const MAX_TIMEOUT_MS = 120_000;
  * @typedef {{ readonly ok: true } | { readonly ok: false, readonly error: { readonly kind: "BrowserAcceptanceArtifactCleanupFailed", readonly artifact: string } }} CleanupResult
  * @typedef {{ readonly ok: true, readonly value: BrowserAcceptanceReport } | { readonly ok: false, readonly error: BrowserAcceptanceFailure }} BrowserRunResult
  * @typedef {"feed" | "discover" | "review" | "library"} JourneyRoute
- * @typedef {"desktop-routes" | "primary-route" | "primary-query" | "primary-filter" | "primary-providers" | "primary-limit" | "primary-submit" | "primary-response-missing" | "primary-response-non-success" | "primary-results" | "detail-roundtrip" | "podcast-controls" | "podcast-submit" | "podcast-response-missing" | "podcast-response-non-success" | "podcast-results" | "podcast-candidate" | "approval-candidate-submit" | "approval-candidate-response-missing" | "approval-candidate-response-non-success" | "approval-candidate-results" | "approval-candidate" | "baseline-history" | "source-approval" | "source-approval-response-missing" | "source-approval-response-non-success" | "source-approval-response-invalid" | "source-approval-exhausted" | "history-preservation" | "source-removal" | "mobile-routes"} JourneyStage
+ * @typedef {"desktop-routes" | "primary-route" | "primary-query" | "primary-filter" | "primary-providers" | "primary-limit" | "primary-submit" | "primary-response-missing" | "primary-response-non-success" | "primary-results" | "detail-roundtrip" | "podcast-controls" | "podcast-submit" | "podcast-response-missing" | "podcast-response-non-success" | "podcast-results" | "podcast-candidate" | "approval-candidate-submit" | "approval-candidate-response-missing" | "approval-candidate-response-non-success" | "approval-candidate-results" | "approval-candidate" | "baseline-history" | "source-approval" | "source-approval-response-missing" | "source-approval-response-non-success" | "source-approval-response-invalid" | "source-approval-restore-response-missing" | "source-approval-restore-response-non-success" | "source-approval-restore-response-invalid" | "source-approval-exhausted" | "history-preservation" | "source-removal" | "mobile-routes"} JourneyStage
  */
 
 /** @param {unknown} value */
@@ -147,8 +147,89 @@ async function waitForValue(page, timeoutMs, read, matches) {
   }
   throw new Error();
 }
+
+/**
+ * Summarizes same-origin observations without retaining URLs, query strings,
+ * response bodies, or page content.
+ * @param {readonly { readonly routeCategory: "module" | "api", readonly status: number, readonly durationMs: number }[]} observations
+ */
+function summarizeObservations(observations) {
+  /** @type {Map<string, number>} */ const counts = new Map();
+  for (const observation of observations) {
+    const key = `${observation.routeCategory}:${observation.status}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Object.freeze([...counts.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, count]) => {
+    const separator = key.indexOf(":");
+    return Object.freeze({
+      routeCategory: key.slice(0, separator),
+      status: Number(key.slice(separator + 1)),
+      count,
+    });
+  }));
+}
+
+/** @param {Record<string, unknown>} page @returns {Promise<Record<string, unknown>>} */
+async function readFailurePageDiagnostics(page) {
+  if (typeof page.evaluate !== "function") return Object.freeze({ state: "unavailable" });
+  try {
+    const value = await page.evaluate(() => {
+      const allowedRoutes = new Set(["feed", "discover", "review", "library"]);
+      const rawRoute = location.hash.replace(/^#/, "") || "feed";
+      const route = allowedRoutes.has(rawRoute) ? rawRoute : "other";
+      return {
+        state: "available",
+        route,
+        librarySourceCount: document.querySelectorAll("[data-library-source]").length,
+        libraryLoading: document.querySelector('.state-panel[aria-busy="true"]') !== null,
+        libraryRetryVisible: document.querySelector("[data-library-retry]") !== null,
+        libraryAlertVisible: document.querySelector('.state-panel[role="alert"]') !== null,
+        reviewEmptyPanelCount: document.querySelectorAll('section.state-panel[aria-labelledby="review-title"]').length,
+        reviewQuestionCount: document.querySelectorAll("[data-review-question]").length,
+        legacyReviewProgressCount: document.querySelectorAll(".review-route .recall-progress progress").length,
+      };
+    });
+    if (
+      !record(value) || value.state !== "available" ||
+      typeof value.route !== "string" ||
+      !Number.isSafeInteger(value.librarySourceCount) ||
+      typeof value.libraryLoading !== "boolean" ||
+      typeof value.libraryRetryVisible !== "boolean" ||
+      typeof value.libraryAlertVisible !== "boolean" ||
+      !Number.isSafeInteger(value.reviewEmptyPanelCount) ||
+      !Number.isSafeInteger(value.reviewQuestionCount) ||
+      !Number.isSafeInteger(value.legacyReviewProgressCount)
+    ) return Object.freeze({ state: "invalid" });
+    return Object.freeze({
+      state: "available",
+      route: value.route,
+      librarySourceCount: value.librarySourceCount,
+      libraryLoading: value.libraryLoading,
+      libraryRetryVisible: value.libraryRetryVisible,
+      libraryAlertVisible: value.libraryAlertVisible,
+      reviewEmptyPanelCount: value.reviewEmptyPanelCount,
+      reviewQuestionCount: value.reviewQuestionCount,
+      legacyReviewProgressCount: value.legacyReviewProgressCount,
+    });
+  } catch (error) {
+    if (error instanceof Error) return Object.freeze({ state: "unavailable" });
+    throw error;
+  }
+}
+
 /** @param {unknown} expectedRoute */
 export function redactScreenshotPage(expectedRoute) {
+  const redactionMarker = "data-browser-acceptance-redacted";
+  const originalStyleMarker = "data-browser-acceptance-original-style";
+  /** @param {Element & { style?: { setProperty: (name: string, value: string, priority?: string) => void } }} node */
+  const hide = (node) => {
+    if (node === null || typeof node !== "object" || typeof node.getAttribute !== "function" || typeof node.setAttribute !== "function" || !node.style || typeof node.style.setProperty !== "function") return;
+    if (node.getAttribute(redactionMarker) === "true") return;
+    const originalStyle = node.getAttribute("style");
+    node.setAttribute(redactionMarker, "true");
+    node.setAttribute(originalStyleMarker, originalStyle === null ? "" : originalStyle);
+    node.style.setProperty("display", "none", "important");
+  };
   const query = document.querySelector('[data-discovery-search-form] input[name="query"]');
   const sensitive = [
     query !== null && "value" in query && typeof query.value === "string" ? query.value.trim() : "",
@@ -161,21 +242,46 @@ export function redactScreenshotPage(expectedRoute) {
     ].flatMap((selector) => Array.from(document.querySelectorAll(selector)).map((node) => (node.textContent || "").trim())),
   ].filter((value) => value.length > 0);
   const blocked = document.querySelector('[role="alert"], .discover-notice.error, [role="alertdialog"]') !== null;
-  if (query !== null && "value" in query && typeof query.value === "string") query.value = "";
-  document.querySelectorAll('[role="status"], [role="alert"], .discover-notice, .notice, .toast').forEach((node) => node.remove());
-  document.querySelectorAll('[data-discovery-item-id], [data-selected-item-id], [data-library-source], .learning-card, .review-card, .feed-card').forEach((node) => node.remove());
+  if (query !== null) hide(query);
+  document.querySelectorAll('[role="status"], [role="alert"], .discover-notice, .notice, .toast').forEach(hide);
+  document.querySelectorAll('[data-discovery-item-id], [data-selected-item-id], [data-library-source], .learning-card, .review-card, .feed-card').forEach(hide);
   const bodyText = document.body.innerText;
   const leaksSensitiveValue = sensitive.some((value) => bodyText.includes(value));
   const route = location.hash.replace(/^#/, "") || "feed";
   return Object.freeze({ safe: route === expectedRoute && !blocked && !leaksSensitiveValue && !/[?&][^\s=]+=|access|authorization|cookie|client secret|\berror\b/i.test(bodyText), route });
 }
 
+/**
+ * Restores nodes temporarily hidden by redactScreenshotPage. This is kept as
+ * a page-context function so the acceptance runner never receives private DOM
+ * values while it restores the live application state after a screenshot.
+ */
+export function restoreScreenshotPage() {
+  const redactionMarker = "data-browser-acceptance-redacted";
+  const originalStyleMarker = "data-browser-acceptance-original-style";
+  document.querySelectorAll(`[${redactionMarker}]`).forEach((node) => {
+    if (node === null || typeof node !== "object" || typeof node.getAttribute !== "function" || typeof node.setAttribute !== "function" || typeof node.removeAttribute !== "function") return;
+    const originalStyle = node.getAttribute(originalStyleMarker);
+    if (originalStyle === null) return;
+    if (originalStyle === "") node.removeAttribute("style");
+    else node.setAttribute("style", originalStyle);
+    node.removeAttribute(originalStyleMarker);
+    node.removeAttribute(redactionMarker);
+  });
+}
+
 /** @param {Record<string, unknown>} page @param {string} path @param {JourneyRoute} expectedRoute */
 async function redactedScreenshot(page, path, expectedRoute) {
   if (typeof page.evaluate !== "function" || typeof page.screenshot !== "function") throw new Error();
-  const metadata = await page.evaluate(redactScreenshotPage, expectedRoute);
-  if (!record(metadata) || metadata.safe !== true || text(metadata.route) !== expectedRoute) throw new Error();
-  await page.screenshot({ path });
+  let redactionAttempted = false;
+  try {
+    redactionAttempted = true;
+    const metadata = await page.evaluate(redactScreenshotPage, expectedRoute);
+    if (!record(metadata) || metadata.safe !== true || text(metadata.route) !== expectedRoute) throw new Error();
+    await page.screenshot({ path });
+  } finally {
+    if (redactionAttempted) await page.evaluate(restoreScreenshotPage);
+  }
 }
 
 /** @param {Record<string, unknown>} page @param {JourneyRoute} route @param {number} timeoutMs */
@@ -252,7 +358,7 @@ async function submitDiscoverySearch(page, timeoutMs) {
   return { ok: true };
 }
 
-/** @param {Record<string, unknown>} page @param {string} itemId @param {number} timeoutMs @returns {Promise<{readonly ok:true,readonly value:string}|{readonly ok:false,readonly error:"missing"|"conflict"|"rejected"|"non-success"|"invalid"}>} */
+/** @param {Record<string, unknown>} page @param {string} itemId @param {number} timeoutMs @returns {Promise<{readonly ok:true,readonly value:string}|{readonly ok:false,readonly error:"missing"|"conflict"|"rejected"|"non-success"|"invalid",readonly sourceId?:string,readonly revision?:number}>} */
 async function submitSourceApproval(page, itemId, timeoutMs) {
   if (typeof page.waitForResponse !== "function") throw new Error();
   const responsePromise = page.waitForResponse((/** @type {unknown} */ response) => {
@@ -265,8 +371,11 @@ async function submitSourceApproval(page, itemId, timeoutMs) {
   if (status === 409) {
     let conflictBody;
     try { conflictBody = await eventValue(response, "json"); } catch { return { ok: false, error: "non-success" }; }
-    return record(conflictBody) && conflictBody.error === "SourceStateConflict"
-      ? { ok: false, error: "conflict" }
+    const conflictKind = record(conflictBody) ? text(conflictBody.error) : "";
+    const conflictSourceId = record(conflictBody) ? text(conflictBody.sourceId) : "";
+    const conflictRevision = record(conflictBody) ? conflictBody.revision : null;
+    return conflictKind === "SourceStateConflict" && nonblank(conflictSourceId) && record(conflictBody) && conflictBody.state === "disabled" && typeof conflictRevision === "number" && Number.isSafeInteger(conflictRevision) && conflictRevision >= 1
+      ? { ok: false, error: "conflict", sourceId: conflictSourceId, revision: /** @type {number} */ (conflictRevision) }
       : { ok: false, error: "rejected" };
   }
   if (!Number.isInteger(status) || /** @type {number} */ (status) < 200 || /** @type {number} */ (status) >= 300) return { ok: false, error: "non-success" };
@@ -277,20 +386,78 @@ async function submitSourceApproval(page, itemId, timeoutMs) {
   return typeof sourceId === "string" && sourceId.trim() !== "" ? { ok: true, value: sourceId } : { ok: false, error: "invalid" };
 }
 
-/** @param {Record<string, unknown>} page */
-async function completedHistorySnapshot(page) {
+/** @param {Record<string, unknown>} page @param {{ readonly sourceId: string, readonly revision: number }} conflict @param {number} timeoutMs @returns {Promise<{ readonly ok: true } | { readonly ok: false, readonly error: "missing" | "non-success" | "invalid" }>} */
+async function restoreDisabledSource(page, conflict, timeoutMs) {
+  if (typeof page.evaluate !== "function") throw new Error();
+  let result;
+  try {
+    result = await page.evaluate(/** @param {{ readonly sourceId: string, readonly revision: number, readonly idempotencyKey: string, readonly timeoutMs: number }} command */ async (command) => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), command.timeoutMs);
+        try {
+          const response = await fetch("/api/source-library/restore", {
+            method: "POST",
+            credentials: "same-origin",
+            cache: "no-store",
+            signal: controller.signal,
+            headers: { "content-type": "application/json", accept: "application/json" },
+            body: JSON.stringify({ sourceId: command.sourceId, expectedRevision: command.revision, idempotencyKey: command.idempotencyKey }),
+          });
+          let document = null;
+          try { document = await response.json(); } catch {}
+          const value = document !== null && typeof document === "object" && document.result !== null && typeof document.result === "object" ? document.result : null;
+          return { status: response.status, sourceId: value !== null && typeof value.id === "string" ? value.id : null, state: value !== null && typeof value.state === "string" ? value.state : null, revision: value !== null && typeof value.revision === "number" ? value.revision : null };
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch {
+        return { status: 0, sourceId: null, state: null, revision: null };
+      }
+    }, { kind: "browser-acceptance-restore-disabled-source", sourceId: conflict.sourceId, revision: conflict.revision, idempotencyKey: `browser-acceptance-restore:${conflict.sourceId}:${conflict.revision}`, timeoutMs });
+  } catch {
+    return { ok: false, error: "missing" };
+  }
+  const status = record(result) ? result.status : null;
+  const sourceId = record(result) ? text(result.sourceId) : "";
+  const state = record(result) ? text(result.state) : "";
+  const revision = record(result) ? result.revision : null;
+  if (typeof status !== "number" || !Number.isInteger(status)) return { ok: false, error: "invalid" };
+  if (status === 0) return { ok: false, error: "missing" };
+  if (status < 200 || status >= 300) return { ok: false, error: "non-success" };
+  if (sourceId === "" || state !== "active" || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision <= conflict.revision) return { ok: false, error: "invalid" };
+  return { ok: true };
+}
+
+/** @typedef {{ readonly kind: "legacy-history", readonly progressValue: string, readonly progressMax: string, readonly daily: string, readonly sevenDay: string } | { readonly kind: "learner-empty" } | { readonly kind: "learner-questions", readonly count: number }} CompletedHistorySnapshot */
+
+/** @param {Record<string, unknown>} page @param {(checkpoint: string) => void} [onCheckpoint] @returns {Promise<CompletedHistorySnapshot>} */
+async function completedHistorySnapshot(page, onCheckpoint = () => {}) {
+  onCheckpoint("review-current-count");
+  const emptyReviewCount = await action(locator(page, 'section.state-panel[aria-labelledby="review-title"]'), "count");
+  onCheckpoint(`review-current-count-${String(emptyReviewCount)}`);
+  if (emptyReviewCount === 1) return Object.freeze({ kind: "learner-empty" });
+  const questionCount = await action(locator(page, "[data-review-question]"), "count");
+  if (typeof questionCount === "number" && Number.isSafeInteger(questionCount) && questionCount > 0) return Object.freeze({ kind: "learner-questions", count: questionCount });
+  onCheckpoint("review-progress-read");
   const progress = locator(page, ".review-route .recall-progress progress");
   const value = await action(progress, "getAttribute", "value");
   const max = await action(progress, "getAttribute", "max");
   const daily = await textAt(page, ".review-route .recall-metric:nth-of-type(1)");
   const sevenDay = await textAt(page, ".review-route .recall-metric:nth-of-type(2)");
-  if (!nonblank(value) || !nonblank(max) || daily === null || sevenDay === null) throw new Error();
-  return Object.freeze({ progressValue: value, progressMax: max, daily, sevenDay });
+  onCheckpoint("review-legacy-check");
+  if (nonblank(value) && nonblank(max) && daily !== null && sevenDay !== null) {
+    return Object.freeze({ kind: "legacy-history", progressValue: value, progressMax: max, daily, sevenDay });
+  }
+  throw new Error();
 }
 
-/** @param {{ readonly progressValue: string, readonly progressMax: string, readonly daily: string, readonly sevenDay: string }} left @param {{ readonly progressValue: string, readonly progressMax: string, readonly daily: string, readonly sevenDay: string }} right */
+/** @param {CompletedHistorySnapshot} left @param {CompletedHistorySnapshot} right */
 function sameCompletedHistory(left, right) {
-  return left.progressValue === right.progressValue && left.progressMax === right.progressMax && left.daily === right.daily && left.sevenDay === right.sevenDay;
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "legacy-history" && right.kind === "legacy-history") return left.progressValue === right.progressValue && left.progressMax === right.progressMax && left.daily === right.daily && left.sevenDay === right.sevenDay;
+  if (left.kind === "learner-questions" && right.kind === "learner-questions") return left.count === right.count;
+  return true;
 }
 
 /**
@@ -306,7 +473,10 @@ async function hostedJourney(page, artifactsRoot, actionTimeoutMs) {
   let completed = false;
   let removalVerified = false;
   let primary = /** @type {{ id: string, title: string } | null} */ (null);
+  /** @type {{ readonly candidateCount: number, readonly conflictCount: number, readonly restoreCount: number }} */
+  let approvalSummary = { candidateCount: 0, conflictCount: 0, restoreCount: 0 };
   /** @type {JourneyStage} */ let stage = "desktop-routes";
+  let checkpoint = "journey-start";
   try {
     for (const viewport of JOURNEY_VIEWPORTS) {
       stage = viewport.name === "desktop" ? "desktop-routes" : "mobile-routes";
@@ -380,20 +550,31 @@ async function hostedJourney(page, artifactsRoot, actionTimeoutMs) {
       stage = "approval-candidate";
       for (const candidateId of [...approvalCandidateIds].reverse()) { await openDiscoveryDetail(page, candidateId, actionTimeoutMs); const approval = `[data-discovery-approve="${candidateId}"]`; if (await attributeAt(page, approval, "data-discovery-approve") === candidateId && await attributeAt(page, approval, "data-source-granularity") === "site" && await attributeAt(page, approval, "data-source-capabilities") === "metadata,bounded-ingestion") siteIds.push(candidateId); await navigateToRoute(page, "discover", actionTimeoutMs); await waitForDiscoveryList(page, actionTimeoutMs, (ids) => ids.join("|") === approvalCandidateIds.join("|")); }
       if (siteIds.length === 0) throw new Error();
+      approvalSummary = { candidateCount: siteIds.length, conflictCount: 0, restoreCount: 0 };
       stage = "baseline-history";
+      checkpoint = "baseline-library-route";
       await ensureRoute(page, "library", actionTimeoutMs, true);
-      preApprovalIds = await libraryIds(page); if (preApprovalIds === null || preApprovalIds.length === 0) throw new Error();
+      checkpoint = "baseline-library-sources";
+      preApprovalIds = await waitForValue(page, actionTimeoutMs, () => libraryIds(page), (ids) => ids.length > 0);
+      checkpoint = "baseline-review-route";
       await navigateToRoute(page, "review", actionTimeoutMs);
-      const completedHistory = await completedHistorySnapshot(page);
+      checkpoint = "baseline-review-state";
+      const completedHistory = await completedHistorySnapshot(page, (value) => { checkpoint = `baseline-${value}`; });
+      checkpoint = "baseline-discover-route";
       await navigateToRoute(page, "discover", actionTimeoutMs);
+      checkpoint = "baseline-discover-results";
       await waitForDiscoveryList(page, actionTimeoutMs, (ids) => ids.join("|") === approvalCandidateIds.join("|"));
       stage = "source-approval";
       let sourceApproved = false;
+      /** @type {{ readonly itemId: string, readonly sourceId: string, readonly revision: number }[]} */ const disabledConflicts = [];
       for (const siteId of siteIds) {
         await openDiscoveryDetail(page, siteId, actionTimeoutMs);
         approvalAttempted = true;
         const submission = await submitSourceApproval(page, siteId, actionTimeoutMs);
         if (!submission.ok && submission.error === "conflict") {
+          approvalSummary = { ...approvalSummary, conflictCount: approvalSummary.conflictCount + 1 };
+          if (submission.sourceId === undefined || submission.revision === undefined) throw new Error();
+          disabledConflicts.push({ itemId: siteId, sourceId: submission.sourceId, revision: submission.revision });
           approvalAttempted = false;
           await navigateToRoute(page, "discover", actionTimeoutMs);
           await waitForDiscoveryList(page, actionTimeoutMs, (ids) => ids.join("|") === approvalCandidateIds.join("|"));
@@ -407,6 +588,26 @@ async function hostedJourney(page, artifactsRoot, actionTimeoutMs) {
         createdSourceId = submission.value;
         sourceApproved = true;
         break;
+      }
+      if (!sourceApproved && disabledConflicts.length > 0) {
+        const conflict = disabledConflicts[0];
+        checkpoint = "source-approval-restore";
+        approvalAttempted = false;
+        const restored = await restoreDisabledSource(page, conflict, actionTimeoutMs);
+        if (!restored.ok) {
+          stage = restored.error === "missing" ? "source-approval-restore-response-missing" : restored.error === "non-success" ? "source-approval-restore-response-non-success" : "source-approval-restore-response-invalid";
+          throw new Error();
+        }
+        approvalSummary = { ...approvalSummary, restoreCount: approvalSummary.restoreCount + 1 };
+        await openDiscoveryDetail(page, conflict.itemId, actionTimeoutMs);
+        approvalAttempted = true;
+        const retry = await submitSourceApproval(page, conflict.itemId, actionTimeoutMs);
+        if (!retry.ok) {
+          stage = retry.error === "missing" ? "source-approval-response-missing" : retry.error === "invalid" ? "source-approval-response-invalid" : "source-approval-response-non-success";
+          throw new Error();
+        }
+        createdSourceId = retry.value;
+        sourceApproved = true;
       }
       if (!sourceApproved) { approvalAttempted = false; stage = "source-approval-exhausted"; throw new Error(); }
       await ensureRoute(page, "library", actionTimeoutMs);
@@ -429,7 +630,7 @@ async function hostedJourney(page, artifactsRoot, actionTimeoutMs) {
     }
     completed = true;
   } catch {
-    return { ok: false, error: Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "journey", stage }) };
+    return { ok: false, error: Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "journey", stage, checkpoint, approvalSummary: Object.freeze(approvalSummary) }) };
   } finally {
     if (!completed && !removalVerified && approvalAttempted && preApprovalIds !== null) {
       try {
@@ -438,7 +639,7 @@ async function hostedJourney(page, artifactsRoot, actionTimeoutMs) {
         page.once("dialog", (/** @type {unknown} */ dialog) => { if (record(dialog) && typeof dialog.accept === "function") void dialog.accept(); });
         const disabledId = createdSourceId; if (disabledId === null) throw new Error(); await waitForValue(page, actionTimeoutMs, () => libraryIds(page), (ids) => ids.includes(disabledId) && beforeIds.every((id) => ids.includes(id))); await action(locator(page, `[data-library-disable="${disabledId}"]`), "click"); await waitForValue(page, actionTimeoutMs, () => libraryIds(page), (ids) => !ids.includes(disabledId) && beforeIds.every((id) => ids.includes(id)));
       } catch {
-        return { ok: false, error: Object.freeze({ kind: "BrowserAcceptanceCleanupFailed", resource: "source", stage }) };
+        return { ok: false, error: Object.freeze({ kind: "BrowserAcceptanceCleanupFailed", resource: "source", stage, checkpoint, approvalSummary: Object.freeze(approvalSummary) }) };
       }
     }
   }
@@ -512,7 +713,7 @@ export async function runBrowserAcceptance(config, dependencies) {
       if (outcome === null && typeof documentStatus === "number") { if (documentStatus >= 300 && documentStatus < 400) outcome = Object.freeze({ kind: "BrowserAcceptanceAccessRedirected" }); else if (documentStatus === 401 || documentStatus === 403) outcome = Object.freeze({ kind: "BrowserAcceptanceAccessRejected", status: documentStatus }); }
       if (outcome === null && typeof page.locator === "function" && !sameFinalUrl(checked.value.targetUrl, text(eventValue(response, "url")))) outcome = Object.freeze({ kind: "BrowserAcceptanceAccessRedirected" });
       if (outcome === null && runtimeConsoleError) outcome = Object.freeze({ kind: "BrowserAcceptanceConsoleError", category: "runtime" });
-      if (outcome === null) try { const hosted = typeof page.locator === "function"; const workerVersion = hosted ? await workerVersionHeader(response) : ""; if (hosted && !sameFinalUrl(checked.value.targetUrl, text(eventValue(response, "url")))) outcome = Object.freeze({ kind: "BrowserAcceptanceAccessRedirected" }); else if (hosted && !uuid(workerVersion)) outcome = Object.freeze({ kind: "BrowserAcceptanceWorkerVersionUnavailable" }); else if (hosted) { if (typeof dependencies.fileSystem.mkdir !== "function") throw new Error(); await dependencies.fileSystem.mkdir(`${checked.value.artifactRoots[1]}/${runId}`); const journey = await hostedJourney(page, `${checked.value.artifactRoots[1]}/${runId}`, checked.value.actionTimeoutMs); if (!journey.ok) outcome = journey.error; } else { if (typeof page.evaluate !== "function") throw new Error(); const evaluated = await page.evaluate(); const legacyVersion = record(evaluated) ? text(evaluated.workerVersion) : ""; if (!uuid(legacyVersion)) outcome = Object.freeze({ kind: "BrowserAcceptanceWorkerVersionUnavailable" }); else if (!record(evaluated) || !Array.isArray(evaluated.assertions)) outcome = Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "evaluation" }); else { const failed = evaluated.assertions.find((/** @type {unknown} */ entry) => record(entry) && entry.passed === false); if (failed !== undefined && record(failed)) outcome = Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "journey" }); } if (outcome === null) { const item = redactEvidence({ url: checked.value.targetUrl, status: 200, durationMs: 0, failureKind: "none", viewport: "desktop", workerVersion: legacyVersion }); if (!item.ok) outcome = item.error; else evidence.push(item.value); } } if (outcome === null && runtimeConsoleError) outcome = Object.freeze({ kind: "BrowserAcceptanceConsoleError", category: "runtime" }); if (outcome === null && hosted) { const item = redactEvidence({ url: checked.value.targetUrl, status: 200, durationMs: 0, failureKind: "none", viewport: "desktop", workerVersion }); if (!item.ok) outcome = item.error; else evidence.push(item.value); } if (outcome === null) for (const observation of observations) evidence.push(Object.freeze({ ...observation, failureKind: "none", viewport: "desktop", workerVersion: evidence[0].workerVersion })); } catch { outcome = Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "evaluation" }); }
+      if (outcome === null) try { const hosted = typeof page.locator === "function"; const workerVersion = hosted ? await workerVersionHeader(response) : ""; if (hosted && !sameFinalUrl(checked.value.targetUrl, text(eventValue(response, "url")))) outcome = Object.freeze({ kind: "BrowserAcceptanceAccessRedirected" }); else if (hosted && !uuid(workerVersion)) outcome = Object.freeze({ kind: "BrowserAcceptanceWorkerVersionUnavailable" }); else if (hosted) { if (typeof dependencies.fileSystem.mkdir !== "function") throw new Error(); await dependencies.fileSystem.mkdir(`${checked.value.artifactRoots[1]}/${runId}`); const journey = await hostedJourney(page, `${checked.value.artifactRoots[1]}/${runId}`, checked.value.actionTimeoutMs); if (!journey.ok) { const internalError = /** @type {Record<string, unknown>} */ (journey.error); const publicError = internalError.kind === "BrowserAcceptanceCleanupFailed" ? Object.freeze({ kind: "BrowserAcceptanceCleanupFailed", resource: text(internalError.resource), stage: text(internalError.stage) }) : Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "journey", stage: text(internalError.stage) }); dependencies.log(Object.freeze({ component: "browser-acceptance", event: "journey-failure", failureKind: publicError.kind, stage: text(internalError.stage), checkpoint: text(internalError.checkpoint), runtimeConsoleError, responseStatusSummary: summarizeObservations(observations), page: await readFailurePageDiagnostics(page) })); outcome = publicError; } } else { if (typeof page.evaluate !== "function") throw new Error(); const evaluated = await page.evaluate(); const legacyVersion = record(evaluated) ? text(evaluated.workerVersion) : ""; if (!uuid(legacyVersion)) outcome = Object.freeze({ kind: "BrowserAcceptanceWorkerVersionUnavailable" }); else if (!record(evaluated) || !Array.isArray(evaluated.assertions)) outcome = Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "evaluation" }); else { const failed = evaluated.assertions.find((/** @type {unknown} */ entry) => record(entry) && entry.passed === false); if (failed !== undefined && record(failed)) outcome = Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "journey" }); } if (outcome === null) { const item = redactEvidence({ url: checked.value.targetUrl, status: 200, durationMs: 0, failureKind: "none", viewport: "desktop", workerVersion: legacyVersion }); if (!item.ok) outcome = item.error; else evidence.push(item.value); } } if (outcome === null && runtimeConsoleError) outcome = Object.freeze({ kind: "BrowserAcceptanceConsoleError", category: "runtime" }); if (outcome === null && hosted) { const item = redactEvidence({ url: checked.value.targetUrl, status: 200, durationMs: 0, failureKind: "none", viewport: "desktop", workerVersion }); if (!item.ok) outcome = item.error; else evidence.push(item.value); } if (outcome === null) for (const observation of observations) evidence.push(Object.freeze({ ...observation, failureKind: "none", viewport: "desktop", workerVersion: evidence[0].workerVersion })); } catch { outcome = Object.freeze({ kind: "BrowserAcceptanceAssertionFailed", assertion: "evaluation" }); }
     }
     if (outcome === null && page !== null) try { if (typeof dependencies.fileSystem.mkdir !== "function" || typeof dependencies.fileSystem.writeTextFile !== "function" || typeof page.screenshot !== "function") throw new Error(); if (typeof page.locator !== "function") { await dependencies.fileSystem.mkdir(`${checked.value.artifactRoots[1]}/${runId}`); await page.screenshot({ path: `${checked.value.artifactRoots[1]}/${runId}/desktop-feed.png` }); } await dependencies.fileSystem.writeTextFile(`${checked.value.artifactRoots[0]}/browser-acceptance-${runId}.log`, `${evidence.map((entry) => JSON.stringify(entry)).join("\n")}\n`); evidence.forEach((entry) => /** @type {(entry: RedactedEvidence) => void} */ (dependencies.log)(entry)); } catch { outcome = Object.freeze({ kind: "BrowserAcceptanceArtifactWriteFailed", artifact: "evidence" }); };
   } finally {

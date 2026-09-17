@@ -247,9 +247,8 @@ function renderDecisionActions(model, item, offline) {
     ? ""
     : model.markup.youtubePolicy;
   const manualUpload =
-    item.youtubeWatchUrl === null || item.candidate.initialItem === null
-      ? ""
-      : template(model, "manualUpload", {
+    item.youtubeWatchUrl === null || item.candidate.initialItem !== null
+      ? template(model, "manualUpload", {
         itemId: remoteText(model, item.id),
         areas,
         areaDisabled: model.areas.length === 0 ? "disabled" : "",
@@ -257,7 +256,8 @@ function renderDecisionActions(model, item, offline) {
           ? "disabled"
           : "",
         submitLabel: pending ? "Uploading..." : "Add source and upload",
-      });
+      })
+      : "";
   return youtubePolicy + template(model, "decisionActions", {
     itemId: remoteText(model, item.id),
     sourceGranularity: remoteText(model, item.candidate.adapter.granularity),

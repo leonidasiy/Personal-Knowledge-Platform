@@ -6,6 +6,7 @@ import { SourceCatalogQueryService } from "../src/features/source-library/query.
 import { isRecord } from "./contracts.js";
 import { validatePublisherDestination } from "./destination-policy.js";
 import { createDiscoveryWorker } from "./handler.js";
+import { createPrivateDocumentReadService } from "./private-document-read.js";
 import { RssAtomAcquisitionAdapter } from "./rss-atom-adapter.js";
 import { PublisherTranscriptAdapter } from "./transcript-adapter.js";
 import {
@@ -33,14 +34,15 @@ import { BrowserRunPageAcquirer } from "./browser-run-page-acquirer.js";
 import { SourceIngestionRunner } from "./source-ingestion-runner.js";
 import { ManualMaterialService } from "../src/features/source-library/manual-material.js";
 import { createSourceCursorCodec } from "./source-cursor.js";
-import { createLocalSemanticEmbedding } from "./local-semantic-index.js";
+import { createSemanticRanker } from "./local-semantic-index.js";
+import { createOpenRouterKnowledgeModel } from "./knowledge-workflow-model.js";
 import {
   DurableYouTubeOAuthStore,
   YouTubeOAuthDurableObject,
 } from "./youtube-oauth-store.js";
 import { D1LearningGenerationRepository } from "./learning-generation-d1.js";
 import { D1LearningBudgetLedger } from "./learning-budget-d1.js";
-import { createDeepSeekV4FlashAdapter } from "./deepseek-v4-flash-adapter.js";
+import { createOpenRouterGlm53FlashAdapter } from "./openrouter-glm-5-3-flash-adapter.js";
 import { LearningGenerationService } from "../src/features/learning-generation/service.js";
 import { LearningReviewService } from "../src/features/learning-generation/review.js";
 import { LearningReviewQueueService } from "../src/features/learning-generation/queue.js";
@@ -48,6 +50,23 @@ import { LearningRevocationService } from "../src/features/learning-generation/r
 import { LearningGenerationStatusService } from "../src/features/learning-generation/status.js";
 import { LearningGenerationEnqueuer } from "./learning-generation-enqueuer.js";
 import { createLearningCostModel } from "./learning-generation-cost.js";
+import { D1KnowledgeWorkflowRepository } from "./knowledge-workflow-d1.js";
+import { createKnowledgeWorkflowService } from "../src/features/knowledge-workflows/workflow.js";
+import { D1KnowledgeMediaRepository } from "./knowledge-workflow-media-d1.js";
+import { createMediaPipeline } from "../src/features/knowledge-workflows/media.js";
+import { createCloudflareImageDerivative, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
+import { resolvePublicAddresses } from "./knowledge-workflow-network.js";
+import { createKnowledgeWorkflowCleanup } from "./knowledge-workflow-cleanup.js";
+import { createKnowledgeWorkflowSourceContentCleanup } from "./knowledge-workflow-source-content.js";
+import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
+import { createDiscoveryRequestLogger } from "./request-logging.js";
+import { sourceRightsProfileFor } from "./source-rights-profiles.js";
+import { parseAuthorizedMaterial } from "../src/features/knowledge-workflows/material.js";
+import { createKnowledgeWorkflowMaterialService } from "../src/features/knowledge-workflows/material-service.js";
+import { D1KnowledgeWorkflowMaterialRepository } from "./knowledge-workflow-material-d1.js";
+import { createKnowledgeWorkflowBackfill, createKnowledgeWorkflowReplay } from "../src/features/knowledge-workflows/backfill.js";
+import { D1KnowledgeWorkflowBackfillRepository } from "./knowledge-workflow-backfill-d1.js";
+import { createLearningBatchService } from "./learning-batches-d1.js";
 
 /** @import { Result, WorkerFailure } from "./contracts.js" */
 
@@ -75,15 +94,16 @@ import { createLearningCostModel } from "./learning-generation-cost.js";
  *   readonly YOUTUBE_OAUTH_ENCRYPTION_KEY?: unknown,
  *   readonly YOUTUBE_OAUTH_STORE?: unknown,
  *   readonly YOUTUBE_OAUTH_LEDGER?: unknown,
- *   readonly DEEPSEEK_API_KEY?: unknown,
- *   readonly DEEPSEEK_INPUT_USD_PER_MILLION?: unknown,
- *   readonly DEEPSEEK_OUTPUT_USD_PER_MILLION?: unknown,
+ *   readonly OPENROUTER_API_KEY?: unknown,
+ *   readonly OPENROUTER_INPUT_USD_PER_MILLION?: unknown,
+ *   readonly OPENROUTER_OUTPUT_USD_PER_MILLION?: unknown,
  *   readonly TRANSCRIPT_AUTHORIZATION?: unknown,
  *   readonly TRANSCRIPT_AUTHORIZATION_LEDGER?: unknown,
  *   readonly SOURCE_LIBRARY_DB?: unknown,
  *   readonly SOURCE_INGESTION_POLICY_VERSION?: unknown,
  *   readonly SOURCE_CURSOR_SECRET?: unknown,
  *   readonly SOURCE_CONTENT_BUCKET?: unknown,
+ *   readonly IMAGES?: unknown,
  *   readonly SOURCE_MANUAL_MAX_BYTES?: unknown,
  *   readonly SOURCE_MANUAL_MAX_CHARACTERS?: unknown,
  *   readonly SOURCE_MANUAL_MEDIA_TYPES?: unknown,
@@ -94,6 +114,9 @@ import { createLearningCostModel } from "./learning-generation-cost.js";
  *   readonly SOURCE_R2_OBSERVATION_MAX_AGE_MS?: unknown,
  *   readonly SOURCE_BROWSER?: unknown,
  *   readonly SOURCE_BROWSER_ACCOUNT_SCOPE?: unknown,
+ *   readonly KNOWLEDGE_WORKFLOW?: unknown,
+ *   readonly KNOWLEDGE_WORKFLOW_ENABLED?: unknown,
+ *   readonly KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS?: unknown,
  * }} DiscoveryWorkerEnvironment
  */
 
@@ -149,7 +172,37 @@ import { createLearningCostModel } from "./learning-generation-cost.js";
  *   readonly randomBytes?: (length: number) => Uint8Array,
  *   readonly waitUntil?: (promise: Promise<unknown>) => void,
  *   readonly browserLauncher?: { readonly limits: (binding: unknown) => Promise<unknown>, readonly launch: (binding: unknown) => Promise<unknown> },
+ *   readonly publicEgress?: import("../src/features/knowledge-workflows/media.js").MediaPublicEgress,
  * }} CloudflarePlatform
+ */
+
+/**
+ * @typedef {{
+ *   readonly id: string,
+ *   readonly pause: () => Promise<void>,
+ *   readonly resume: () => Promise<void>,
+ *   readonly terminate: (options?: { readonly rollback?: boolean }) => Promise<void>,
+ *   readonly status?: () => Promise<{ readonly status: string }>,
+ *   readonly sendEvent: (event: { readonly type: string, readonly payload?: unknown }) => Promise<void>
+ * }} KnowledgeWorkflowInstance
+ */
+
+/**
+ * @typedef {{
+ *   readonly create: (options: { readonly id: string, readonly params: unknown }) => Promise<KnowledgeWorkflowInstance>,
+ *   readonly get: (id: string) => Promise<KnowledgeWorkflowInstance>
+ * }} KnowledgeWorkflowBinding
+ */
+
+/**
+ * @typedef {{
+ *   readonly start: (command: unknown) => Promise<Result<{ readonly runId: string, readonly reused: boolean }, { readonly kind: string }>>,
+ *   readonly status: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *   readonly sourceStatus: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *   readonly control: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *   readonly rightsApproved: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
+ *   readonly material?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>
+ * }} KnowledgeWorkflowHandlerPort
  */
 
 /**
@@ -254,6 +307,14 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
   }
   const configuration = parseEnvironment(environment);
   if (!configuration.ok) return configuration;
+  const knowledgeWorkflowLogger = createKnowledgeWorkflowLogger({
+    sink: (record) => console.info(JSON.stringify(record)),
+    now: () => platform.now().toISOString(),
+  });
+  const discoveryRequestLogger = createDiscoveryRequestLogger({
+    sink: (record) => console.info(JSON.stringify(record)),
+    now: () => platform.now().toISOString(),
+  });
 
   /** @type {(bytes: Uint8Array) => Promise<Result<string, WorkerFailure>>} */
   const digest = async (bytes) => {
@@ -364,16 +425,34 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         /** @type {string} */ (configuration.value.sourceCursorSecret),
         platform.subtle,
       ),
-      embedding: {
-        create: createLocalSemanticEmbedding,
-      },
-      semanticIndex: {
-        search: (query) => sourceRepository.semanticSearch(query),
-      },
+      semanticRanker: createSemanticRanker({
+        model: createOpenRouterKnowledgeModel({
+          apiKey: configuration.value.openRouterApiKey,
+          endpoint: "https://openrouter.ai/api/v1/chat/completions",
+          model: "z-ai/glm-5.3-flash",
+          timeoutMs: 15_000,
+          maximumInputCharacters: 12_000,
+          fetch: platform.fetch,
+          now: () => platform.now().getTime(),
+          logger: (entry) => console.info(JSON.stringify({ event: entry.event, role: entry.role, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken, durationMs: entry.durationMs, requestId: entry.requestId, inputTokens: entry.inputTokens, outputTokens: entry.outputTokens })),
+        }),
+        modelId: "z-ai/glm-5.3-flash",
+        maximumCandidates: 20,
+        maximumOutputTokens: 256,
+      }),
+      maximumSemanticCandidates: 20,
       maximumPageSize: 50,
       maximumQueryLength: 200,
       fusionVersion: "rrf-v1",
     });
+  const sourceCatalogForHandler = sourceCatalog === null
+    ? null
+    : {
+      browse: (/** @type {unknown} */ command) => sourceCatalog.browse(command),
+      search: (/** @type {unknown} */ command) => sourceCatalog.search(/** @type {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: import("../src/features/source-library/contracts.js").SourceSearchMode, readonly scope: import("../src/features/source-library/contracts.js").SourceSearchScope }} */ (command)),
+      suppressed: (/** @type {unknown} */ command) => sourceCatalog.suppressed(command),
+      active: (/** @type {unknown} */ command) => sourceCatalog.active(command),
+    };
   const manualConfiguration = configuration.value.manualMaterial;
   const manualRepository = sourceRepository === null ||
       manualConfiguration === null
@@ -441,6 +520,15 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
     monthlyBudgetUsd: 2,
   });
   const learningDatabase = configuration.value.sourceLibraryDatabase;
+  const learningBatches = learningDatabase === null
+    ? null
+    : createLearningBatchService({
+      database: learningDatabase,
+      now: () => platform.now().toISOString(),
+      random: () => globalThis.crypto.getRandomValues(new Uint32Array(1))[0] / 4_294_967_296,
+      bucket: isMediaBucket(environment.SOURCE_CONTENT_BUCKET) ? environment.SOURCE_CONTENT_BUCKET : null,
+      logger: (entry) => console.info(JSON.stringify(entry)),
+    });
   const learningRepository = learningDatabase === null
     ? null
     : new D1LearningGenerationRepository({ database: learningDatabase, logger: learningLogger });
@@ -448,7 +536,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
     ? null
     : new LearningGenerationService({
       repository: learningRepository,
-      provider: createDeepSeekV4FlashAdapter({ apiKey: configuration.value.deepSeekApiKey, endpoint: "https://api.deepseek.com/chat/completions", model: "deepseek-v4-flash", maximumInputCharacters: learningPolicy.maximumProviderInputCharacters, maximumOutputTokens: learningPolicy.maximumOutputTokens, timeoutMs: 15_000, fetch: platform.fetch, now: () => platform.now().getTime(), logger: learningLogger }),
+      provider: createOpenRouterGlm53FlashAdapter({ apiKey: configuration.value.openRouterApiKey, endpoint: "https://openrouter.ai/api/v1/chat/completions", model: "z-ai/glm-5.3-flash", maximumInputCharacters: learningPolicy.maximumProviderInputCharacters, maximumOutputTokens: learningPolicy.maximumOutputTokens, timeoutMs: 15_000, fetch: platform.fetch, now: () => platform.now().getTime(), logger: learningLogger }),
       budget: new D1LearningBudgetLedger({ database: learningDatabase, logger: learningLogger }),
       costModel: createLearningCostModel(configuration.value.learningCost),
       createId: () => hex(/** @type {(length:number)=>Uint8Array} */ (platform.randomBytes)(16)),
@@ -496,6 +584,266 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       leaseDurationMs: 300_000,
       generationEnqueue: learningEnqueuer === null ? undefined : (command) => learningEnqueuer.enqueue({ .../** @type {Record<string, unknown>} */ (command), policy: learningPolicy }),
       logger: learningLogger,
+    });
+  const knowledgeWorkflowBinding = configuration.value.knowledgeWorkflowEnabled && isKnowledgeWorkflowBinding(environment.KNOWLEDGE_WORKFLOW)
+    ? environment.KNOWLEDGE_WORKFLOW
+    : null;
+  const knowledgeWorkflowConfigDigests = configuration.value.knowledgeWorkflowConfigDigests;
+  if (knowledgeWorkflowBinding !== null && knowledgeWorkflowConfigDigests === null) {
+    return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationMissing", field: "KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS" } };
+  }
+  const knowledgeWorkflowRepository = sourceRepository === null || knowledgeWorkflowBinding === null
+    ? null
+    : new D1KnowledgeWorkflowRepository({
+      database: /** @type {import("./knowledge-workflow-d1.js").D1DatabasePort} */ (configuration.value.sourceLibraryDatabase),
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind }),
+    });
+  const knowledgeWorkflowService = knowledgeWorkflowRepository === null
+    ? null
+    : createKnowledgeWorkflowService(knowledgeWorkflowRepository, {
+      now: () => platform.now().toISOString(),
+      createId: () => `knowledge-workflow:${hex(/** @type {(length: number) => Uint8Array} */ (platform.randomBytes)(16))}`,
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, action: entry.action, failureKind: entry.failureKind }),
+      cleanup: createKnowledgeWorkflowCleanup({
+        database: /** @type {import("./knowledge-workflow-cleanup.js").D1DatabasePort} */ (configuration.value.sourceLibraryDatabase),
+        sourceContent: manualContentStore === null
+          ? undefined
+          : createKnowledgeWorkflowSourceContentCleanup({
+            database: /** @type {import("./knowledge-workflow-source-content.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase)),
+            contentStore: manualContentStore,
+            logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, failureKind: entry.failureKind }),
+          }),
+        bucket: isMediaBucket(environment.SOURCE_CONTENT_BUCKET)
+          ? /** @type {import("./knowledge-workflow-cleanup.js").CleanupBucket} */ (environment.SOURCE_CONTENT_BUCKET)
+          : null,
+        workflowRepository: {
+          listBySource: (ownerId, sourceId, sourceRevision) => knowledgeWorkflowRepository.listBySource(ownerId, sourceId, sourceRevision),
+          invalidateReuse: (command) => knowledgeWorkflowRepository.invalidateReuse(command),
+          markAbandoned: (command) => knowledgeWorkflowRepository.markAbandoned(command),
+        },
+        now: () => platform.now().toISOString(),
+        logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind }),
+      }),
+    });
+  const knowledgeWorkflowMaterialRepository = sourceRepository === null
+    ? null
+    : new D1KnowledgeWorkflowMaterialRepository({
+      database: /** @type {import("./knowledge-workflow-material-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase)),
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind }),
+    });
+  const knowledgeWorkflowMaterialService = knowledgeWorkflowMaterialRepository === null || manualContentStore === null || knowledgeWorkflowService === null || manualConfiguration === null
+    ? null
+    : createKnowledgeWorkflowMaterialService({
+      parser: (command) => parseAuthorizedMaterial(command, {
+        digest: async (bytes) => {
+          const result = await digest(bytes);
+          if (!result.ok) throw new Error("Workflow material digest unavailable.");
+          return result.value;
+        },
+        maximumBytes: manualConfiguration.maximumBytes,
+        maximumCharacters: manualConfiguration.maximumCharacters,
+      }),
+      repository: knowledgeWorkflowMaterialRepository,
+      contentStore: manualContentStore,
+      workflow: { status: (command) => knowledgeWorkflowService.status(command), attachMaterial: (command) => knowledgeWorkflowService.attachMaterial(command) },
+      createId: () => hex(/** @type {(length: number) => Uint8Array} */ (platform.randomBytes)(16)),
+      now: () => platform.now().toISOString(),
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind }),
+    });
+  const knowledgeWorkflow = /** @type {KnowledgeWorkflowHandlerPort | null} */ (knowledgeWorkflowService === null || knowledgeWorkflowBinding === null
+    ? null
+    : {
+      /** @param {unknown} command */
+      start: async (command) => {
+        const enrichedCommand = isRecord(command)
+          ? Object.freeze({
+            ...command,
+            contentSignature: typeof command.contentSignature === "string" && command.contentSignature.trim() !== ""
+              ? command.contentSignature
+              : `source-revision:${String(command.sourceRevision)}`,
+            configDigests: knowledgeWorkflowConfigDigests,
+          })
+          : command;
+        const created = await knowledgeWorkflowService.createRun(enrichedCommand);
+        if (!created.ok) return { ok: false, error: { kind: created.error.kind } };
+        const workflowPayload = isRecord(enrichedCommand)
+          ? Object.freeze({ ...enrichedCommand, runId: created.value.run.runId })
+          : Object.freeze({ runId: created.value.run.runId, ownerId: created.value.run.ownerId });
+        const launched = await reconcileKnowledgeWorkflowLaunch(knowledgeWorkflowBinding, created.value.run, workflowPayload, created.value.reused);
+        if (!launched.ok) {
+          knowledgeWorkflowLogger({ event: "knowledge-workflow-start-failure", failureKind: "WorkflowStartFailed", runId: created.value.run.runId });
+          return /** @type {const} */ ({ ok: false, error: { kind: "WorkflowStartFailed" } });
+        }
+        return /** @type {const} */ ({ ok: true, value: { runId: created.value.run.runId, reused: created.value.reused } });
+      },
+      /** @param {unknown} command */
+      status: (command) => knowledgeWorkflowService.status(command),
+      /** @param {unknown} command */
+      sourceStatus: async (command) => {
+        if (!isRecord(command) || typeof command.ownerId !== "string" || command.ownerId.trim() === "" || typeof command.sourceId !== "string" || command.sourceId.trim() === "") return { ok: false, error: { kind: "WorkflowCommandInvalid" } };
+        const listed = await /** @type {import("./knowledge-workflow-d1.js").D1KnowledgeWorkflowRepository} */ (knowledgeWorkflowRepository).listBySource(command.ownerId, command.sourceId, undefined);
+        if (!listed.ok) return listed;
+        return { ok: true, value: Object.freeze({ ownerId: command.ownerId, sourceId: command.sourceId, run: listed.value[0] ?? null }) };
+      },
+      ...(knowledgeWorkflowMaterialService === null ? {} : {
+        material: async (/** @type {unknown} */ command) => {
+          const uploaded = await knowledgeWorkflowMaterialService.upload(command);
+          if (!uploaded.ok) return uploaded;
+          try {
+            const instance = await knowledgeWorkflowBinding.get(workflowInstanceId(uploaded.value.runId));
+            await instance.sendEvent({ type: "workflow-material-ready", payload: { runId: uploaded.value.runId, materialId: uploaded.value.materialId } });
+          } catch (error) {
+            if (!(error instanceof Error)) throw error;
+            knowledgeWorkflowLogger({ event: "knowledge-workflow-material-event-failure", failureKind: "WorkflowInstanceEventFailed", runId: uploaded.value.runId });
+            return /** @type {const} */ ({ ok: false, error: { kind: "WorkflowInstanceEventFailed" } });
+          }
+          return uploaded;
+        },
+      }),
+      /** @param {unknown} command */
+      control: async (command) => {
+        const prior = isRecord(command) && command.action === "resume"
+          ? await knowledgeWorkflowService.status(command)
+          : null;
+        if (prior !== null && !prior.ok) return prior;
+      const controlled = await knowledgeWorkflowService.control(command);
+      if (!controlled.ok) return controlled;
+      if (!isRecord(command) || (command.action !== "stop" && command.action !== "resume" && command.action !== "generate" && command.action !== "abandon")) return controlled;
+      try {
+        const instance = await knowledgeWorkflowBinding.get(workflowInstanceId(controlled.value.runId));
+        await deliverKnowledgeWorkflowControl(instance, command.action);
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        const rollback = workflowControlRollback(command, prior, controlled);
+        if (rollback !== null) {
+          const rolledBack = await knowledgeWorkflowService.advance(rollback);
+          knowledgeWorkflowLogger({
+            event: "knowledge-workflow-control-rollback",
+            failureKind: rolledBack.ok ? "WorkflowInstanceControlFailed" : "WorkflowControlRollbackFailed",
+            runId: controlled.value.runId,
+            action: command.action,
+          });
+        }
+        knowledgeWorkflowLogger({ event: "knowledge-workflow-control-failure", failureKind: "WorkflowInstanceControlFailed", diagnosticToken: workflowControlDiagnosticToken(error), runId: controlled.value.runId, action: command.action });
+        return /** @type {const} */ ({ ok: false, error: { kind: "WorkflowInstanceControlFailed" } });
+      }
+        return controlled;
+      },
+      /** @param {unknown} command */
+      rightsApproved: async (command) => {
+        const advanced = await knowledgeWorkflowService.rightsApproved(command);
+        if (!advanced.ok) return advanced;
+        if ((advanced.value.state === "robots-check" || advanced.value.state === "completed") && typeof advanced.value.runId === "string" && advanced.value.runId.trim() !== "") {
+          try {
+            const instance = await knowledgeWorkflowBinding.get(workflowInstanceId(advanced.value.runId));
+            await instance.sendEvent({ type: "rights-approved", payload: { runId: advanced.value.runId } });
+          } catch (error) {
+            if (!(error instanceof Error)) throw error;
+            knowledgeWorkflowLogger({ event: "knowledge-workflow-rights-event-failure", failureKind: "WorkflowInstanceEventFailed", runId: advanced.value.runId });
+            return /** @type {const} */ ({ ok: false, error: { kind: "WorkflowInstanceEventFailed" } });
+          }
+        }
+        return { ok: true, value: advanced.value };
+      },
+      /** @param {unknown} command */
+      revokeSource: (command) => knowledgeWorkflowService.revokeSource(command),
+    });
+  const privateDocumentRead = sourceRepository === null || knowledgeWorkflowRepository === null || knowledgeWorkflowMaterialRepository === null || manualContentStore === null
+    ? null
+    : createPrivateDocumentReadService({
+      source: { read: (/** @type {string} */ ownerId, /** @type {string} */ sourceId) => sourceRepository.read(ownerId, sourceId) },
+      workflow: { latest: async (/** @type {string} */ ownerId, /** @type {string} */ sourceId, /** @type {number} */ sourceRevision) => { const listed = await knowledgeWorkflowRepository.listBySource(ownerId, sourceId, sourceRevision); return listed.ok ? { ok: /** @type {const} */ (true), value: listed.value[0] ?? null } : listed; } },
+      material: { read: (/** @type {string} */ ownerId, /** @type {string} */ runId) => knowledgeWorkflowMaterialRepository.read(ownerId, runId) },
+      content: { read: (/** @type {string} */ ownerId, /** @type {string} */ objectKey) => manualContentStore.read(ownerId, objectKey) },
+    });
+  /** @type {((ownerId: string) => Promise<Result<readonly import("../src/features/source-library/contracts.js").LibrarySource[], unknown>>) | null} */
+  const activeSourceLister = sourceRepository === null
+    ? null
+    : async (/** @type {string} */ ownerId) => {
+      /** @type {import("../src/features/source-library/contracts.js").LibrarySource[]} */ const sources = [];
+      /** @type {{ readonly approvedAt: string, readonly sourceId: string } | null} */ let after = null;
+      for (let page = 0; page < 20; page += 1) {
+        const listed = await sourceRepository.browseActive({ ownerId, limit: 51, after });
+        if (!listed.ok) return listed;
+        const pageItems = listed.value.items.slice(0, 50);
+        sources.push(...pageItems);
+        if (listed.value.items.length <= 50) return { ok: /** @type {const} */ (true), value: Object.freeze([...sources]) };
+        const tail = pageItems.at(-1);
+        if (tail === undefined) return { ok: /** @type {const} */ (false), error: { kind: "SourceCatalogReadFailed" } };
+        after = { approvedAt: tail.approvedAt, sourceId: tail.id };
+      }
+      return { ok: /** @type {const} */ (false), error: { kind: "SourceCatalogReadFailed" } };
+    };
+  const knowledgeWorkflowBackfill = knowledgeWorkflow === null || activeSourceLister === null || knowledgeWorkflowConfigDigests === null
+    ? null
+    : createKnowledgeWorkflowBackfill({
+      list: activeSourceLister,
+      start: (command) => knowledgeWorkflow.start(command),
+      reset: learningBatches === null ? undefined : (ownerId) => learningBatches.clearGeneratedContent(ownerId),
+      invalidateReuse: (command) => /** @type {import("./knowledge-workflow-d1.js").D1KnowledgeWorkflowRepository} */ (knowledgeWorkflowRepository).invalidateReuse(command),
+      marker: new D1KnowledgeWorkflowBackfillRepository({
+        database: /** @type {import("./knowledge-workflow-backfill-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase)),
+        logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, failureKind: entry.failureKind }),
+      }),
+      profileFor: sourceRightsProfileFor,
+      now: () => platform.now().toISOString(),
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, failureKind: entry.failureKind }),
+    });
+  const knowledgeWorkflowReplay = knowledgeWorkflow === null || activeSourceLister === null || knowledgeWorkflowConfigDigests === null || learningBatches === null
+    ? null
+    : createKnowledgeWorkflowReplay({
+      list: activeSourceLister,
+      start: (command) => knowledgeWorkflow.start(command),
+      reset: (ownerId) => learningBatches.clearGeneratedContent(ownerId),
+      invalidateReuse: (command) => /** @type {import("./knowledge-workflow-d1.js").D1KnowledgeWorkflowRepository} */ (knowledgeWorkflowRepository).invalidateReuse(command),
+      marker: new D1KnowledgeWorkflowBackfillRepository({
+        database: /** @type {import("./knowledge-workflow-backfill-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase)),
+        logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, failureKind: entry.failureKind }),
+      }),
+      profileFor: sourceRightsProfileFor,
+      now: () => platform.now().toISOString(),
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, failureKind: entry.failureKind }),
+    });
+  const learningMediaRepository = sourceRepository === null || !isMediaBucket(environment.SOURCE_CONTENT_BUCKET) || !isCloudflareImageBinding(environment.IMAGES)
+    ? null
+    : new D1KnowledgeMediaRepository({
+      database: /** @type {import("./knowledge-workflow-media-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (configuration.value.sourceLibraryDatabase)),
+      bucket: /** @type {import("./knowledge-workflow-media-d1.js").MediaBucket} */ (environment.SOURCE_CONTENT_BUCKET),
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, stage: "media", failureKind: entry.failureKind }),
+    });
+  const learningMedia = learningMediaRepository === null
+    ? null
+    : createMediaPipeline({
+      publicEgress: platform.publicEgress,
+      digest: async (bytes) => {
+        const result = await digest(bytes);
+        return result.ok ? result : { ok: false, error: { kind: "MediaDigestUnavailable" } };
+      },
+      quarantine: {
+        put: async ({ key, bytes, mediaType }) => {
+          try {
+            await /** @type {import("./knowledge-workflow-media-d1.js").MediaBucket} */ (environment.SOURCE_CONTENT_BUCKET).put(key, bytes, { httpMetadata: { contentType: mediaType } });
+            return { ok: true, value: null };
+          } catch (error) {
+            if (error instanceof Error) return { ok: false, error: { kind: "MediaQuarantineFailed" } };
+            throw error;
+          }
+        },
+        remove: async (key) => {
+          try {
+            await /** @type {import("./knowledge-workflow-media-d1.js").MediaBucket} */ (environment.SOURCE_CONTENT_BUCKET).delete(key);
+            return { ok: true, value: null };
+          } catch (error) {
+            if (error instanceof Error) return { ok: false, error: { kind: "MediaCleanupFailed" } };
+            throw error;
+          }
+        },
+      },
+      derivatives: { create: createCloudflareImageDerivative(/** @type {import("./knowledge-workflow-media-transform.js").ImageBinding} */ (environment.IMAGES)) },
+      repository: learningMediaRepository,
+      createId: () => hex(/** @type {(length:number)=>Uint8Array} */ (platform.randomBytes)(16)),
+      now: () => platform.now().toISOString(),
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, stage: "media", failureKind: entry.failureKind }),
     });
   const youtubeConfiguration = configuration.value.youtube;
   const youtubeAdapter = youtubeConfiguration.status === "unavailable"
@@ -584,7 +932,11 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       allowedOrigin: configuration.value.allowedOrigin,
       maximumCommandBytes: manualConfiguration === null
         ? 32_768
-        : manualConfiguration.maximumBytes + 16_384,
+        : Math.min(Number.MAX_SAFE_INTEGER, manualConfiguration.maximumBytes * 2 + 16_384),
+      maximumMaterialBytes: manualConfiguration === null
+        ? 32_768
+        : manualConfiguration.maximumBytes,
+      maximumBackendOperationMs: 4_000,
     },
     {
       authenticate: (request) => authenticator.authenticate(request),
@@ -619,14 +971,27 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       },
       centralSearch: observedCentralSearch,
       sourceLibrary,
-      sourceCatalog,
+      sourceCatalog: sourceCatalogForHandler,
       sourceRightsApproval,
       sourceIngestion,
+      sourceRightsProfileFor,
+      knowledgeWorkflow,
+      privateDocumentRead,
+      knowledgeWorkflowBackfill: knowledgeWorkflowBackfill === null
+        ? null
+        : { run: (command) => knowledgeWorkflowBackfill.run(isRecord(command) ? Object.freeze({ ...command, configDigests: knowledgeWorkflowConfigDigests }) : command) },
+      knowledgeWorkflowReplay: knowledgeWorkflowReplay === null
+        ? null
+        : { run: (command) => knowledgeWorkflowReplay.run(isRecord(command) ? Object.freeze({ ...command, configDigests: knowledgeWorkflowConfigDigests }) : command) },
+      learningMedia: learningMedia === null ? null : { serve: (command) => learningMedia.serve(command) },
+      learningBatches,
+      now: () => platform.now().toISOString(),
+      requestLogger: discoveryRequestLogger,
       waitUntil: platform.waitUntil,
       manualMaterial,
       learningGeneration: learningRepository === null || learningStatus === null || learningReview === null || learningRevocation === null
         ? null
-        : { status: (command) => learningStatus.get(command), review: { decide: (command) => learningReview.decide(command), queue: (ownerId) => learningReviewQueue === null ? Promise.resolve({ ok: false, error: { kind: "LearningReviewQueuePersistenceFailed" } }) : learningReviewQueue.list(ownerId) }, revoke: { revoke: (command) => learningRevocation.revoke(command) } },
+        : { status: (command) => learningStatus.get(command), review: { decide: (command) => learningReview.decide(command), queue: (ownerId) => learningReviewQueue === null ? Promise.resolve({ ok: false, error: { kind: "LearningReviewQueuePersistenceFailed" } }) : learningReviewQueue.list(ownerId), visible: (ownerId) => learningReview.visible(ownerId) }, revoke: { revoke: (command) => learningRevocation.revoke(command) } },
     },
   );
 
@@ -824,8 +1189,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
  *   readonly sourceCursorSecret: string | null,
  *   readonly manualMaterial: null | { readonly bucket: import("./source-content-r2.js").R2BucketPort, readonly maximumBytes: number, readonly maximumCharacters: number, readonly mediaTypes: ReadonlySet<string>, readonly capacityPolicy: {readonly accountScope:string,readonly storedBytesLimit:number,readonly classAMonthlyLimit:number,readonly classBMonthlyLimit:number,readonly observationMaximumAgeMs:number} },
  *   readonly browserRun: null | { readonly binding: object | Function, readonly accountScope: string },
- *   readonly deepSeekApiKey: string | null,
+ *   readonly openRouterApiKey: string | null,
  *   readonly learningCost: { readonly inputUsdPerMillionTokens: number, readonly outputUsdPerMillionTokens: number },
+ *   readonly knowledgeWorkflowConfigDigests: Readonly<Record<string, string>> | null,
+ *   readonly knowledgeWorkflowEnabled: boolean,
  * }, DiscoveryCompositionFailure>}
  */
 function parseEnvironment(environment) {
@@ -873,18 +1240,20 @@ function parseEnvironment(environment) {
   if (!manualMaterial.ok) return manualMaterial;
   const browserRun = resolveBrowserRunConfiguration(environment);
   if (!browserRun.ok) return browserRun;
+  const knowledgeWorkflowConfigDigests = resolveKnowledgeWorkflowConfigDigests(environment);
+  if (!knowledgeWorkflowConfigDigests.ok) return knowledgeWorkflowConfigDigests;
   const braveApiKey = optionalSecret(environment.BRAVE_SEARCH_API_KEY);
   if (!braveApiKey.ok) {
     return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "BRAVE_SEARCH_API_KEY" } };
   }
-  const deepSeekApiKey = optionalSecret(environment.DEEPSEEK_API_KEY);
-  if (!deepSeekApiKey.ok) {
-    return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "DEEPSEEK_API_KEY" } };
+  const openRouterApiKey = optionalSecret(environment.OPENROUTER_API_KEY);
+  if (!openRouterApiKey.ok) {
+    return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "OPENROUTER_API_KEY" } };
   }
-  const learningInputRate = optionalRate(environment.DEEPSEEK_INPUT_USD_PER_MILLION, 1);
-  if (!learningInputRate.ok) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "DEEPSEEK_INPUT_USD_PER_MILLION" } };
-  const learningOutputRate = optionalRate(environment.DEEPSEEK_OUTPUT_USD_PER_MILLION, 1);
-  if (!learningOutputRate.ok) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "DEEPSEEK_OUTPUT_USD_PER_MILLION" } };
+  const learningInputRate = optionalRate(environment.OPENROUTER_INPUT_USD_PER_MILLION, 1);
+  if (!learningInputRate.ok) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "OPENROUTER_INPUT_USD_PER_MILLION" } };
+  const learningOutputRate = optionalRate(environment.OPENROUTER_OUTPUT_USD_PER_MILLION, 1);
+  if (!learningOutputRate.ok) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "OPENROUTER_OUTPUT_USD_PER_MILLION" } };
   const taddy = taddyCredentials(
     environment.TADDY_USER_ID,
     environment.TADDY_API_KEY,
@@ -968,7 +1337,7 @@ function parseEnvironment(environment) {
       transcriptLanguages,
       youtube: resolveYoutubeConfiguration(environment),
       braveApiKey: braveApiKey.value,
-      deepSeekApiKey: deepSeekApiKey.value,
+      openRouterApiKey: openRouterApiKey.value,
       learningCost: Object.freeze({ inputUsdPerMillionTokens: learningInputRate.value, outputUsdPerMillionTokens: learningOutputRate.value }),
       taddy: taddy.value,
       transcriptAuthorization: transcriptAuthorization.value,
@@ -984,8 +1353,64 @@ function parseEnvironment(environment) {
         : null,
       manualMaterial: manualMaterial.value,
       browserRun: browserRun.value,
+      knowledgeWorkflowConfigDigests: knowledgeWorkflowConfigDigests.value,
+      knowledgeWorkflowEnabled: resolveKnowledgeWorkflowEnabled(environment),
     }),
   };
+}
+
+/**
+ * Workflow configuration digests are deployment configuration, not secrets.
+ * Requiring all four role digests when the Workflow binding is present keeps a
+ * deployed run tied to the reviewed YAML snapshots.
+ * @param {DiscoveryWorkerEnvironment} environment
+ * @returns {Result<Readonly<Record<string, string>> | null, DiscoveryCompositionFailure>}
+ */
+function resolveKnowledgeWorkflowConfigDigests(environment) {
+  const workflowConfigured = environment.KNOWLEDGE_WORKFLOW !== undefined;
+  if (workflowConfigured && !isKnowledgeWorkflowBinding(environment.KNOWLEDGE_WORKFLOW)) {
+    return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "KNOWLEDGE_WORKFLOW" } };
+  }
+  if (environment.KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS === undefined) {
+    return workflowConfigured
+      ? { ok: false, error: { kind: "DiscoveryDeploymentConfigurationMissing", field: "KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS" } }
+      : { ok: true, value: null };
+  }
+  if (typeof environment.KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS !== "string" || environment.KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS.trim() === "") {
+    return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS" } };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(environment.KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS);
+  } catch (error) {
+    if (error instanceof SyntaxError) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS" } };
+    throw error;
+  }
+  if (!isRecord(parsed)) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS" } };
+  const roles = ["rights-assessor", "knowledge-scraper", "question-generator", "question-evaluator"];
+  const keys = Object.keys(parsed);
+  if (keys.length !== roles.length || roles.some((role) => !Object.hasOwn(parsed, role))) {
+    return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: "KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS" } };
+  }
+  /** @type {Record<string, string>} */
+  const digests = {};
+  for (const role of roles) {
+    const digest = parsed[role];
+    if (typeof digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+      return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationInvalid", field: `KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS.${role}` } };
+    }
+    digests[role] = digest;
+  }
+  return { ok: true, value: Object.freeze(digests) };
+}
+
+/** @param {DiscoveryWorkerEnvironment} environment @returns {boolean} */
+function resolveKnowledgeWorkflowEnabled(environment) {
+  if (environment.KNOWLEDGE_WORKFLOW_ENABLED === undefined) return false;
+  if (typeof environment.KNOWLEDGE_WORKFLOW_ENABLED !== "string") throw new TypeError("KNOWLEDGE_WORKFLOW_ENABLED must be a string.");
+  if (environment.KNOWLEDGE_WORKFLOW_ENABLED === "true") return true;
+  if (environment.KNOWLEDGE_WORKFLOW_ENABLED === "false") return false;
+  throw new TypeError("KNOWLEDGE_WORKFLOW_ENABLED must be true or false.");
 }
 
 /** @param {unknown} value @returns {Result<string|null,{readonly kind:"SecretInvalid"}>} */
@@ -1072,7 +1497,7 @@ function resolveManualMaterialConfiguration(environment) {
   if (environment.SOURCE_LIBRARY_DB === undefined) return { ok: false, error: { kind: "DiscoveryDeploymentConfigurationMissing", field: "SOURCE_LIBRARY_DB" } };
   const bytes = typeof environment.SOURCE_MANUAL_MAX_BYTES === "string" && positiveIntegerText(environment.SOURCE_MANUAL_MAX_BYTES) ? Number(environment.SOURCE_MANUAL_MAX_BYTES) : null;
   const characters = typeof environment.SOURCE_MANUAL_MAX_CHARACTERS === "string" && positiveIntegerText(environment.SOURCE_MANUAL_MAX_CHARACTERS) ? Number(environment.SOURCE_MANUAL_MAX_CHARACTERS) : null;
-  const mediaTypes = typeof environment.SOURCE_MANUAL_MEDIA_TYPES === "string" ? new Set(environment.SOURCE_MANUAL_MEDIA_TYPES.split(",").map((value) => value.trim().toLowerCase()).filter((value) => value.startsWith("text/"))) : new Set();
+  const mediaTypes = typeof environment.SOURCE_MANUAL_MEDIA_TYPES === "string" ? new Set(environment.SOURCE_MANUAL_MEDIA_TYPES.split(",").map((value) => value.trim().toLowerCase()).filter((value) => value.startsWith("text/") || ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(value))) : new Set();
   const capacityFields = /** @type {const} */ ([
     "SOURCE_R2_ACCOUNT_SCOPE",
     "SOURCE_R2_STORED_BYTES_LIMIT",
@@ -1933,6 +2358,16 @@ function isR2Bucket(value) {
   return isRecord(value) && typeof value.put === "function" && typeof value.delete === "function";
 }
 
+/** @param {unknown} value @returns {value is import("./knowledge-workflow-media-d1.js").MediaBucket} */
+function isMediaBucket(value) {
+  return isRecord(value) && typeof value.put === "function" && typeof value.get === "function" && typeof value.delete === "function";
+}
+
+/** @param {unknown} value @returns {value is KnowledgeWorkflowBinding} */
+function isKnowledgeWorkflowBinding(value) {
+  return isRecord(value) && typeof value.create === "function" && typeof value.get === "function";
+}
+
 /** @param {unknown} value @returns {value is QuotaDurableObjectNamespace} */
 function isQuotaNamespace(value) {
   return isRecord(value) && typeof value.idFromName === "function" &&
@@ -1970,6 +2405,141 @@ function hex(bytes) {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * D1 run IDs are human-readable and retain a colon separator. Workflow
+ * instance IDs use a conservative URL-safe alphabet so the same instance can
+ * be addressed consistently by create(), get(), and event delivery.
+ * @param {string} runId
+ * @returns {string}
+ */
+function workflowInstanceId(runId) {
+  if (typeof runId !== "string" || runId.trim() === "") throw new TypeError("Knowledge workflow run ID is invalid.");
+  const normalized = runId.startsWith("knowledge-workflow:")
+    ? `knowledge-workflow-${runId.slice("knowledge-workflow:".length)}`
+    : runId.replace(/[^A-Za-z0-9_-]/gu, "-");
+  if (!/^[A-Za-z0-9_-]{1,100}$/u.test(normalized)) throw new TypeError("Knowledge workflow instance ID is invalid.");
+  return normalized;
+}
+
+/**
+ * Reconciles the durable D1 run with its named Workflow instance. A replay
+ * first checks an existing binding; a missing binding is safely re-created
+ * with the same ID because the platform rejects duplicate IDs.
+ * @param {KnowledgeWorkflowBinding} binding
+ * @param {{ readonly runId: string, readonly state: string }} run
+ * @param {unknown} params
+ * @param {boolean} reused
+ * @returns {Promise<Result<null, { readonly kind: "WorkflowStartFailed" }>>}
+ */
+async function reconcileKnowledgeWorkflowLaunch(binding, run, params, reused) {
+  if (!binding || typeof binding.get !== "function" || typeof binding.create !== "function" || !run || typeof run.runId !== "string" || run.runId.trim() === "") throw new TypeError("Knowledge workflow launch dependencies are invalid.");
+  if (run.state === "completed" || run.state === "abandoned") return { ok: true, value: null };
+  const instanceId = workflowInstanceId(run.runId);
+  if (reused) {
+    let existing = null;
+    try {
+      existing = await binding.get(instanceId);
+    } catch (error) {
+      // A named instance may be absent after a prior create failure; create
+      // below is still safe because the platform rejects duplicate IDs.
+    }
+    if (existing !== null) {
+      if (existing.id !== instanceId) return { ok: false, error: { kind: "WorkflowStartFailed" } };
+      if (typeof existing.status === "function") {
+        let status;
+        try { status = await existing.status(); } catch (error) { return { ok: false, error: { kind: "WorkflowStartFailed" } }; }
+        if (!status || typeof status.status !== "string" || status.status.trim() === "") return { ok: false, error: { kind: "WorkflowStartFailed" } };
+      }
+      return { ok: true, value: null };
+    }
+  }
+  try {
+    const created = await binding.create({ id: instanceId, params });
+    return created && created.id === instanceId
+      ? { ok: true, value: null }
+      : { ok: false, error: { kind: "WorkflowStartFailed" } };
+  } catch (error) {
+    return { ok: false, error: { kind: "WorkflowStartFailed" } };
+  }
+}
+
+/**
+ * Deliver a control command to a live Workflow instance. A retryable Workflow
+ * is waiting at step.waitForEvent, so the matching event is authoritative and
+ * is delivered first with bounded retries. If direct delivery is rejected, the
+ * instance may be paused; resume it once and redeliver the event.
+ * @param {{ readonly pause?: () => Promise<void>, readonly resume?: () => Promise<void>, readonly sendEvent?: (event: { readonly type: string, readonly payload?: unknown }) => Promise<void>, readonly terminate?: (options: { readonly rollback: boolean }) => Promise<void> }} instance
+ * @param {unknown} action
+ * @returns {Promise<void>}
+ */
+async function deliverKnowledgeWorkflowControl(instance, action) {
+  if (instance === null || typeof instance !== "object") throw new TypeError("Knowledge workflow instance is invalid.");
+  if (action === "stop") {
+    if (typeof instance.pause !== "function") throw new TypeError("Knowledge workflow pause control is unavailable.");
+    await instance.pause();
+    return;
+  }
+  if (action === "resume") {
+    if (typeof instance.resume !== "function" || typeof instance.sendEvent !== "function") throw new TypeError("Knowledge workflow resume control is unavailable.");
+    const event = { type: "workflow-control", payload: { action } };
+    let lastError = null;
+    for (const delay of [0, 100, 250]) {
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        await instance.sendEvent(event);
+        return;
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        lastError = error;
+      }
+    }
+    if (lastError === null) throw new Error("Workflow control event delivery failed.");
+    await instance.resume();
+    await instance.sendEvent(event);
+    return;
+  }
+  if (action === "generate") {
+    if (typeof instance.sendEvent !== "function") throw new TypeError("Knowledge workflow generation control is unavailable.");
+    await instance.sendEvent({ type: "workflow-control", payload: { action } });
+    return;
+  }
+  if (action === "abandon") {
+    if (typeof instance.terminate !== "function") throw new TypeError("Knowledge workflow abandonment control is unavailable.");
+    await instance.terminate({ rollback: true });
+    return;
+  }
+  throw new TypeError("Knowledge workflow control action is invalid.");
+}
+
+/**
+ * Returns the only retry rollback currently safe to perform after a Workflow
+ * event delivery failure. The original failure is retained so the public
+ * status remains actionable and a later retry can use the latest revision.
+ * @param {unknown} command
+ * @param {unknown} prior
+ * @param {unknown} controlled
+ * @returns {{ readonly ownerId: string, readonly runId: string, readonly expectedRevision: number, readonly nextState: "retryable-failure", readonly failureKind: string } | null}
+ */
+function workflowControlRollback(command, prior, controlled) {
+  if (!isRecord(command) || command.action !== "resume" || !isRecord(prior) || prior.ok !== true || !isRecord(prior.value) || !isRecord(controlled) || controlled.ok !== true || !isRecord(controlled.value)) return null;
+  const previous = prior.value;
+  const transitioned = controlled.value;
+  if (previous.state !== "retryable-failure" || transitioned.state !== "extraction-loop" || typeof previous.ownerId !== "string" || typeof previous.runId !== "string" || typeof transitioned.revision !== "number" || !Number.isSafeInteger(transitioned.revision)) return null;
+  return Object.freeze({ ownerId: previous.ownerId, runId: previous.runId, expectedRevision: transitioned.revision, nextState: "retryable-failure", failureKind: typeof previous.failureKind === "string" && previous.failureKind.trim() !== "" ? previous.failureKind : "WorkflowInstanceControlFailed" });
+}
+
+/** @param {unknown} error @returns {string} */
+function workflowControlDiagnosticToken(error) {
+  if (!(error instanceof Error)) return "unknown";
+  const message = error.message.toLowerCase();
+  if (message.includes("not found") || message.includes("unknown instance")) return "instance-not-found";
+  if (message.includes("resume") || message.includes("paused")) return "resume-failed";
+  if (message.includes("event") || message.includes("wait")) return "event-delivery-failed";
+  if (message.includes("terminate") || message.includes("rollback")) return "termination-failed";
+  if (message.includes("pause")) return "pause-failed";
+  return "control-failed";
+}
+
 /** @type {{ readonly fetch: (request: Request, environment: DiscoveryWorkerEnvironment) => Promise<Response> }} */
 const worker = Object.freeze({
   async fetch(request, environment) {
@@ -1991,4 +2561,8 @@ export default worker;
 export {
   PublisherTranscriptAuthorizationDurableObject,
   YouTubeOAuthDurableObject,
+  deliverKnowledgeWorkflowControl,
+  workflowControlRollback,
+  workflowInstanceId,
+  reconcileKnowledgeWorkflowLaunch,
 };

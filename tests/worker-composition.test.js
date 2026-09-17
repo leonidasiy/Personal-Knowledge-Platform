@@ -2,9 +2,39 @@
 
 import {
   createCloudflareDiscoveryWorker,
+  deliverKnowledgeWorkflowControl,
+  reconcileKnowledgeWorkflowLaunch,
   YouTubeOAuthDurableObject,
   YouTubeQuotaDurableObject,
+  workflowInstanceId,
+  workflowControlRollback,
 } from "../worker/main.js";
+
+Deno.test("workflow launch recovery creates a missing binding exactly once and never restarts a completed run", async () => {
+  /** @type {string[]} */ const calls = [];
+  const binding = {
+    async get() { calls.push("get"); throw new Error("not found"); },
+    async create(/** @type {{ readonly id: string }} */ options) { calls.push(`create:${options.id}`); return { id: options.id, pause: async () => {}, resume: async () => {}, terminate: async () => {}, sendEvent: async () => {} }; },
+  };
+  const active = await reconcileKnowledgeWorkflowLaunch(binding, { runId: "knowledge-workflow:run-a", state: "source-added" }, { ownerId: "owner-a" }, true);
+  assertEquals(active.ok, true);
+  assertEquals(calls.join("|"), "get|create:knowledge-workflow-run-a");
+  const completed = await reconcileKnowledgeWorkflowLaunch(binding, { runId: "knowledge-workflow:run-b", state: "completed" }, { ownerId: "owner-a" }, true);
+  assertEquals(completed.ok, true);
+  assertEquals(calls.join("|"), "get|create:knowledge-workflow-run-a");
+});
+
+Deno.test("workflow launch recovery returns a typed failure for malformed binding results and create failures", async () => {
+  const malformed = await reconcileKnowledgeWorkflowLaunch({ get: async () => ({ id: "other", pause: async () => {}, resume: async () => {}, terminate: async () => {}, sendEvent: async () => {} }), create: async () => ({ id: "unused", pause: async () => {}, resume: async () => {}, terminate: async () => {}, sendEvent: async () => {} }) }, { runId: "knowledge-workflow:run-a", state: "source-added" }, { ownerId: "owner-a" }, true);
+  assertEquals(malformed.ok, false);
+  if (!malformed.ok) assertEquals(malformed.error.kind, "WorkflowStartFailed");
+  const rejected = await reconcileKnowledgeWorkflowLaunch({ get: async () => { throw new Error("not found"); }, create: async () => { throw new Error("unavailable"); } }, { runId: "knowledge-workflow:run-a", state: "source-added" }, { ownerId: "owner-a" }, true);
+  assertEquals(rejected.ok, false);
+  if (!rejected.ok) assertEquals(rejected.error.kind, "WorkflowStartFailed");
+  const statusRejected = await reconcileKnowledgeWorkflowLaunch({ get: async () => ({ id: "knowledge-workflow-run-a", pause: async () => {}, resume: async () => {}, terminate: async () => {}, sendEvent: async () => {}, status: async () => { throw new Error("unavailable"); } }), create: async () => ({ id: "unused", pause: async () => {}, resume: async () => {}, terminate: async () => {}, sendEvent: async () => {} }) }, { runId: "knowledge-workflow:run-a", state: "source-added" }, { ownerId: "owner-a" }, true);
+  assertEquals(statusRejected.ok, false);
+  if (!statusRejected.ok) assertEquals(statusRejected.error.kind, "WorkflowStartFailed");
+});
 
 /**
  * @typedef {{
@@ -568,6 +598,131 @@ Deno.test("source-library Access rejection occurs before D1 work", async () => {
   assertEquals(d1Calls, 0);
 });
 
+Deno.test("enabled knowledge workflow receives the persisted run identifier in its start payload", async () => {
+  /** @type {unknown[]} */
+  const starts = [];
+  const d1 = {
+    prepare: (/** @type {string} */ query) => {
+      const statement = {
+        /** @param {...(string | number | null)} _bindings */
+        bind(..._bindings) { return statement; },
+        first: async () => query.includes("FROM interest_areas") ? { interest_area_id: "area-from-user-contract" } : null,
+        all: async () => ({ success: true, results: [] }),
+        run: async () => ({ success: true, meta: { changes: 1 } }),
+      };
+      return statement;
+    },
+    batch: async (/** @type {readonly unknown[]} */ statements) => statements.map(() => ({ success: true, meta: { changes: 1 } })),
+  };
+  const workflow = {
+    async create(/** @type {{ readonly id: string, readonly params: unknown }} */ options) { starts.push(options); return { id: options.id, pause: async () => {}, resume: async () => {}, terminate: async () => {}, sendEvent: async () => {} }; },
+    async get(/** @type {string} */ id) { return { id, pause: async () => {}, resume: async () => {}, terminate: async () => {}, sendEvent: async () => {} }; },
+  };
+  const result = createCloudflareDiscoveryWorker({
+    ...environment({ fetch: async () => new Response(JSON.stringify({ used: 1 })) }),
+    SOURCE_LIBRARY_DB: d1,
+    SOURCE_INGESTION_POLICY_VERSION: "bounded-source-test-v1",
+    SOURCE_CURSOR_SECRET: "test-source-cursor-secret-value-32",
+    KNOWLEDGE_WORKFLOW: workflow,
+    KNOWLEDGE_WORKFLOW_ENABLED: "true",
+    KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS: JSON.stringify({
+      "rights-assessor": "sha256:0527746e185e451dad9f7b0e4ea038829b1314d85472846045c072392a4c8da8",
+      "knowledge-scraper": "sha256:6c872bf81db03d74bc35de5f52d2d0479f1761ba41887fc2457227e071377e72",
+      "question-generator": "sha256:d6e4dee53367eed2e6f8de4b5e83d2ce3edbddf6a476473290dd2cd7b8ad8d82",
+      "question-evaluator": "sha256:0debcf2680759d5e626c8e3b959cf6a49a562b94de4cecb5f64ad81876f85d2c",
+    }),
+  }, {
+    fetch: /** @type {typeof fetch} */ (async () => Response.json({ keys: [accessJwk] })),
+    now: () => now,
+    subtle: crypto.subtle,
+    randomBytes: (length) => new Uint8Array(length).fill(7),
+  });
+  if (!result.ok) throw new Error(`${result.error.kind}:${result.error.field}`);
+  const response = await result.value.fetch(commandRequest(
+    "https://worker.example/api/source-library/approve",
+    await accessToken(),
+    {
+      submittedUrl: "https://publisher.example/learn",
+      canonicalUrl: "https://publisher.example/learn",
+      title: "Learning source",
+      description: "Attributed source description.",
+      identityStatus: "resolved",
+      identityEvidence: [{ attribute: "canonical-link", value: "https://publisher.example/learn", provenanceUrl: "https://publisher.example/learn", observedAt: now.toISOString() }],
+      adapter: { id: "adapter-from-registry", version: "1", granularity: "evidence-resolved", capabilities: ["metadata"] },
+      interestAreaIds: ["area-from-user-contract"],
+      idempotencyKey: "workflow-source-approve-1",
+    },
+  ));
+  assertEquals(response.status, 200);
+  assertEquals(starts.length, 1);
+  const options = /** @type {{ readonly id: string, readonly params: Record<string, unknown> }} */ (starts[0]);
+  assertEquals(options.id, workflowInstanceId(/** @type {string} */ (options.params.runId)));
+  assertEquals(options.params.ownerId, "owner-a");
+});
+
+Deno.test("retryable workflow control delivers the event to a waiting instance", async () => {
+  /** @type {string[]} */ const calls = [];
+  await deliverKnowledgeWorkflowControl({
+    pause: async () => { calls.push("pause"); },
+    resume: async () => { calls.push("resume"); },
+    sendEvent: async (event) => { calls.push(`event:${JSON.stringify(event)}`); },
+    terminate: async () => { calls.push("terminate"); },
+  }, "resume");
+  assertEquals(calls.join("|"), 'event:{"type":"workflow-control","payload":{"action":"resume"}}');
+});
+
+Deno.test("paused workflow control resumes only after direct event delivery is rejected", async () => {
+  /** @type {string[]} */ const calls = [];
+  let directEvents = 0;
+  await deliverKnowledgeWorkflowControl({
+    resume: async () => { calls.push("resume"); },
+    sendEvent: async (event) => {
+      calls.push(`event:${JSON.stringify(event)}`);
+      directEvents += 1;
+      if (directEvents <= 3) {
+        throw new Error("workflow is paused");
+      }
+    },
+  }, "resume");
+  assertEquals(calls.join("|"), 'event:{"type":"workflow-control","payload":{"action":"resume"}}|event:{"type":"workflow-control","payload":{"action":"resume"}}|event:{"type":"workflow-control","payload":{"action":"resume"}}|resume|event:{"type":"workflow-control","payload":{"action":"resume"}}');
+});
+
+Deno.test("workflow control propagates a non-Error event failure", async () => {
+  let events = 0;
+  let failed = false;
+  try {
+    await deliverKnowledgeWorkflowControl({
+      resume: async () => { throw new Error("resume must not run"); },
+      sendEvent: async () => { events += 1; throw "invalid-event-failure"; },
+    }, "resume");
+  } catch (error) {
+    failed = error === "invalid-event-failure";
+  }
+  assertEquals(failed, true);
+  assertEquals(events, 1);
+});
+
+Deno.test("workflow control rejects an invalid action without touching the instance", async () => {
+  let calls = 0;
+  let failed = false;
+  try {
+    await deliverKnowledgeWorkflowControl({ resume: async () => { calls += 1; } }, "invalid-action");
+  } catch (error) {
+    failed = error instanceof TypeError;
+  }
+  assertEquals(failed, true);
+  assertEquals(calls, 0);
+});
+
+Deno.test("failed retry control produces an owner-scoped rollback at the new revision", () => {
+  const rollback = workflowControlRollback(
+    { action: "resume" },
+    { ok: true, value: { ownerId: "owner-a", runId: "run-a", state: "retryable-failure", revision: 5, failureKind: "KnowledgePageFetchFailed" } },
+    { ok: true, value: { ownerId: "owner-a", runId: "run-a", state: "extraction-loop", revision: 6 } },
+  );
+  assertEquals(JSON.stringify(rollback), JSON.stringify({ ownerId: "owner-a", runId: "run-a", expectedRevision: 6, nextState: "retryable-failure", failureKind: "KnowledgePageFetchFailed" }));
+});
+
 Deno.test("configured Browser Run composition reaches the authoritative job repository", async () => {
   let jobReads = 0;
   const d1 = {
@@ -589,7 +744,7 @@ Deno.test("configured Browser Run composition reaches the authoritative job repo
     batch: async (/** @type {readonly unknown[]} */ statements) =>
       statements.map(() => ({ success: true, meta: { changes: 1 } })),
   };
-  const bucket = { put: async () => null, delete: async () => undefined };
+  const bucket = { put: async () => null, get: async () => null, delete: async () => undefined };
   const result = createCloudflareDiscoveryWorker(
     {
       ...environment({

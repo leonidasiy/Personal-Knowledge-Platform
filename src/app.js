@@ -4,11 +4,7 @@ import { CatalogRepository } from "./features/catalog/repository.js";
 import { ExposureRepository } from "./features/exposure/repository.js";
 import { ExposureService } from "./features/exposure/service.js";
 import { FeedbackAudioService } from "./features/experience/audio.js";
-import {
-  accentSlotFor,
-  applyPresentationUpdate,
-  resolveTheme,
-} from "./features/experience/presentation.js";
+import { applyPresentationUpdate, resolveTheme } from "./features/experience/presentation.js";
 import { SettingsRepository } from "./features/experience/settings.js";
 import { PreferenceRepository } from "./features/preference/repository.js";
 import { PreferenceService } from "./features/preference/service.js";
@@ -33,12 +29,9 @@ const {
 /** @import { ExposureCommand } from "./features/exposure/contracts.js" */
 /** @import { AudioContextPort, ExperienceSettings, SettingsFailure, ViewTransitionCapability } from "./features/experience/contracts.js" */
 /** @import { PreferenceCommand } from "./features/preference/contracts.js" */
-/** @import { RecallCommand, RecallPrompt } from "./features/recall/contracts.js" */
-/** @import { RecallService } from "./features/recall/service.js" */
+/** @import { RecallPrompt } from "./features/recall/contracts.js" */
 /** @import { StudyCommand, StudyEvent } from "./features/study/contracts.js" */
-/** @import { DailyLearningSettings, DailyRecallCohort, DailyResponseFact, DailyStudySet, RecallCandidateRef, StudyCandidateRef } from "./features/daily-learning/contracts.js" */
-/** @import { PromptGenerationEvent } from "./features/prompt-bank/contracts.js" */
-/** @import { renderReviewRoute, questionResponseFromFormData } from "./routes/review.js" */
+/** @import { DailyLearningSettings, DailyStudySet } from "./features/daily-learning/contracts.js" */
 /** @import { createLibraryPage } from "./startup/library-page.js" */
 /** @import { createDiscoveryPage } from "./startup/discovery-page.js" */
 /** @import { createExperienceActions } from "./startup/experience-actions.js" */
@@ -218,16 +211,6 @@ const studyService = new StudyService({
   },
 });
 const recallRepository = new RecallRepository();
-/** @type {RecallService | null} */
-let recallService = null;
-/** @type {RecallCommand[]} */
-const restoredRecallCommands = [];
-/** @type {Map<string, string>} */
-const recallSourceRecords = new Map();
-/** @type {{ recordId: string, reason: string }[]} */
-const incompatibleRecallRecords = [];
-/** @type {string | null} */
-let recallRuntimeIssue = null;
 /** @type {{ readonly kind: "LocalStateReadFailed" | "LocalStateCorrupt", readonly message: string } | null} */
 let startupRestoreIssue = null;
 const dailyLearningRepository = new DailyLearningRepository();
@@ -241,36 +224,20 @@ const dailyLearningService = new DailyLearningService({
 });
 
 let activeView = parseRoute(location.hash).view;
-let libraryPage = parseRoute(location.hash).libraryPage;
-let reviewMode = parseRoute(location.hash).reviewMode;
-let scheduledPromptId = parseRoute(location.hash).scheduledPromptId;
 let discoveryItemId = parseRoute(location.hash).discoveryItemId;
 /** @type {import("./features/feed/service.js").FeedService | null} */
 let feedService = null;
 /** @type {FeedPage | null} */
 let feedPage = null;
+/** @type {ReturnType<import("./features/learning-generation/learner.js").createLearnerController> | null} */
+let learnerController = null;
 /** @type {RankedFeedItem[]} */
 let visibleItems = [];
 let revealedStudyItems = 1;
 /** @type {DailyLearningSettings | null} */
 let dailySettings = null;
-/** @type {DailyResponseFact[]} */
-const dailyResponseFacts = [];
-/** @type {Map<string, { readonly response: string, readonly explanation: string }>} */
-const openResponses = new Map();
 /** @type {ReturnType<typeof setTimeout> | null} */
 let promptEligibilityTimer = null;
-let activeQuestionIndex = 0;
-/** @type {string | null} */
-let reviewFeedbackPromptId = null;
-/** @type {typeof renderReviewRoute | null} */
-let reviewRenderer = null;
-/** @type {typeof questionResponseFromFormData | null} */
-let reviewResponseFromForm = null;
-/** @type {Promise<void> | null} */
-let reviewRouteLoad = null;
-/** @type {string | null} */
-let reviewRouteIssue = null;
 /** @type {ReturnType<typeof createLibraryPage> | null} */
 let libraryPageController = null;
 /** @type {Promise<void> | null} */
@@ -301,29 +268,14 @@ const notifications = installNotificationController({
     renderMessagesOnly();
   },
 });
-/** @type {import("./features/review-recovery/service.js").ReviewRecoveryService | null} */
-let reviewRecovery = null;
-
 /** @type {"cursor-expired" | null} */
 let feedRecovery = null;
 /** @type {ExperienceSettings} */
 let experienceSettings = DEFAULT_SETTINGS;
 /** @type {SettingsFailure | null} */
 let settingsIssue = null;
-/** @type {Map<string, { readonly message: string, readonly status: "correct" | "incorrect" | "review-required", animate: boolean }>} */
-const answerFeedbackByPrompt = new Map();
 let settingsOpen = false;
 let sessionStartPending = false;
-/** @type {IntersectionObserver | null} */
-let studyObserver = null;
-/** @type {IntersectionObserver | null} */
-let feedRevealObserver = null;
-/** @type {Map<string, number>} */
-const passiveExposureTimers = new Map();
-/** @type {Set<string>} */
-const passiveExposureInFlight = new Set();
-/** @type {Set<string>} */
-const dismissedPreferencePrompts = new Set();
 /** @type {Set<string>} */
 const pendingWrites = new Set();
 
@@ -350,15 +302,6 @@ async function initialize() {
     return;
   }
   dailySettings = restored.value.dailySettings;
-  dailyResponseFacts.push(...restored.value.responseFacts);
-  restoredRecallCommands.push(...restored.value.recallCommands);
-  for (const [idempotencyKey, recordId] of restored.value.recallSourceRecords) {
-    recallSourceRecords.set(idempotencyKey, recordId);
-  }
-  incompatibleRecallRecords.push(...restored.value.incompatibleRecallRecords);
-  for (const [promptId, response] of restored.value.openResponses) {
-    openResponses.set(promptId, response);
-  }
   if (!(await persistCatalog())) {
     render();
     return;
@@ -367,6 +310,7 @@ async function initialize() {
     render();
     return;
   }
+  await loadLearnerController();
   await startFeedSession();
   await refreshPromptAvailability();
   if (!(await ensureDailyStudySet())) {
@@ -618,15 +562,14 @@ function createRecallPrompt(id, contentId, knowledgeUnitId, promptText) {
 
 async function loadActiveRoute() {
   if (startupRestoreIssue !== null) return;
+  if (learnerController !== null && activeView === "feed") {
+    await learnerController.loadFeed();
+  }
   if (activeView === "review") {
-    await Promise.all([loadReviewRoute(), ensureRecallRuntime()]);
+    await learnerController?.loadReview();
   }
   if (activeView === "library") {
     await loadLibraryRoute();
-    if (libraryPage === "review-queue") {
-      await ensureRecallRuntime();
-      await libraryPageController?.loadReviewQueue();
-    }
   }
   if (activeView === "discover") {
     if (discoveryPage === null) {
@@ -663,7 +606,6 @@ async function loadActiveRoute() {
             render();
           });
           activeView = "library";
-          libraryPage = "collection";
           location.hash = "library";
         },
         rerender: () => render(),
@@ -676,35 +618,42 @@ async function loadActiveRoute() {
   }
 }
 
-async function loadReviewRoute() {
-  if (reviewRenderer !== null) return;
-  reviewRouteLoad ??= import("./routes/review.js").then((module) => {
-    reviewRenderer = module.renderReviewRoute;
-    reviewResponseFromForm = module.questionResponseFromFormData;
-    reviewRouteIssue = null;
-  }).catch(() => {
-    reviewRouteIssue = APP_COPY.reviewRouteUnavailable;
-  }).finally(() => {
-    reviewRouteLoad = null;
+async function loadLearnerController() {
+  if (learnerController !== null) {
+    await Promise.all([learnerController.loadFeed(), learnerController.loadReview()]);
+    return;
+  }
+  const module = await import("./features/learning-generation/learner.js");
+  learnerController = module.createLearnerController({
+    fetch,
+    baseUrl: new URL("./", location.href).href,
+    timeoutMs: 15_000,
+    escapeHtml,
+    now: () => new Date().toISOString(),
+    createId: () => crypto.randomUUID(),
+    onChange: () => render(),
   });
-  await reviewRouteLoad;
+  await Promise.all([learnerController.loadFeed(), learnerController.loadReview()]);
 }
 
 async function loadLibraryRoute() {
+  if (libraryRouteLoad !== null) {
+    await libraryRouteLoad;
+    return;
+  }
   if (libraryPageController !== null) return;
   libraryRouteLoad ??= import("./startup/library-page.js").then(
-    async (module) => {
+    (module) => {
       libraryPageController = module.createLibraryPage({
         fetch,
         gatewayBaseUrl: new URL("./", location.href).href,
         escapeHtml,
-        formatDate,
-        createId: () => crypto.randomUUID(),
-        now: () => new Date().toISOString(),
-        confirmDisable: (source) =>
-          confirm(
-            `Remove "${source.title}" from future ingestion and Feed selection? Study and review history will be preserved.`,
-          ),
+          formatDate,
+          createId: () => crypto.randomUUID(),
+          confirmDisable: (source) =>
+            confirm(
+            `Remove "${source.title}" and all paired knowledge, questions, media, and schedules? Activity history will be preserved.`,
+            ),
         createObserver: (load) => {
           if (!("IntersectionObserver" in globalThis)) return null;
           const observer = new IntersectionObserver((entries) => {
@@ -715,6 +664,8 @@ async function loadLibraryRoute() {
             disconnect: () => observer.disconnect(),
           };
         },
+        schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+        cancel: (handle) => clearTimeout(handle),
         onNotice: (message) => {
           notice = message;
           errorMessage = null;
@@ -725,7 +676,7 @@ async function loadLibraryRoute() {
         },
         rerender: () => render(),
       });
-      await libraryPageController.load();
+      return libraryPageController.load();
     },
   ).then(() => {
     libraryRouteIssue = null;
@@ -737,62 +688,11 @@ async function loadLibraryRoute() {
   await libraryRouteLoad;
 }
 
-async function ensureRecallRuntime() {
-  if (recallService !== null) return true;
-  let modules;
-  try {
-    modules = await Promise.all([
-      import("./features/recall/service.js"),
-      import("./features/recall/ts-fsrs-adapter.js"),
-    ]);
-  } catch {
-    recallRuntimeIssue = APP_COPY.recallRuntimeUnavailable;
-    return false;
-  }
-  const [{ RecallService }, { createTsFsrsScheduler }] = modules;
-  const service = new RecallService(
-    recallRepository,
-    prompts,
-    createTsFsrsScheduler({
-      requestRetention: 0.9,
-      maximumInterval: 36_500,
-      enableFuzz: false,
-      enableShortTerm: true,
-      learningSteps: ["1m", "10m"],
-      relearningSteps: ["10m"],
-    }),
-    () => crypto.randomUUID(),
-  );
-  for (const command of restoredRecallCommands) {
-    const replayed = service.answer(command);
-    if (!replayed.ok) {
-      const recordId = recallSourceRecords.get(command.idempotencyKey) ??
-        command.idempotencyKey;
-      if (
-        !incompatibleRecallRecords.some((record) =>
-          record.recordId === recordId
-        )
-      ) {
-        incompatibleRecallRecords.push({
-          recordId,
-          reason: replayed.error.kind,
-        });
-      }
-    }
-  }
-  recallService = service;
-  recallRuntimeIssue = null;
-  return true;
-}
-
 /** @returns {Promise<boolean>} */
 async function startFeedSession() {
-  stopStudyTracking();
   notice = null;
   errorMessage = null;
   feedRecovery = null;
-  cancelAllPassiveTimers();
-  dismissedPreferencePrompts.clear();
   const now = new Date().toISOString();
   const feedCandidates = candidates.map((candidate) => {
     const scope = scopeForCandidate(candidate);
@@ -878,9 +778,6 @@ function render(preferredFocusKey = null, fallbackHeadingId = null) {
   const previousFocusKey = activeElement instanceof HTMLElement
     ? activeElement.dataset.focusKey ?? null
     : null;
-  stopStudyTracking();
-  feedRevealObserver?.disconnect();
-  feedRevealObserver = null;
   synchronizeNotification(notifications, notice, errorMessage);
   root.innerHTML =
     `<div class="app-shell">${renderHeader()}<main class="workspace" id="main-content" tabindex="-1" data-layout="${experienceSettings.layoutMode}">${
@@ -895,11 +792,7 @@ function render(preferredFocusKey = null, fallbackHeadingId = null) {
       renderNotification(notifications.current(), escapeHtml)
     }</div></div>`;
   bindInteractions();
-  startStudyTracking();
   restoreFocus(preferredFocusKey ?? previousFocusKey, fallbackHeadingId);
-  for (const feedback of answerFeedbackByPrompt.values()) {
-    feedback.animate = false;
-  }
 }
 
 function renderStartupRecovery() {
@@ -919,7 +812,7 @@ function renderStartupRecovery() {
 function renderHeader() {
   return `<header class="topbar"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><span class="brand-mark" aria-hidden="true">R</span><span>Resonance</span></button><nav class="primary-nav" aria-label="Primary">${
     navButton("feed", "Feed")
-  }${navButton("discover", "Discover")}${navButton("review", "Review")}${
+  }${navButton("discover", "Discover")}${navButton("review", "Review", learnerController?.hasDueReview() ?? false)}${
     navButton("library", "Library")
   }</nav><div class="topbar-actions"><span class="local-badge">${
     navigator.onLine ? "Local mode" : "Offline"
@@ -995,354 +888,13 @@ function themeOption(mode, label) {
 }
 
 function renderFeed() {
-  if (errorMessage && visibleItems.length === 0) {
-    return `
-      <section class="feed-column state-panel" aria-labelledby="feed-title">
-        <p class="eyebrow">Feed</p>
-        <h1 id="feed-title">Your feed needs attention</h1>
-        <p>${escapeHtml(errorMessage)}</p>
-        <button class="button primary" type="button" data-action="retry">Try again</button>
-      </section>
-    `;
-  }
-  if (visibleItems.length === 0) {
-    return `
-      <section class="feed-column state-panel" aria-labelledby="feed-title">
-        <p class="eyebrow">Feed</p>
-        <h1 id="feed-title">Nothing is ready yet</h1>
-        <button class="button primary" type="button" data-action="retry">Refresh</button>
-      </section>
-    `;
-  }
-
-  return `
-    <section class="feed-column" aria-labelledby="feed-title">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Today</p>
-          <h1 id="feed-title">Learning feed</h1>
-        </div>
-      </div>
-      <div class="feed-stack">
-        ${visibleItems.map(renderFeedItem).join("")}
-      </div>
-      <div class="feed-end" ${
-    hasHiddenAssignedItems() ? "data-feed-reveal" : ""
-  }>
-        ${
-    hasHiddenAssignedItems()
-      ? `<button class="button secondary" type="button" data-action="load-more" data-focus-key="load-more" ${
-        "IntersectionObserver" in globalThis ? "hidden" : ""
-      }>Load more</button>`
-      : renderNextSetControl()
-  }
-      </div>
-    </section>
-    ${renderLearningSnapshot()}
-  `;
-}
-
-function renderLearningSnapshot() {
-  const sets = currentStudySets();
-  const progress = dailyLearningService.calculateProgress(
-    sets,
-    studiedContentIds(),
-  );
-  const studied = progress.ok ? progress.value.studied : 0;
-  const assigned = progress.ok ? progress.value.assigned : 0;
-  return `
-    <aside class="learning-snapshot" aria-labelledby="snapshot-title">
-      <div class="snapshot-heading">
-        <p class="eyebrow">Progress</p>
-        <h2 id="snapshot-title">Learning snapshot</h2>
-      </div>
-      <div class="snapshot-progress">
-        <div><span>Daily studied</span><strong>${studied} of ${assigned}</strong></div>
-        <progress
-          aria-label="${studied} of ${assigned} assigned lessons studied today"
-          value="${studied}"
-          max="${Math.max(1, assigned)}"
-        >${studied} of ${assigned}</progress>
-      </div>
-    </aside>
-  `;
-}
-
-/** @param {RankedFeedItem} item */
-function renderFeedItem(item) {
-  const result = catalog.get(item.candidateId);
-  if (!result.ok) return "";
-  const candidate = result.value;
-  const studied = studyRepository.list(LOCAL_OWNER_ID, candidate.id).length > 0;
-  const preference = preferenceService.snapshot(
-    LOCAL_OWNER_ID,
-    scopeForCandidate(candidate),
-  );
-  const accentSlot = accentSlotFor(candidate.id, 3) + 1;
-
-  return `
-    <article class="learning-card signal-${accentSlot}" data-candidate-id="${
-    escapeHtml(candidate.id)
-  }">
-      <div class="card-media">
-        <img
-          src="${escapeHtml(candidate.artworkPath)}"
-          srcset="${
-    escapeHtml(candidate.artworkCompactPath)
-  } ${candidate.artworkCompactWidth}w, ${
-    escapeHtml(candidate.artworkPath)
-  } ${candidate.artworkWidth}w"
-          sizes="(max-width: 800px) 100vw, (min-width: 1200px) 680px, 56vw"
-          alt=""
-          width="${candidate.artworkWidth}"
-          height="${candidate.artworkHeight}"
-          loading="lazy"
-          decoding="async"
-        >
-        <span class="format-badge">${escapeHtml(candidate.formatLabel)} · ${
-    escapeHtml(candidate.durationLabel)
-  }</span>
-      </div>
-      <div class="card-body">
-        <p class="selection-reason">${escapeHtml(item.whyShown)}</p>
-        <h2 tabindex="-1" data-focus-key="card-heading:${
-    escapeHtml(candidate.id)
-  }">${escapeHtml(candidate.title)}</h2>
-        <p class="publisher">${escapeHtml(candidate.publisher)}</p>
-        <p>${escapeHtml(candidate.summary)}</p>
-        <details class="source-details">
-          <summary>Source and rights</summary>
-          <dl>
-            <div><dt>Source</dt><dd>${
-    escapeHtml(candidate.discovery.sourceLabel)
-  }</dd></div>
-            <div><dt>Rights</dt><dd>${
-    escapeHtml(candidate.rights.basis)
-  }</dd></div>
-          </dl>
-        </details>
-        <div class="study-row">
-          <button
-            class="button secondary"
-            type="button"
-            data-action="mark-studied"
-            data-candidate-id="${escapeHtml(candidate.id)}"
-            data-focus-key="study:${escapeHtml(candidate.id)}"
-            ${
-    studied || pendingWrites.has(studyKey(candidate.id, 1)) ? "disabled" : ""
-  }
-          >${studied ? "Studied" : "Mark studied"}</button>
-          <span class="signal-summary">Preference ${
-    formatAffinity(preference.affinity)
-  }</span>
-        </div>
-        ${
-    studied
-      ? `<p class="recall-ready-time">Recall ready after <time datetime="${
-        escapeHtml(recallAvailableAt(candidate.id))
-      }">${escapeHtml(formatDate(recallAvailableAt(candidate.id)))}</time></p>`
-      : ""
-  }
-        ${renderPreferencePrompt(candidate)}
-      </div>
-    </article>
-  `;
-}
-
-/**
- * @param {CatalogCandidate} candidate
- * @param {RecallPrompt} prompt
- */
-function renderQuiz(candidate, prompt) {
-  const memory = recallRepository.getMemory(
-    LOCAL_OWNER_ID,
-    prompt.knowledgeUnitId,
-  );
-  const choices = /** @type {readonly {
-     *   readonly id: string,
-     *   readonly label: string
-     * }[]} */
-    (prompt.choices);
-  const answerFeedback = answerFeedbackByPrompt.get(prompt.id);
-  return `
-    <form class="quiz-panel" data-quiz-id="${escapeHtml(prompt.id)}">
-      <fieldset>
-        <legend>${escapeHtml(prompt.prompt)}</legend>
-        <div class="quiz-options">
-          ${
-    choices.map((choice) => `
-            <label>
-              <input type="radio" name="answer-${
-      escapeHtml(prompt.id)
-    }" value="${escapeHtml(choice.id)}">
-              <span>${escapeHtml(choice.label)}</span>
-            </label>
-          `).join("")
-  }
-        </div>
-      </fieldset>
-      <div class="quiz-footer">
-        <button class="button primary" type="submit" ${
-    pendingWrites.has(`review:${prompt.id}`) ? "disabled" : ""
-  } data-focus-key="quiz-submit:${escapeHtml(prompt.id)}">Check answer</button>
-        ${
-    memory
-      ? `<span>Review ${memory.reviewCount} · next ${
-        formatDate(memory.dueAt)
-      }</span>`
-      : `<span>First review</span>`
-  }
-      </div>
-      <p class="answer-feedback ${
-    answerFeedback
-      ? `is-${answerFeedback.status}${
-        answerFeedback.animate ? " animate-confirmation" : ""
-      }`
-      : ""
-  }" data-feedback-for="${escapeHtml(candidate.quiz.id)}" aria-live="polite">${
-    answerFeedback ? escapeHtml(answerFeedback.message) : ""
-  }</p>
-    </form>
-  `;
-}
-
-/** @param {CatalogCandidate} candidate */
-function renderPreferencePrompt(candidate) {
-  if (
-    feedPage === null ||
-    dismissedPreferencePrompts.has(
-      preferencePromptKey(feedPage.sessionId, candidate.id),
-    )
-  ) {
-    return "";
-  }
-  return `
-    <section class="preference-panel" aria-label="Tune recommendations">
-      <p>Should related lessons appear more often?</p>
-      <div class="preference-controls">
-        <button class="button preference-more" type="button" data-preference="more" data-candidate-id="${
-    escapeHtml(candidate.id)
-  }" data-focus-key="preference-more:${escapeHtml(candidate.id)}">More</button>
-        <button class="button preference-less" type="button" data-preference="less" data-candidate-id="${
-    escapeHtml(candidate.id)
-  }" data-focus-key="preference-less:${escapeHtml(candidate.id)}">Less</button>
-        <button class="button quiet" type="button" data-action="not-now" data-candidate-id="${
-    escapeHtml(candidate.id)
-  }" data-focus-key="preference-later:${
-    escapeHtml(candidate.id)
-  }">Not now</button>
-      </div>
-    </section>
-  `;
+  if (learnerController !== null) return learnerController.renderFeed();
+  return `<section class="wide-view state-panel" role="alert" aria-labelledby="feed-title"><h1 id="feed-title">Feed is unavailable</h1><p>The paired knowledge workflow has not loaded.</p></section>`;
 }
 
 function renderReviewView() {
-  if (reviewRouteIssue !== null) {
-    return renderRouteFailure("review", "Review", reviewRouteIssue);
-  }
-  if (reviewRenderer === null) {
-    return APP_COPY.reviewOpening;
-  }
-  if (recallRuntimeIssue !== null) {
-    return renderRouteFailure("review", "Review", recallRuntimeIssue);
-  }
-  if (incompatibleRecallRecords.length > 0) {
-    return `<section class="review-route wide-view" aria-labelledby="review-title"><div class="section-heading"><div><p class="eyebrow">Saved recall</p><h1 id="review-title">Review history needs attention</h1></div></div><div class="state-panel review-state" role="status"><p>${incompatibleRecallRecords.length} saved review ${
-      incompatibleRecallRecords.length === 1 ? "record is" : "records are"
-    } incompatible with the current recall format. Quarantine downloads a JSON backup, then marks only these incompatible records so the current recall engine ignores them. It does not delete your history.</p><button class="button primary" type="button" data-action="quarantine-reviews">Export and continue</button></div></section>`;
-  }
-  const day = currentLearningDay();
-  const promptIds = currentStudySets().flatMap((set) =>
-    dailyLearningRepository.getCohort(LOCAL_OWNER_ID, set.id)?.prompts.map(
-      (/** @type {RecallCandidateRef} */ prompt) => prompt.promptId,
-    ) ?? []
-  );
-  const finalized = new Set(
-    dailyResponseFacts.filter((fact) =>
-      fact.learningDay === day && fact.finalized
-    )
-      .map((fact) => fact.promptId),
-  );
-  const pendingCandidates = promptIds.filter((id) => !finalized.has(id))
-    .flatMap((id) => {
-      const candidate = candidateForPrompt(id);
-      return candidate === undefined ? [] : [candidate];
-    });
-  const feedbackCandidate = reviewFeedbackPromptId === null
-    ? null
-    : candidateForPrompt(reviewFeedbackPromptId) ?? null;
-  const scheduledResolution = scheduledPromptId === null
-    ? null
-    : resolveScheduledReview(scheduledPromptId, new Date().toISOString());
-  const scheduledCandidate = reviewFeedbackPromptId !== null &&
-      reviewFeedbackPromptId === scheduledPromptId
-    ? feedbackCandidate
-    : scheduledResolution?.candidate ?? null;
-  if (
-    scheduledPromptId !== null && scheduledCandidate === null &&
-    scheduledResolution !== null
-  ) {
-    return `<section class="review-route wide-view" aria-labelledby="review-title">
-      <div class="section-heading"><div><p class="eyebrow">Scheduled recall</p><h1 id="review-title">Review unavailable</h1></div></div>
-      <div class="state-panel review-state"><p>${
-      escapeHtml(scheduledResolution.message)
-    }</p><a class="button secondary" href="#library/review-queue">Return to review queue</a></div>
-    </section>`;
-  }
-  const currentCandidate = feedbackCandidate ?? scheduledCandidate ?? (
-    pendingCandidates.length === 0 ? null : pendingCandidates[
-      Math.min(activeQuestionIndex, pendingCandidates.length - 1)
-    ]
-  );
-  const dailyAccuracy = dailyLearningService.calculateAccuracy(
-    dailyResponseFacts.filter((fact) => fact.learningDay === day),
-  );
-  const sevenDayCutoff = subtractLearningDays(day, 6);
-  const sevenDayAccuracy = dailyLearningService.calculateAccuracy(
-    dailyResponseFacts.filter((fact) =>
-      fact.learningDay >= sevenDayCutoff && fact.learningDay <= day
-    ),
-  );
-  const feedback = currentCandidate === null
-    ? null
-    : answerFeedbackByPrompt.get(currentCandidate.quiz.id);
-  return reviewRenderer({
-    activeTab: reviewMode,
-    currentCandidate,
-    currentPosition: scheduledCandidate === null
-      ? promptIds.length - pendingCandidates.length + 1
-      : 1,
-    totalPrompts: scheduledCandidate === null ? promptIds.length : 1,
-    completedPrompts: scheduledCandidate === null ? finalized.size : 0,
-    dailyAccuracy: dailyAccuracy.ok
-      ? dailyAccuracy.value
-      : { correct: 0, total: 0, percentage: null },
-    sevenDayAccuracy: sevenDayAccuracy.ok
-      ? sevenDayAccuracy.value
-      : { correct: 0, total: 0, percentage: null },
-    openResponses: [...openResponses.entries()].flatMap(([promptId, value]) => {
-      const candidate = candidateForPrompt(promptId);
-      return candidate === undefined ? [] : [{
-        candidate,
-        response: value.response,
-        submittedAtLabel: day,
-        matchedConcepts: [],
-      }];
-    }),
-    feedback: feedback == null || currentCandidate === null ? null : {
-      promptId: currentCandidate.quiz.id,
-      status: feedback.status,
-      message: feedback.message,
-    },
-  }, escapeHtml);
-}
-
-/** @param {string | null} dueAt @param {string} now */
-function reviewStatus(dueAt, now) {
-  if (dueAt === null) return "First review";
-  return Date.parse(dueAt) <= Date.parse(now)
-    ? "Due now"
-    : `Next ${formatDate(dueAt)}`;
+  if (learnerController !== null) return learnerController.renderReview();
+  return `<section class="wide-view state-panel" role="alert" aria-labelledby="review-title"><h1 id="review-title">Review is unavailable</h1><p>The paired-question workflow has not loaded.</p></section>`;
 }
 
 function renderLibraryView() {
@@ -1352,78 +904,14 @@ function renderLibraryView() {
   if (libraryPageController === null) {
     return APP_COPY.libraryOpening;
   }
-  const generatedPrompts = promptRuntime.listPrompts(LOCAL_OWNER_ID);
-  return libraryPageController.render({
-    queue: generatedPrompts.flatMap((generated) => {
-      const candidate = candidates.find((item) =>
-        item.id === generated.contentId
-      );
-      const prompt = prompts.get(generated.id);
-      if (candidate === undefined || prompt === undefined) return [];
-      const memory = recallRepository.getMemory(
-        LOCAL_OWNER_ID,
-        prompt.knowledgeUnitId,
-      );
-      return [{
-        promptId: generated.id,
-        title: candidate.title,
-        dueAt: memory?.dueAt ?? null,
-        reviewCount: memory?.reviewCount ?? 0,
-      }];
-    }).filter((item) => item.reviewCount > 0).sort((left, right) =>
-      Date.parse(left.dueAt ?? "1970-01-01") -
-      Date.parse(right.dueAt ?? "1970-01-01")
-    ),
-    page: libraryPage,
-    recallAvailable: recallRuntimeIssue === null &&
-      incompatibleRecallRecords.length === 0 && recallService !== null,
-    now: new Date().toISOString(),
-  });
+  return libraryPageController.render({});
 }
 
-/** @param {"review" | "library"} route @param {string} title @param {string} message */
+/** @param {"library"} route @param {string} title @param {string} message */
 function renderRouteFailure(route, title, message) {
   return `<section class="wide-view state-panel" aria-labelledby="${route}-title"><h1 id="${route}-title">${title}</h1><p>${
     escapeHtml(message)
   }</p><button class="button primary" type="button" data-action="retry-route" data-route="${route}">Try again</button></section>`;
-}
-
-/**
- * @param {string} promptId
- * @param {string} now
- * @returns {{ readonly candidate: CatalogCandidate | null, readonly message: string }}
- */
-function resolveScheduledReview(promptId, now) {
-  const generated = promptRuntime.listPrompts(LOCAL_OWNER_ID).find((prompt) =>
-    prompt.id === promptId
-  );
-  const prompt = prompts.get(promptId);
-  const candidate = candidateForPrompt(promptId);
-  if (
-    generated === undefined || prompt === undefined || candidate === undefined
-  ) {
-    return {
-      candidate: null,
-      message: "This scheduled prompt is no longer available.",
-    };
-  }
-  const memory = recallRepository.getMemory(
-    LOCAL_OWNER_ID,
-    prompt.knowledgeUnitId,
-  );
-  if (memory === null) {
-    return {
-      candidate: null,
-      message: "This prompt has not entered scheduled review.",
-    };
-  }
-  if (Date.parse(memory.dueAt) > Date.parse(now)) {
-    return {
-      candidate: null,
-      message: `This prompt is next due ${formatDate(memory.dueAt)}.`,
-    };
-  }
-  return { candidate, message: "" };
 }
 
 function bindInteractions() {
@@ -1435,16 +923,14 @@ function bindInteractions() {
         view === "library"
       ) {
         activeView = view;
-        scheduledPromptId = null;
         discoveryItemId = null;
-        if (view === "library") libraryPage = "collection";
-        if (view === "review") reviewMode = "today";
         location.hash = view;
       }
     });
   });
   if (activeView === "discover") discoveryPage?.bind(root);
   if (activeView === "library") libraryPageController?.bind(root);
+  if (learnerController !== null && (activeView === "feed" || activeView === "review")) learnerController.bind(root);
   root.querySelectorAll("[data-action='new-session']").forEach((element) => {
     element.addEventListener("click", () => void beginNewSession());
   });
@@ -1456,27 +942,6 @@ function bindInteractions() {
     "click",
     () => void loadMore(),
   );
-  root.querySelector("[data-action='add-study-set']")?.addEventListener(
-    "click",
-    () => void addDailyStudySet(),
-  );
-  root.querySelectorAll("[data-preference]").forEach((element) => {
-    element.addEventListener("click", () => void recordPreference(element));
-  });
-  root.querySelectorAll("[data-action='not-now']").forEach((element) => {
-    element.addEventListener("click", () => {
-      const candidateId = element.getAttribute("data-candidate-id") ?? "";
-      if (feedPage !== null) {
-        dismissedPreferencePrompts.add(
-          preferencePromptKey(feedPage.sessionId, candidateId),
-        );
-      }
-      element.closest(".preference-panel")?.remove();
-      focusLessonHeading(candidateId);
-      notice = APP_COPY.preferenceNotSaved;
-      renderMessagesOnly();
-    });
-  });
   root.querySelectorAll("[data-action='mark-studied']").forEach((element) => {
     element.addEventListener("click", (event) => {
       void recordManualStudy(
@@ -1484,34 +949,6 @@ function bindInteractions() {
       );
     });
   });
-  root.querySelectorAll("[data-review-answer]").forEach((element) => {
-    element.addEventListener("submit", (event) => void answerQuiz(event));
-  });
-  root.querySelectorAll("[data-review-tab]").forEach((element) => {
-    element.addEventListener("click", () => {
-      reviewMode = element.getAttribute("data-review-tab") === "open"
-        ? "open"
-        : "today";
-      location.hash = reviewMode === "open" ? "review/open" : "review";
-      render();
-    });
-  });
-  root.querySelectorAll("[data-open-grade]").forEach((element) => {
-    element.addEventListener("click", () => void finalizeOpenResponse(element));
-  });
-  root.querySelector("[data-action='next-question']")?.addEventListener(
-    "click",
-    () => {
-      reviewFeedbackPromptId = null;
-      activeQuestionIndex = 0;
-      if (scheduledPromptId !== null) {
-        scheduledPromptId = null;
-        location.hash = "library/review-queue";
-        return;
-      }
-      render("review-title", "review-title");
-    },
-  );
   root.querySelector("[data-action='export']")?.addEventListener(
     "click",
     exportLocalData,
@@ -1519,10 +956,6 @@ function bindInteractions() {
   root.querySelector("[data-action='reset']")?.addEventListener(
     "click",
     resetLocalData,
-  );
-  root.querySelector("[data-action='quarantine-reviews']")?.addEventListener(
-    "click",
-    () => void quarantineIncompatibleReviews(),
   );
   root.querySelector("[data-action='retry-route']")?.addEventListener(
     "click",
@@ -1611,51 +1044,6 @@ async function beginNewSession() {
   await renderWithTransition("new-session", "feed-title");
 }
 
-/** @param {Element} element */
-async function recordPreference(element) {
-  const candidateId = element.getAttribute("data-candidate-id") ?? "";
-  const choice = element.getAttribute("data-preference");
-  if (choice !== "more" && choice !== "less") return;
-  const candidateResult = catalog.get(candidateId);
-  if (!candidateResult.ok || !feedPage) {
-    errorMessage = APP_COPY.preferenceSaveFailed;
-    render();
-    return;
-  }
-  const command = freeze({
-    ownerId: LOCAL_OWNER_ID,
-    relationshipScopeId: scopeForCandidate(candidateResult.value),
-    choice,
-    idempotencyKey: `preference:${feedPage.sessionId}:${candidateId}`,
-    occurredAt: new Date().toISOString(),
-  });
-  const recorded = preferenceService.record(command);
-  if (!recorded.ok) {
-    notice = recorded.error.kind === "PreferenceAlreadyRecorded"
-      ? "This lesson already has a preference."
-      : "The preference could not be saved.";
-    render();
-    return;
-  }
-  const persisted = await appendEnvelope({
-    id: command.idempotencyKey,
-    ownerId: LOCAL_OWNER_ID,
-    kind: "preference_event",
-    payloadJson: JSON.stringify(command),
-    recordedAt: command.occurredAt,
-  }, false);
-  if (!persisted) {
-    preferenceRepository.rollback(LOCAL_OWNER_ID, command.idempotencyKey);
-    notice = null;
-    render();
-    return;
-  }
-  notice = choice === "more"
-    ? "Related lessons will rank higher."
-    : "Related lessons will rank lower.";
-  render();
-}
-
 /** @param {HTMLElement} element */
 async function recordManualStudy(element) {
   const candidateId = element.getAttribute("data-candidate-id") ?? "";
@@ -1687,289 +1075,6 @@ async function recordManualStudy(element) {
   render(`card-heading:${candidateId}`, "feed-title");
 }
 
-/** @param {string} candidateId */
-async function recordPassiveExposure(candidateId) {
-  if (feedPage === null) return;
-  const idempotencyKey = qualificationKey(feedPage.sessionId, candidateId);
-  if (
-    passiveExposureInFlight.has(idempotencyKey) ||
-    exposureRepository.list(LOCAL_OWNER_ID, candidateId).some((event) =>
-      event.idempotencyKey === idempotencyKey
-    )
-  ) {
-    return;
-  }
-  passiveExposureInFlight.add(idempotencyKey);
-  const command = freeze({
-    ownerId: LOCAL_OWNER_ID,
-    candidateId,
-    contentVersion: 1,
-    engagedMs: QUALIFIED_VIEW_MS,
-    idempotencyKey,
-    occurredAt: new Date().toISOString(),
-  });
-  const recorded = exposureService.record(command);
-  if (!recorded.ok) {
-    passiveExposureInFlight.delete(idempotencyKey);
-    return;
-  }
-  const persisted = await appendEnvelope({
-    id: command.idempotencyKey,
-    ownerId: LOCAL_OWNER_ID,
-    kind: "qualified_exposure",
-    payloadJson: JSON.stringify(command),
-    recordedAt: command.occurredAt,
-  }, false);
-  passiveExposureInFlight.delete(idempotencyKey);
-  if (!persisted) {
-    exposureRepository.rollback(LOCAL_OWNER_ID, command.idempotencyKey);
-    renderMessagesOnly();
-  }
-}
-
-/** @param {Event} event */
-async function answerQuiz(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  if (!(form instanceof HTMLFormElement)) return;
-  const promptId = form.dataset.promptId ?? "";
-  const candidate = candidateForPrompt(promptId);
-  if (candidate === undefined || reviewResponseFromForm === null) return;
-  const responseResult = reviewResponseFromForm(
-    candidate.quiz,
-    new FormData(form),
-  );
-  const feedback = form.querySelector(".answer-feedback");
-  if (!responseResult.ok) {
-    if (feedback) {
-      feedback.textContent = "Complete the response before checking it.";
-      feedback.setAttribute("role", "alert");
-    }
-    return;
-  }
-  const pendingKey = `review:${promptId}`;
-  if (pendingWrites.has(pendingKey)) return;
-  pendingWrites.add(pendingKey);
-  const submitButton = form.querySelector('button[type="submit"]');
-  if (submitButton instanceof HTMLButtonElement) submitButton.disabled = true;
-  const finishSubmission = () => {
-    pendingWrites.delete(pendingKey);
-    if (submitButton instanceof HTMLButtonElement) {
-      submitButton.disabled = false;
-    }
-  };
-  const { LocalQuestionGrader } = await import(
-    "./features/questions/grading.js"
-  );
-  const caseChild = caseChildForCandidate(candidate);
-  const gradeResult = new LocalQuestionGrader({
-    resolveQuestion: (questionId) =>
-      caseChild?.id === questionId ? caseChild : null,
-  }).grade(
-    questionForCandidate(candidate),
-    responseResult.value,
-  );
-  if (!gradeResult.ok) {
-    finishSubmission();
-    if (feedback) feedback.textContent = "The response could not be graded.";
-    return;
-  }
-  const responseText = responseResult.value.kind === "choice"
-    ? responseResult.value.selectedChoiceIds.join(",")
-    : responseResult.value.kind === "case-study"
-    ? responseResult.value.childResponses.map((
-      /** @type {{ readonly response: Exclude<import("./features/questions/contracts.js").QuestionResponse, { readonly kind: "case-study" }> }} */ item,
-    ) =>
-      item.response.kind === "choice"
-        ? item.response.selectedChoiceIds.join(",")
-        : item.response.text
-    ).join("\n")
-    : responseResult.value.text;
-  if (gradeResult.value.status === "review-required") {
-    const recorded = await persistGradeFact({
-      promptId,
-      correct: null,
-      finalized: false,
-      status: "review-required",
-      response: responseText,
-      explanation: candidate.quiz.explanation,
-    });
-    finishSubmission();
-    if (!recorded) return;
-    openResponses.set(promptId, {
-      response: responseText,
-      explanation: candidate.quiz.explanation,
-    });
-    answerFeedbackByPrompt.set(promptId, {
-      message: "Response saved for your review.",
-      status: "review-required",
-      animate: false,
-    });
-    reviewMode = "open";
-    location.hash = "review/open";
-    render("review-title", "review-title");
-    return;
-  }
-  const correct = gradeResult.value.status === "correct";
-  const finalized = await persistFinalizedRecall(promptId, correct, {
-    status: gradeResult.value.status,
-    response: responseText,
-    explanation: candidate.quiz.explanation,
-    countForDaily: scheduledPromptId === null,
-  });
-  finishSubmission();
-  if (!finalized) return;
-  answerFeedbackByPrompt.set(promptId, {
-    message: correct
-      ? "Correct. Review scheduled."
-      : candidate.quiz.explanation,
-    status: correct ? "correct" : "incorrect",
-    animate: correct,
-  });
-  reviewFeedbackPromptId = promptId;
-  render("review-title", "review-title");
-  void playAnswerCue(correct);
-}
-
-/**
- * @param {string} promptId
- * @param {boolean} correct
- * @param {{ readonly status: "correct" | "incorrect", readonly response: string, readonly explanation: string, readonly countForDaily?: boolean }} detail
- */
-async function persistFinalizedRecall(promptId, correct, detail) {
-  if (!(await ensureRecallRuntime()) || recallService === null) return false;
-  const service = recallService;
-  const reviewedAt = new Date().toISOString();
-  const command = freeze({
-    ownerId: LOCAL_OWNER_ID,
-    promptId,
-    selectedChoiceId: `${promptId}-grade-${correct ? "correct" : "incorrect"}`,
-    idempotencyKey: `review:${crypto.randomUUID()}`,
-    reviewedAt,
-  });
-  const prepared = service.prepare(command);
-  if (!prepared.ok) {
-    errorMessage = prepared.error.kind === "RecallSchedulerUnavailable"
-      ? "Review scheduling is unavailable."
-      : "The answer could not be saved.";
-    render();
-    return false;
-  }
-  if (detail.countForDaily === false) {
-    const eventPersisted = await appendEnvelope({
-      id: command.idempotencyKey,
-      ownerId: LOCAL_OWNER_ID,
-      kind: "review_event",
-      payloadJson: JSON.stringify(command),
-      recordedAt: reviewedAt,
-    }, false);
-    if (!eventPersisted) return false;
-  } else {
-    const gradePersisted = await persistGradeFact({
-      promptId,
-      correct,
-      finalized: true,
-      recallCommand: command,
-      ...detail,
-    });
-    if (!gradePersisted) return false;
-  }
-  const committed = service.commit(prepared.value);
-  if (!committed.ok) {
-    errorMessage = APP_COPY.answerSavedReload;
-    render();
-    return false;
-  }
-  await persistence.append({
-    id:
-      `memory:${prepared.value.memory.knowledgeUnitId}:${prepared.value.memory.reviewCount}`,
-    ownerId: LOCAL_OWNER_ID,
-    kind: "memory_state",
-    payloadJson: JSON.stringify(prepared.value.memory),
-    recordedAt: reviewedAt,
-  });
-  return true;
-}
-
-/**
- * @param {{ readonly promptId: string, readonly correct: boolean | null, readonly finalized: boolean, readonly status: "correct" | "incorrect" | "review-required", readonly response: string, readonly explanation: string, readonly recallCommand?: RecallCommand }} input
- */
-async function persistGradeFact(input) {
-  const membership = currentStudySets().flatMap((set) => {
-    const cohort = dailyLearningRepository.getCohort(LOCAL_OWNER_ID, set.id);
-    return cohort?.prompts.some((/** @type {RecallCandidateRef} */ prompt) =>
-        prompt.promptId === input.promptId
-      )
-      ? [{ set, cohort }]
-      : [];
-  }).at(0);
-  if (membership === undefined) {
-    errorMessage = APP_COPY.promptOutsideRecall;
-    render();
-    return false;
-  }
-  const now = input.recallCommand?.reviewedAt ?? new Date().toISOString();
-  const generated = promptRuntime.listPrompts(LOCAL_OWNER_ID).find((prompt) =>
-    prompt.id === input.promptId
-  );
-  const fact = freeze({
-    id: crypto.randomUUID(),
-    ownerId: LOCAL_OWNER_ID,
-    learningDay: currentLearningDay(),
-    studySetId: membership.set.id,
-    cohortId: membership.cohort.id,
-    promptId: input.promptId,
-    promptVersion: generated?.version ?? 1,
-    respondedAt: now,
-    context: /** @type {const} */ ("daily"),
-    finalized: input.finalized,
-    correct: input.correct,
-    responseSequence: dailyResponseFacts.length + 1,
-  });
-  const persisted = await appendEnvelope({
-    id: `grade:${fact.id}`,
-    ownerId: LOCAL_OWNER_ID,
-    kind: "grade_finalization",
-    payloadJson: JSON.stringify({
-      fact,
-      status: input.status,
-      response: input.response,
-      explanation: input.explanation,
-      recallCommand: input.recallCommand ?? null,
-    }),
-    recordedAt: now,
-  }, false);
-  if (persisted) dailyResponseFacts.push(fact);
-  return persisted;
-}
-
-/** @param {Element} element */
-async function finalizeOpenResponse(element) {
-  const promptId = element.getAttribute("data-prompt-id") ?? "";
-  const grade = element.getAttribute("data-open-grade");
-  const response = openResponses.get(promptId);
-  const candidate = candidateForPrompt(promptId);
-  if (
-    response === undefined || candidate === undefined ||
-    (grade !== "correct" && grade !== "incorrect")
-  ) return;
-  const persisted = await persistFinalizedRecall(
-    promptId,
-    grade === "correct",
-    {
-      status: grade,
-      response: response.response,
-      explanation: response.explanation,
-    },
-  );
-  if (!persisted) return;
-  openResponses.delete(promptId);
-  reviewFeedbackPromptId = null;
-  reviewMode = openResponses.size === 0 ? "today" : "open";
-  location.hash = reviewMode === "open" ? "review/open" : "review";
-  render("review-title", "review-title");
-}
-
 async function exportLocalData() {
   if (!(await runLocalDataExport())) return;
   notice = APP_COPY.exported;
@@ -1979,7 +1084,7 @@ async function exportLocalData() {
 /** @returns {Promise<boolean>} */
 async function runLocalDataExport() {
   const { exportLocalData: runExport } = await import(
-    "./startup/user-actions.js"
+    "./startup/local-data-actions.js"
   );
   const result = await runExport({
     ownerId: LOCAL_OWNER_ID,
@@ -1998,58 +1103,12 @@ async function runLocalDataExport() {
   return true;
 }
 
-async function quarantineIncompatibleReviews() {
-  const recordIds = [
-    ...new Set(
-      incompatibleRecallRecords.map((record) => record.recordId),
-    ),
-  ];
-  if (recordIds.length === 0 || pendingWrites.has("review-quarantine")) return;
-  pendingWrites.add("review-quarantine");
-  const createdAt = new Date().toISOString();
-  const idempotencyKey = `review-quarantine:${crypto.randomUUID()}`;
-  const recovery = await loadReviewRecovery();
-  const recovered = await recovery.recover({
-    ownerId: LOCAL_OWNER_ID,
-    recordIds,
-    idempotencyKey,
-    createdAt,
-    version: 1,
-  });
-  pendingWrites.delete("review-quarantine");
-  if (!recovered.ok) {
-    errorMessage = recovered.error.kind === "ReviewBackupExportFailed"
-      ? APP_COPY.exportFailed
-      : "Review recovery could not continue. Try again.";
-    notice = null;
-    render("review-title", "review-title");
-  }
-}
-
-async function loadReviewRecovery() {
-  if (reviewRecovery !== null) return reviewRecovery;
-  const { createBrowserReviewRecovery } = await import(
-    "./startup/user-actions.js"
-  );
-  reviewRecovery = createBrowserReviewRecovery({
-    exportBackup: runLocalDataExport,
-    appendEnvelope,
-    location,
-  });
-  return reviewRecovery;
-}
-
 /** @param {EventTarget | null} target */
 async function retryRoute(target) {
   if (!(target instanceof Element)) return;
   const route = target.getAttribute("data-route");
-  if (route === "review") {
-    reviewRouteIssue = null;
-    recallRuntimeIssue = null;
-    recallService = null;
-  } else if (route === "library") {
-    libraryRouteIssue = null;
-  } else return;
+  if (route !== "library") return;
+  libraryRouteIssue = null;
   await loadActiveRoute();
   render(`${route}-title`, `${route}-title`);
 }
@@ -2058,7 +1117,7 @@ async function resetLocalData() {
   if (!confirm("Erase all Resonance data in this browser?")) {
     return;
   }
-  const { eraseLocalData } = await import("./startup/user-actions.js");
+  const { eraseLocalData } = await import("./startup/local-data-actions.js");
   const erased = await eraseLocalData({
     ownerId: LOCAL_OWNER_ID,
     persistence,
@@ -2094,90 +1153,6 @@ async function appendEnvelope(envelope, allowDuplicate) {
     return false;
   }
   return true;
-}
-
-function startStudyTracking() {
-  if (activeView !== "feed") return;
-  const fallback = root.querySelector("[data-action='load-more']");
-  if (!("IntersectionObserver" in globalThis)) {
-    if (fallback instanceof HTMLButtonElement) fallback.hidden = false;
-    notice = "Passive tracking is unavailable; manual study still works.";
-    renderMessagesOnly();
-    return;
-  }
-  studyObserver = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      const candidateId = entry.target.getAttribute("data-candidate-id") ?? "";
-      if (
-        entry.isIntersecting &&
-        entry.intersectionRatio >= 0.6 &&
-        !document.hidden
-      ) {
-        schedulePassiveExposure(candidateId);
-      } else {
-        cancelPassiveExposure(candidateId);
-      }
-    }
-  }, { threshold: [0, 0.6, 1] });
-  root.querySelectorAll(".learning-card").forEach((card) => {
-    studyObserver?.observe(card);
-  });
-  const sentinel = root.querySelector("[data-feed-reveal]");
-  if (sentinel === null) return;
-  try {
-    const observer = new IntersectionObserver((entries) => {
-      if (
-        feedRevealObserver !== observer ||
-        !entries.some((entry) => entry.isIntersecting)
-      ) return;
-      observer.disconnect();
-      feedRevealObserver = null;
-      void loadMore(false);
-    }, { rootMargin: "400px 0px" });
-    feedRevealObserver = observer;
-    observer.observe(sentinel);
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    if (fallback instanceof HTMLButtonElement) fallback.hidden = false;
-  }
-}
-
-/** @param {string} candidateId */
-function schedulePassiveExposure(candidateId) {
-  if (
-    feedPage === null ||
-    passiveExposureTimers.has(candidateId) ||
-    exposureRepository.list(LOCAL_OWNER_ID, candidateId).some((event) =>
-      event.idempotencyKey ===
-        qualificationKey(feedPage?.sessionId ?? "", candidateId)
-    )
-  ) return;
-  passiveExposureTimers.set(
-    candidateId,
-    setTimeout(() => {
-      passiveExposureTimers.delete(candidateId);
-      void recordPassiveExposure(candidateId);
-    }, QUALIFIED_VIEW_MS),
-  );
-}
-
-/** @param {string} candidateId */
-function cancelPassiveExposure(candidateId) {
-  const timer = passiveExposureTimers.get(candidateId);
-  if (timer === undefined) return;
-  clearTimeout(timer);
-  passiveExposureTimers.delete(candidateId);
-}
-
-function cancelAllPassiveTimers() {
-  for (const timer of passiveExposureTimers.values()) clearTimeout(timer);
-  passiveExposureTimers.clear();
-}
-
-function stopStudyTracking() {
-  cancelAllPassiveTimers();
-  studyObserver?.disconnect();
-  studyObserver = null;
 }
 
 function renderMessagesOnly() {
@@ -2217,7 +1192,7 @@ function applyExperiencePresentation() {
 
 async function loadExperienceActions() {
   if (experienceActions !== null) return experienceActions;
-  const module = await import("./startup/user-actions.js");
+  const module = await import("./startup/experience-actions.js");
   experienceActions = module.createExperienceActions({
     store: settingsRepository,
     getSettings: () => experienceSettings,
@@ -2266,68 +1241,6 @@ async function saveDailySettings(event) {
   if (!(await commitDailySettings(result.value))) return;
   notice = APP_COPY.targetsSaved;
   render("settings-summary", null);
-}
-
-async function addDailyStudySet() {
-  if (dailySettings === null || feedPage === null) return;
-  await refreshPromptAvailability();
-  const sets = currentStudySets();
-  const latest = sets.at(-1);
-  if (latest === undefined) return;
-  const cohort = dailyLearningRepository.getCohort(LOCAL_OWNER_ID, latest.id);
-  if (cohort === null && latest.recallLimit > 0) {
-    notice = APP_COPY.finishRecall;
-    render();
-    return;
-  }
-  const gate = dailyLearningService.evaluateNextSet({
-    ownerId: LOCAL_OWNER_ID,
-    studySetId: latest.id,
-    studiedContentIds: studiedContentIds(),
-    finalizedPromptIds: new Set(
-      dailyResponseFacts.filter((fact) => fact.finalized).map((fact) =>
-        fact.promptId
-      ),
-    ),
-  });
-  if (!gate.ok) {
-    notice = gate.error.kind === "NextStudySetLocked"
-      ? `Complete ${gate.error.remainingStudy} study items and ${gate.error.remainingRecall} prompts first.`
-      : "Another set cannot be assigned yet.";
-    render();
-    return;
-  }
-  const now = new Date().toISOString();
-  const ordinal = sets.length + 1;
-  const created = dailyLearningService.createStudySet({
-    ownerId: LOCAL_OWNER_ID,
-    learningDay: currentLearningDay(),
-    idempotencyKey:
-      `daily-set:${LOCAL_OWNER_ID}:${currentLearningDay()}:${ordinal}`,
-    createdAt: now,
-    candidates: feedPage.items.map((/** @type {RankedFeedItem} */ item) => {
-      const candidate = candidates.find((entry) =>
-        entry.id === item.candidateId
-      );
-      return {
-        contentId: item.candidateId,
-        contentVersion: 1,
-        promptIds: candidate === undefined ? [] : [candidate.quiz.id],
-      };
-    }),
-  });
-  if (!created.ok) {
-    notice = created.error.kind === "DailyAssignmentInsufficientCandidates"
-      ? `No partial set: ${created.error.available} unused items; ${created.error.required} required.`
-      : "Another set could not be created.";
-    render();
-    return;
-  }
-  if (!(await commitStudySet(created.value))) return;
-  if (!(await issueRecallCohort(created.value))) return;
-  revealedStudyItems += 1;
-  syncVisibleAssignment();
-  render(`card-heading:${created.value.items[0].contentId}`, "feed-title");
 }
 
 /** @param {boolean} correct */
@@ -2399,14 +1312,6 @@ function restoreFocus(focusKey, headingId) {
   }
 }
 
-/** @param {string} candidateId */
-function focusLessonHeading(candidateId) {
-  const heading = root.querySelector(
-    `[data-focus-key="card-heading:${CSS.escape(candidateId)}"]`,
-  );
-  if (heading instanceof HTMLElement) heading.focus();
-}
-
 function registerOfflineSupport() {
   addEventListener("online", () => render());
   addEventListener("offline", () => render());
@@ -2421,20 +1326,13 @@ function registerOfflineSupport() {
     });
   });
   document.addEventListener("visibilitychange", () => {
-    cancelAllPassiveTimers();
     if (!document.hidden) {
-      studyObserver?.disconnect();
-      studyObserver = null;
-      startStudyTracking();
       void refreshPromptAvailability().then(() => render());
     }
   });
   addEventListener("hashchange", () => {
     const route = parseRoute(location.hash);
     activeView = route.view;
-    libraryPage = route.libraryPage;
-    reviewMode = route.reviewMode;
-    scheduledPromptId = route.scheduledPromptId;
     discoveryItemId = route.discoveryItemId;
     void loadActiveRoute().then(() =>
       renderWithTransition(
@@ -2516,53 +1414,12 @@ function currentStudySets() {
   );
 }
 
-function studiedContentIds() {
-  return new Set(
-    candidates.flatMap((candidate) =>
-      studyRepository.list(LOCAL_OWNER_ID, candidate.id).length > 0
-        ? [candidate.id]
-        : []
-    ),
-  );
-}
-
 function hasHiddenAssignedItems() {
   const assigned = currentStudySets().reduce(
     (total, set) => total + set.items.length,
     0,
   );
   return revealedStudyItems < assigned;
-}
-
-function renderNextSetControl() {
-  const latest = currentStudySets().at(-1);
-  if (latest === undefined) return "<p>No set is assigned.</p>";
-  const cohort = dailyLearningRepository.getCohort(LOCAL_OWNER_ID, latest.id);
-  if (cohort === null && latest.recallLimit > 0) {
-    return "<p><strong>Study set complete.</strong> Recall unlocks ten minutes after study.</p>";
-  }
-  const gate = dailyLearningService.evaluateNextSet({
-    ownerId: LOCAL_OWNER_ID,
-    studySetId: latest.id,
-    studiedContentIds: studiedContentIds(),
-    finalizedPromptIds: new Set(
-      dailyResponseFacts.filter((fact) => fact.finalized).map((fact) =>
-        fact.promptId
-      ),
-    ),
-  });
-  if (!gate.ok && gate.error.kind === "NextStudySetLocked") {
-    return `<p><strong>Set in progress.</strong> ${gate.error.remainingStudy} study items and ${gate.error.remainingRecall} prompts remain.</p>`;
-  }
-  return `<button class="button secondary" type="button" data-action="add-study-set">Add another set</button>`;
-}
-
-/** @param {string} candidateId */
-function recallAvailableAt(candidateId) {
-  const event = studyRepository.list(LOCAL_OWNER_ID, candidateId).at(0);
-  return event === undefined
-    ? new Date().toISOString()
-    : new Date(Date.parse(event.occurredAt) + 10 * 60_000).toISOString();
 }
 
 function currentLearningDay() {
@@ -2721,34 +1578,15 @@ function caseChildForCandidate(candidate) {
   });
 }
 
-/** @param {string} sessionId @param {string} candidateId */
-function qualificationKey(sessionId, candidateId) {
-  return `exposure:${LOCAL_OWNER_ID}:${sessionId}:${candidateId}:v1`;
-}
-
 /** @param {string} candidateId @param {number} contentVersion */
 function studyKey(candidateId, contentVersion) {
   return `study:${LOCAL_OWNER_ID}:${candidateId}:v${contentVersion}`;
 }
 
-/** @param {string} sessionId @param {string} candidateId */
-function preferencePromptKey(sessionId, candidateId) {
-  return `${sessionId}\u0000${candidateId}`;
-}
-
 /** @param {string} hash */
 function parseRoute(hash) {
   const [view, section, rawPromptId] = hash.replace(/^#/, "").split("/");
-  let scheduledPromptId = null;
   let discoveryItemId = null;
-  if (view === "review" && section === "scheduled" && rawPromptId) {
-    try {
-      scheduledPromptId = decodeURIComponent(rawPromptId);
-    } catch (error) {
-      if (!(error instanceof URIError)) throw error;
-      scheduledPromptId = null;
-    }
-  }
   if (view === "discover" && section === "item" && rawPromptId) {
     try {
       discoveryItemId = decodeURIComponent(rawPromptId);
@@ -2761,25 +1599,18 @@ function parseRoute(hash) {
     view: view === "discover" || view === "review" || view === "library"
       ? view
       : "feed",
-    libraryPage: view === "library" && section === "review-queue"
-      ? /** @type {const} */ ("review-queue")
-      : /** @type {const} */ ("collection"),
-    reviewMode: view === "review" && section === "open"
-      ? /** @type {const} */ ("open")
-      : /** @type {const} */ ("today"),
-    scheduledPromptId,
     discoveryItemId,
   };
 }
 
-/** @param {"feed" | "discover" | "review" | "library"} view @param {string} label */
-function navButton(view, label) {
+/** @param {"feed" | "discover" | "review" | "library"} view @param {string} label @param {boolean} [hasNotification] */
+function navButton(view, label, hasNotification = false) {
   const active = activeView === view;
   return `
     <button type="button" data-view="${view}" data-focus-key="nav-${view}" class="${
     active ? "active" : ""
   }" ${active ? 'aria-current="page"' : ""}>
-      ${label}
+      ${label}${hasNotification ? '<span class="nav-notification-dot" aria-label="Review due"></span>' : ""}
     </button>
   `;
 }
@@ -2816,12 +1647,6 @@ function escapeHtml(value) {
       '"': "&quot;",
       "'": "&#039;",
     })[character] ?? character);
-}
-
-/** @param {number} affinity */
-function formatAffinity(affinity) {
-  if (affinity > 0) return `+${affinity.toFixed(2)}`;
-  return affinity.toFixed(2);
 }
 
 /** @param {string} value */

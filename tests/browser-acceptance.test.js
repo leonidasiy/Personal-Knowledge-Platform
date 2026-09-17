@@ -1,6 +1,6 @@
 // @ts-check
 
-import { redactEvidence, redactScreenshotPage, removeExpiredArtifacts, responseDuration, runBrowserAcceptance, validateBrowserAcceptanceConfig } from "../scripts/browser-acceptance-core.mjs";
+import { redactEvidence, redactScreenshotPage, removeExpiredArtifacts, responseDuration, restoreScreenshotPage, runBrowserAcceptance, validateBrowserAcceptanceConfig } from "../scripts/browser-acceptance-core.mjs";
 
 /** @param {unknown} actual @param {unknown} expected */
 function equal(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
@@ -51,20 +51,34 @@ Deno.test("redaction is total, allowlisted, and fail-closed by strict evidence s
   equal(harmless.ok, true);
 });
 
-Deno.test("page-context screenshot redaction removes known private DOM values and fails closed on duplicates", () => {
-  /** @type {{ readonly selector: string, textContent: string, value?: string, removed: boolean, remove: () => void }} */
-  const query = { selector: '[data-discovery-search-form] input[name="query"]', textContent: "", value: "private query", removed: false, remove() { this.removed = true; } };
-  /** @type {{ readonly selector: string, textContent: string, value?: string, removed: boolean, remove: () => void }} */
-  const result = { selector: "[data-discovery-item-id] strong", textContent: "Private source title", removed: false, remove() { this.removed = true; } };
-  /** @type {{ readonly selector: string, textContent: string, value?: string, removed: boolean, remove: () => void }} */
-  const card = { selector: "[data-discovery-item-id]", textContent: "Private source title", removed: false, remove() { this.removed = true; } };
-  /** @type {{ readonly selector: string, textContent: string, value?: string, removed: boolean, remove: () => void }} */
-  const notice = { selector: ".discover-notice", textContent: "Source notice", removed: false, remove() { this.removed = true; } };
-  /** @type {{ readonly selector: string, textContent: string, value?: string, removed: boolean, remove: () => void }} */
-  const publicText = { selector: "main", textContent: "Review", removed: false, remove() { this.removed = true; } };
+Deno.test("page-context screenshot redaction hides and restores known private DOM values, and fails closed on duplicates", () => {
+  /** @param {string} selector @param {string} textContent @param {string} [value] */
+  const makeNode = (selector, textContent, value = "") => {
+    /** @type {Map<string, string>} */ const attributes = new Map();
+    /** @type {{ display: string, setProperty: (name: string, value: string, priority: string) => void }} */ const style = { display: "", setProperty(name, nextValue, _priority) { if (name === "display") this.display = nextValue; } };
+    return {
+      selector, textContent, value, removed: false, style,
+      /** @param {string} name */
+      getAttribute(name) { if (name === "style") return this.style.display === "" ? null : `display: ${this.style.display};`; return attributes.get(name) ?? null; },
+      /** @param {string} name @param {string} nextValue */
+      setAttribute(name, nextValue) { attributes.set(name, nextValue); if (name === "style") this.style.display = nextValue.includes("display: none") ? "none" : ""; },
+      /** @param {string} name */
+      removeAttribute(name) { attributes.delete(name); if (name === "style") this.style.display = ""; },
+      remove() { this.removed = true; },
+    };
+  };
+  const query = makeNode('[data-discovery-search-form] input[name="query"]', "", "private query");
+  const result = makeNode("[data-discovery-item-id] strong", "Private source title");
+  const card = makeNode("[data-discovery-item-id]", "Private source title");
+  const notice = makeNode(".discover-notice", "Source notice");
+  const publicText = makeNode("main", "Review");
   const nodes = [query, result, card, notice, publicText];
+  /** @param {{ removed: boolean, style: { display: string }, selector: string }} node */
+  const visible = (node) => !node.removed && node.style.display !== "none" && !(node === result && card.style.display === "none");
   /** @param {string} selector */
-  const matches = (selector) => nodes.filter((node) => !node.removed && (selector === node.selector || (selector === '[data-discovery-item-id], [data-selected-item-id], [data-library-source], .learning-card, .review-card, .feed-card' && node.selector === "[data-discovery-item-id]") || (selector === '[role="status"], [role="alert"], .discover-notice, .notice, .toast' && node.selector === ".discover-notice")));
+  const matches = (selector) => selector === "[data-browser-acceptance-redacted]"
+    ? nodes.filter((node) => node.getAttribute("data-browser-acceptance-redacted") === "true")
+    : nodes.filter((node) => visible(node) && (selector === node.selector || (selector === '[data-discovery-item-id], [data-selected-item-id], [data-library-source], .learning-card, .review-card, .feed-card' && node.selector === "[data-discovery-item-id]") || (selector === '[role="status"], [role="alert"], .discover-notice, .notice, .toast' && node.selector === ".discover-notice")));
   const scope = /** @type {{ document?: unknown, location?: unknown }} */ (globalThis);
   const previousDocument = scope.document; const previousLocation = scope.location;
   try {
@@ -72,19 +86,24 @@ Deno.test("page-context screenshot redaction removes known private DOM values an
     const querySelector = (selector) => matches(selector)[0] ?? null;
     /** @param {string} selector */
     const querySelectorAll = (selector) => matches(selector);
-    const renderedText = () => nodes.filter((node) => !node.removed && (node !== result || !card.removed)).map((node) => node.textContent).join(" ");
+    const renderedText = () => nodes.filter(visible).map((node) => node.textContent).join(" ");
     scope.document = { querySelector, querySelectorAll, body: { get textContent() { return `${renderedText()} Offline access failed.`; }, get innerText() { return renderedText(); } } };
     scope.location = { hash: "#review" };
     equal(JSON.stringify(redactScreenshotPage("review")), JSON.stringify({ safe: true, route: "review" }));
-    equal(query.value, ""); assert(card.removed && notice.removed, "Known result cards and notices must be removed.");
+    equal(query.value, "private query"); assert(!card.removed && !notice.removed && card.style.display === "none" && notice.style.display === "none", "Known result cards and notices must be hidden without deletion.");
+    restoreScreenshotPage();
+    assert(card.style.display === "" && notice.style.display === "", "Redacted nodes must be restored after the screenshot.");
     equal(redactScreenshotPage("feed").safe, false);
-    const visibleSecurity = { selector: "aside", textContent: "Access denied", removed: false, remove() { this.removed = true; } };
+    restoreScreenshotPage();
+    const visibleSecurity = makeNode("aside", "Access denied");
     nodes.push(visibleSecurity);
     equal(redactScreenshotPage("review").safe, false);
+    restoreScreenshotPage();
     visibleSecurity.remove();
-    const duplicate = { selector: "aside", textContent: "Private source title", removed: false, remove() { this.removed = true; } };
+    const duplicate = makeNode("aside", "Private source title");
     nodes.push(duplicate);
     equal(redactScreenshotPage("review").safe, false);
+    restoreScreenshotPage();
   } finally { scope.document = previousDocument; scope.location = previousLocation; }
 });
 
@@ -266,12 +285,13 @@ Deno.test("runner cleanup preserves the first failure after closing every resour
   const malformed = await runBrowserAcceptance(/** @type {never} */ (null), /** @type {never} */ (null)); if (malformed.ok) throw new Error("Expected malformed runner input failure."); failure(malformed, "BrowserAcceptanceConfigInvalid", { field: "config" });
 });
 
-/** @param {{ readonly failRemoval?: boolean, readonly staleReplacement?: boolean, readonly overlappingReplacement?: boolean, readonly firstApprovalConflict?: boolean, readonly firstApprovalConflictError?: string, readonly approvalResponseInvalid?: boolean, readonly approvalAutoNavigates?: boolean, readonly approvalAutoNavigatesDelayed?: boolean, readonly searchResponseMissing?: boolean, readonly searchResponseStatus?: number, readonly secondSearchResponseMissing?: boolean, readonly secondSearchResponseStatus?: number, readonly unsafeScreenshot?: boolean, readonly strictPlaywright?: boolean, readonly failAfterApproval?: boolean, readonly historyMismatchAfterApproval?: boolean, readonly historyMismatchAfterRemoval?: boolean, readonly delayedRerender?: boolean, readonly delayedRouteRender?: boolean, readonly delayedJourneyRender?: boolean, readonly delayedControlReady?: boolean, readonly accessContent?: boolean, readonly rawError?: boolean, readonly sourceNotice?: boolean, readonly openDialog?: boolean, readonly emptyLibrary?: boolean, readonly finalUrl?: string, readonly consoleBeforeNavigation?: boolean, readonly consoleDuringJourney?: boolean }} [options] */
+/** @param {{ readonly failRemoval?: boolean, readonly staleReplacement?: boolean, readonly overlappingReplacement?: boolean, readonly firstApprovalConflict?: boolean, readonly allApprovalConflicts?: boolean, readonly firstApprovalConflictError?: string, readonly approvalResponseInvalid?: boolean, readonly approvalAutoNavigates?: boolean, readonly approvalAutoNavigatesDelayed?: boolean, readonly restoreResponseMissing?: boolean, readonly restoreResponseStatus?: number, readonly restoreResponseInvalid?: boolean, readonly searchResponseMissing?: boolean, readonly searchResponseStatus?: number, readonly secondSearchResponseMissing?: boolean, readonly secondSearchResponseStatus?: number, readonly unsafeScreenshot?: boolean, readonly strictPlaywright?: boolean, readonly failAfterApproval?: boolean, readonly baselineLibraryFailure?: boolean, readonly historyMismatchAfterApproval?: boolean, readonly historyMismatchAfterRemoval?: boolean, readonly delayedRerender?: boolean, readonly delayedLibraryBaseline?: boolean, readonly delayedRouteRender?: boolean, readonly delayedJourneyRender?: boolean, readonly delayedControlReady?: boolean, readonly accessContent?: boolean, readonly rawError?: boolean, readonly sourceNotice?: boolean, readonly openDialog?: boolean, readonly emptyLibrary?: boolean, readonly learnerReviewEmpty?: boolean, readonly finalUrl?: string, readonly consoleBeforeNavigation?: boolean, readonly consoleDuringJourney?: boolean }} [options] */
 function journeyDependencies(options = {}) {
   let phase = 0;
   let waitTicks = 0;
   /** @type {string | null} */ let selected = null;
   let approved = false;
+  let restored = false;
   let removed = false;
   let removalTick = 0;
   let postApprovalFailure = false;
@@ -294,6 +314,7 @@ function journeyDependencies(options = {}) {
   };
   const sources = () => {
     if (options.emptyLibrary) return [];
+    if (options.delayedLibraryBaseline && !approved && waitTicks < 2) return [];
     if (!approved || (removed && (!options.delayedRerender || waitTicks > removalTick))) return ["pre-a", "pre-b"];
     if (options.delayedRerender && waitTicks < 3) return ["pre-a", "pre-b"];
     return ["pre-a", "pre-b", "created"];
@@ -342,8 +363,8 @@ function journeyDependencies(options = {}) {
       const route = selector.match(/^\.primary-nav \[data-view="(feed|discover|review|library)"\]$/)?.[1];
       if ((route === "feed" || route === "discover" || route === "review" || route === "library") && name === "aria-current") return renderedRoute === route ? "page" : null;
       if (selector === "[data-discovery-search-form]" && name === "data-discovery-search-bound") return "true";
-      if (selector === ".review-route .recall-progress progress" && name === "value") return "1";
-      if (selector === ".review-route .recall-progress progress" && name === "max") return "2";
+      if (selector === ".review-route .recall-progress progress" && name === "value") return options.learnerReviewEmpty ? null : "1";
+      if (selector === ".review-route .recall-progress progress" && name === "max") return options.learnerReviewEmpty ? null : "2";
       if (selector === "[data-selected-item-id]" && name === "data-selected-item-id") return visibleSelected;
       if ((selector === '[data-discovery-approve="feed-a"]' || selector === '[data-discovery-approve="feed-b"]' || selector === '[data-discovery-approve="nonfeed-a"]' || selector === '[data-discovery-approve="site-a"]' || selector === '[data-discovery-approve="site-b"]') && name === "data-discovery-approve") return selector.includes("feed-a") ? "feed-a" : selector.includes("feed-b") ? "feed-b" : selector.includes("site-a") ? "site-a" : selector.includes("site-b") ? "site-b" : "nonfeed-a";
       if ((selector === '[data-discovery-approve="feed-a"]' || selector === '[data-discovery-approve="feed-b"]') && name === "data-source-granularity") return "feed";
@@ -354,12 +375,18 @@ function journeyDependencies(options = {}) {
       if (selector === '[data-discovery-approve="nonfeed-a"]' && name === "data-source-capabilities") return "metadata";
       return null;
     },
+    async count() {
+      if (selector === 'section.state-panel[aria-labelledby="review-title"]') return options.learnerReviewEmpty ? 1 : 0;
+      if (selector === "[data-review-question]") return options.learnerReviewEmpty ? 0 : 0;
+      return 0;
+    },
     async inputValue() { return selector.includes('input[name="query"]') ? "music cognition" : phase === 1 ? "10" : "20"; },
     async isChecked() { return selector.includes('value="web"') ? phase === 1 || phase >= 3 : selector.includes('value="podcasts"'); },
     async waitFor() {
       if (options.delayedRerender && (selector === "[data-discovery-item-id]" || selector === "[data-library-source]") && (selector === "[data-discovery-item-id]" ? ids() : sources()).length === 0) throw new Error("not visible until rerender");
     },
     /** @param {(nodes: { readonly getAttribute: (name: string) => string }[]) => unknown} callback */ async evaluateAll(callback) {
+      if (selector === "[data-library-source]" && options.baselineLibraryFailure && !approved) throw new Error("baseline library render failed");
       if (selector === "[data-library-source]" && approved && options.failAfterApproval && !postApprovalFailure) { postApprovalFailure = true; throw new Error("post approval render failed"); }
       const values = selector === "[data-discovery-item-id]" ? ids() : selector === "[data-library-source]" ? sources() : [];
       return callback(values.map((value) => ({ getAttribute: () => value })));
@@ -373,11 +400,11 @@ function journeyDependencies(options = {}) {
     once() {},
     locator: locate,
     /** @param {(response: Record<string, unknown>) => boolean} predicate */
-    async waitForResponse(predicate) { const approvalStatus = options.firstApprovalConflict && approvalResponses === 0 ? 409 : 200; const approval = { url: () => `${targetUrl}/api/source-library/approve`, status: () => approvalStatus, json: async () => approvalStatus === 409 ? { error: options.firstApprovalConflictError ?? "SourceStateConflict" } : options.approvalResponseInvalid ? { result: {} } : { result: { source: { id: "created" } } }, request: () => ({ timing: () => ({ startTime: 1_754_112_000_000, responseStart: 12, responseEnd: 12 }) }) }; if (predicate(approval)) { listeners.get("response")?.(approval); if (approvalStatus === 409) listeners.get("console")?.({ type: () => "error", text: () => "Failed to load resource: the server responded with a status of 409 ()", location: () => ({ url: `${targetUrl}/api/source-library/approve`, lineNumber: 0, columnNumber: 0 }) }); actions.push("response:approval"); approvalResponses += 1; if (approvalStatus >= 200 && approvalStatus < 300) { approved = true; if (options.approvalAutoNavigates) renderedRoute = "library"; if (options.approvalAutoNavigatesDelayed) pendingRoute = "library"; } return approval; } actions.push("response:search"); searchResponses += 1; if ((searchResponses === 1 && options.searchResponseMissing) || (searchResponses === 2 && options.secondSearchResponseMissing)) throw new Error("private search response"); const response = { url: () => `${targetUrl}/api/discovery/search`, status: () => searchResponses === 2 ? options.secondSearchResponseStatus ?? 200 : options.searchResponseStatus ?? 200, request: () => ({ timing: () => ({ startTime: 1_754_112_000_000, responseStart: 12, responseEnd: 12 }) }) }; listeners.get("response")?.(response); if (!predicate(response)) throw new Error("search predicate mismatch"); return response; },
+    async waitForResponse(predicate) { const approvalStatus = options.allApprovalConflicts && !restored ? 409 : options.firstApprovalConflict && approvalResponses === 0 ? 409 : 200; const approval = { url: () => `${targetUrl}/api/source-library/approve`, status: () => approvalStatus, json: async () => approvalStatus === 409 ? { error: options.firstApprovalConflictError ?? "SourceStateConflict", sourceId: "created", state: "disabled", revision: 2 } : options.approvalResponseInvalid ? { result: {} } : { result: { source: { id: "created" } } }, request: () => ({ timing: () => ({ startTime: 1_754_112_000_000, responseStart: 12, responseEnd: 12 }) }) }; if (predicate(approval)) { listeners.get("response")?.(approval); if (approvalStatus === 409) listeners.get("console")?.({ type: () => "error", text: () => "Failed to load resource: the server responded with a status of 409 ()", location: () => ({ url: `${targetUrl}/api/source-library/approve`, lineNumber: 0, columnNumber: 0 }) }); actions.push("response:approval"); approvalResponses += 1; if (approvalStatus >= 200 && approvalStatus < 300) { approved = true; if (options.approvalAutoNavigates) renderedRoute = "library"; if (options.approvalAutoNavigatesDelayed) pendingRoute = "library"; } return approval; } actions.push("response:search"); searchResponses += 1; if ((searchResponses === 1 && options.searchResponseMissing) || (searchResponses === 2 && options.secondSearchResponseMissing)) throw new Error("private search response"); const response = { url: () => `${targetUrl}/api/discovery/search`, status: () => searchResponses === 2 ? options.secondSearchResponseStatus ?? 200 : options.searchResponseStatus ?? 200, request: () => ({ timing: () => ({ startTime: 1_754_112_000_000, responseStart: 12, responseEnd: 12 }) }) }; listeners.get("response")?.(response); if (!predicate(response)) throw new Error("search predicate mismatch"); return response; },
     async goto() { if (options.consoleBeforeNavigation) listeners.get("console")?.({ type: () => "error" }); return { status: () => 200, url: () => options.finalUrl ?? targetUrl, headers: async () => ({ "x-resonance-worker-version": version }) }; },
     /** @param {{ readonly width: number, readonly height: number }} viewport */ async setViewportSize(viewport) { actions.push(`viewport:${viewport.width}x${viewport.height}`); },
     async waitForTimeout() { waitTicks += 1; if (pendingRoute !== null) { renderedRoute = pendingRoute; pendingRoute = null; } if (pendingSelected !== null) { visibleSelected = pendingSelected; pendingSelected = null; } if (pendingList) { listRendered = true; pendingList = false; visibleSelected = null; } },
-    /** @param {unknown} callback @param {unknown} expectedRoute */ async evaluate(callback, expectedRoute) { if (options.strictPlaywright && typeof callback !== "function") throw new Error("function required"); if (typeof callback !== "function") return { workerVersion: version, assertions: [] }; privacy.query = ""; privacy.sourceNotice = false; return { safe: !options.unsafeScreenshot && !privacy.access && !privacy.rawError && !privacy.dialog && expectedRoute === renderedRoute, route: renderedRoute }; },
+    /** @param {unknown} callback @param {unknown} expectedRoute */ async evaluate(callback, expectedRoute) { if (options.strictPlaywright && typeof callback !== "function") throw new Error("function required"); if (typeof callback !== "function") return { workerVersion: version, assertions: [] }; if (typeof expectedRoute === "object" && expectedRoute !== null && "kind" in expectedRoute && expectedRoute.kind === "browser-acceptance-restore-disabled-source") { actions.push("evaluate:restore-disabled-source"); if (options.restoreResponseMissing) return { status: 0, sourceId: null, state: null, revision: null }; if (options.restoreResponseStatus !== undefined && options.restoreResponseStatus !== 200) return { status: options.restoreResponseStatus, sourceId: null, state: null, revision: null }; if (options.restoreResponseInvalid) return { status: 200, sourceId: null, state: null, revision: null }; restored = true; return { status: 200, sourceId: "created", state: "active", revision: 3 }; } privacy.query = ""; privacy.sourceNotice = false; return { safe: !options.unsafeScreenshot && !privacy.access && !privacy.rawError && !privacy.dialog && expectedRoute === renderedRoute, route: renderedRoute }; },
     /** @param {{ readonly path: string }} request */ async screenshot(request) { assert(privacy.query === "" && !privacy.sourceNotice, "Screenshot requires query and source notice removal."); assert(!privacy.access && !privacy.rawError && !privacy.dialog, "Screenshot must not capture blocked private state."); const route = request.path.match(/-(feed|discover|review|library)\.png$/)?.[1]; assert(route === renderedRoute, "Screenshot requires the expected route to render first."); screenshots.push(request.path); },
     async close() {},
   };
@@ -385,7 +412,7 @@ function journeyDependencies(options = {}) {
   return {
     ...base,
     async launch() { return { async newContext() { return { async addInitScript() {}, async newPage() { return page; }, async route() {}, async unrouteAll() {}, async close() {} }; }, async close() {} }; },
-    state: { actions, screenshots, sources, privacy },
+    state: { actions, screenshots, sources, privacy, logs: base.state.logged },
   };
 }
 
@@ -426,6 +453,37 @@ Deno.test("hosted journey waits for delayed search, approval, and removal rerend
   equal(result.ok, true);
 });
 
+Deno.test("hosted journey waits for the initial Library source cards after the route activates", async () => {
+  const result = await runBrowserAcceptance(config(), journeyDependencies({ delayedLibraryBaseline: true }));
+  equal(result.ok, true);
+});
+
+Deno.test("hosted journey accepts the current empty learner Review contract", async () => {
+  const result = await runBrowserAcceptance(config(), journeyDependencies({ learnerReviewEmpty: true }));
+  equal(result.ok, true);
+});
+
+Deno.test("hosted journey keeps a baseline Library render failure fail-closed", async () => {
+  const result = await runBrowserAcceptance(config(), journeyDependencies({ baselineLibraryFailure: true }));
+  if (result.ok) throw new Error("Expected baseline Library render failure.");
+  failure(result, "BrowserAcceptanceAssertionFailed", { assertion: "journey", stage: "baseline-history" });
+});
+
+Deno.test("hosted journey logs bounded diagnostics for a baseline failure", async () => {
+  const dependency = journeyDependencies({ emptyLibrary: true });
+  const result = await runBrowserAcceptance(config(), dependency);
+  if (result.ok) throw new Error("Expected empty Library failure.");
+  failure(result, "BrowserAcceptanceAssertionFailed", { assertion: "journey", stage: "baseline-history" });
+  const diagnostic = dependency.state.logs.find((entry) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const value = /** @type {Record<string, unknown>} */ (entry);
+    return value.event === "journey-failure";
+  });
+  assert(diagnostic !== undefined, "A baseline failure must emit a bounded diagnostic.");
+  const serialized = JSON.stringify(diagnostic);
+  assert(!serialized.includes("Live result") && !serialized.includes("Private"), "Failure diagnostics must not include page content.");
+});
+
 Deno.test("hosted journey accepts legitimate overlap when the filtered result set changes", async () => {
   const result = await runBrowserAcceptance(config(), journeyDependencies({ overlappingReplacement: true }));
   equal(result.ok, true);
@@ -443,6 +501,24 @@ Deno.test("hosted journey skips a disabled canonical site before one successful 
   const result = await runBrowserAcceptance(config(), dependency);
   equal(result.ok, true);
   equal(dependency.state.actions.filter((entry) => entry === "response:approval").length, 2);
+});
+
+Deno.test("hosted journey recovers when every approval candidate is a disabled canonical site", async () => {
+  const result = await runBrowserAcceptance(config(), journeyDependencies({ allApprovalConflicts: true }));
+  equal(result.ok, true);
+});
+
+Deno.test("hosted journey names disabled-candidate restore failures", async () => {
+  /** @type {readonly [{ readonly allApprovalConflicts: true, readonly restoreResponseMissing?: boolean, readonly restoreResponseStatus?: number, readonly restoreResponseInvalid?: boolean }, string][]} */ const cases = [
+    [{ allApprovalConflicts: true, restoreResponseMissing: true }, "source-approval-restore-response-missing"],
+    [{ allApprovalConflicts: true, restoreResponseStatus: 503 }, "source-approval-restore-response-non-success"],
+    [{ allApprovalConflicts: true, restoreResponseInvalid: true }, "source-approval-restore-response-invalid"],
+  ];
+  for (const [options, stage] of cases) {
+    const result = await runBrowserAcceptance(config(), journeyDependencies(options));
+    if (result.ok) throw new Error("Expected restore failure.");
+    failure(result, "BrowserAcceptanceAssertionFailed", { assertion: "journey", stage });
+  }
 });
 
 Deno.test("hosted journey blocks non-state approval conflicts", async () => {

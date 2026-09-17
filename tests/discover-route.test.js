@@ -377,6 +377,28 @@ Deno.test("Discover renders the actual feed approval contract with metadata-only
   );
 });
 
+Deno.test("Discover exposes pasted text and document upload for non-YouTube sources", () => {
+  const source = item({
+    youtubeWatchUrl: null,
+    candidate: Object.freeze({
+      ...item().candidate,
+      initialItem: null,
+    }),
+  });
+  const html = renderDiscoverRoute(model("success", [source], {
+    page: "detail",
+    selectedItemId: source.id,
+  }));
+  assert(
+    html.includes('data-discovery-upload="observed-item-1"') &&
+      html.includes('name="content"') &&
+      html.includes('name="material"') &&
+      html.includes(".pdf") &&
+      html.includes(".pptx"),
+    "Non-YouTube sources must support pasted text, PDF, and PPTX material.",
+  );
+});
+
 Deno.test("Discover exposes one filtered search command without transcript scraping", () => {
   const html = renderDiscoverRoute(model("never-run", []));
   assert(

@@ -5,6 +5,7 @@ import { isIsoDateTime, isNonEmptyText, isPositiveInteger, isRecord } from "./co
 /** @import { LearningChoice, LearningReviewQueue, LearningReviewQueueSource, LearningReviewQueueTask, LearningTaskKind, Result } from "./contracts.js" */
 
 /** @typedef {{ readonly kind: "LearningGatewayCommandInvalid", readonly field: string } | { readonly kind: "LearningGatewayUnauthenticated" } | { readonly kind: "LearningGatewayUnauthorized" } | { readonly kind: "LearningGatewayUnavailable" } | { readonly kind: "LearningGatewayTimedOut" } | { readonly kind: "LearningGatewayResponseInvalid" } | { readonly kind: "LearningGatewayRejected", readonly failureKind: string }} LearningGatewayFailure */
+/** @typedef {{ readonly id: string, readonly kind: LearningTaskKind, readonly prompt: string, readonly explanation: string, readonly sourceAnchorIds: readonly [string, ...string[]], readonly choices: readonly LearningChoice[] | null, readonly correctChoiceIds: readonly [string, ...string[]] | null, readonly status: "published", readonly revision: number }} LearningPublishedQuiz */
 
 const freeze = Object.freeze;
 
@@ -28,6 +29,14 @@ export class LearningGenerationBrowserGatewayClient {
     if (!response.ok) return response;
     const value = isRecord(response.value) ? response.value.result : null;
     return parseQueue(value);
+  }
+
+  /** @returns {Promise<Result<readonly LearningPublishedQuiz[], LearningGatewayFailure>>} */
+  async listPublished() {
+    const response = await this.#request("api/learning-generation/published", "GET", null);
+    if (!response.ok) return response;
+    const value = isRecord(response.value) ? response.value.result : null;
+    return parsePublished(value);
   }
 
   /** @param {unknown} command @returns {Promise<Result<{ readonly taskId: string, readonly status: "published" | "rejected", readonly reviewDecision: "approved" | "rejected", readonly reviewedAt: string, readonly revision: number }, LearningGatewayFailure>>} */
@@ -79,6 +88,20 @@ function parseQueue(value) {
     tasks.push(task);
   }
   return { ok: true, value: freeze({ sources: freeze(sources), tasks: freeze(tasks) }) };
+}
+
+/** @param {unknown} value @returns {Result<readonly LearningPublishedQuiz[], LearningGatewayFailure>} */
+function parsePublished(value) {
+  if (!Array.isArray(value)) return bad();
+  const quizzes = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate) || !isNonEmptyText(candidate.id) || !isTaskKind(candidate.kind) || !isNonEmptyText(candidate.prompt) || !isNonEmptyText(candidate.explanation) || !Array.isArray(candidate.sourceAnchorIds) || candidate.sourceAnchorIds.length === 0 || candidate.sourceAnchorIds.some((item) => !isNonEmptyText(item)) || candidate.status !== "published" || !isPositiveInteger(candidate.revision)) return bad();
+    const choices = parseChoices(candidate.choices);
+    const correctChoiceIds = parseTextList(candidate.correctChoiceIds);
+    if (choices === undefined || correctChoiceIds === undefined) return bad();
+    quizzes.push(freeze({ id: candidate.id, kind: candidate.kind, prompt: candidate.prompt, explanation: candidate.explanation, sourceAnchorIds: freeze(/** @type {[string, ...string[]]} */ ([...candidate.sourceAnchorIds])), choices, correctChoiceIds, status: /** @type {const} */ ("published"), revision: candidate.revision }));
+  }
+  return { ok: true, value: freeze(quizzes) };
 }
 
 /** @param {unknown} value @returns {LearningReviewQueueTask | null} */

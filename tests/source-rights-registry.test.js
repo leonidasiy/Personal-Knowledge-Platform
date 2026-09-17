@@ -31,12 +31,79 @@ function registry(rows, unavailable = false) {
   return new D1SourceRightsRegistry({ database: { prepare: () => { const statement = { bind: () => statement, all: async () => { if (unavailable) throw new Error("offline"); return rows === null ? {} : { results: rows }; } }; return statement; } }, now: () => now, logger: () => {} });
 }
 
-Deno.test("rights registry resolves one exact active attributed grant", async () => {
+/** @param {unknown} error @returns {{ readonly kind: string, readonly context: { readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly registryIds: readonly string[] } }} */
+function conflictError(error) { return /** @type {{ readonly kind: string, readonly context: { readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly registryIds: readonly string[] } }} */ (/** @type {unknown} */ (error)); }
+
+Deno.test("rights registry keeps one unambiguous allowed record allowed", async () => {
   const result = await registry([row()]).resolve(job);
   assertEquals(result.ok, true);
   if (result.ok) {
     assertEquals(result.value.registryId, "registry-a");
     assertEquals(result.value.capabilities.transformation.outcome, "allowed");
+  }
+});
+
+Deno.test("rights registry keeps zero matching evidence missing", async () => {
+  const result = await registry([]).resolve(job);
+  if (result.ok) throw new Error("Expected missing rights evidence.");
+  assertEquals(result.error.kind, "RightsRegistryRecordMissing");
+});
+
+Deno.test("rights registry keeps one denied capability denied", async () => {
+  const result = await registry([row({ storage_outcome: "denied" })]).resolve(job);
+  if (!result.ok) throw new Error(`Expected one denied record to resolve: ${result.error.kind}.`);
+  assertEquals(result.value.capabilities.storage.outcome, "denied");
+});
+
+Deno.test("rights registry rejects duplicate equivalent records as ambiguous", async () => {
+  const result = await registry([row(), row({ registry_id: "registry-b" })]).resolve(job);
+  if (result.ok) throw new Error("Expected duplicate rights evidence to fail.");
+  const error = conflictError(result.error);
+  assertEquals(error.kind, "RightsRegistryEvidenceAmbiguous");
+  assertEquals(error.context.ownerId, job.ownerId);
+  assertEquals(error.context.sourceId, job.sourceId);
+  assertEquals(error.context.sourceRevision, job.sourceRevision);
+  assertEquals(error.context.registryIds.join(","), "registry-a,registry-b");
+});
+
+Deno.test("rights registry rejects contradictory allowed and denied records as conflicting", async () => {
+  const result = await registry([row(), row({ registry_id: "registry-b", storage_outcome: "denied" })]).resolve(job);
+  if (result.ok) throw new Error("Expected contradictory rights evidence to fail.");
+  const error = conflictError(result.error);
+  assertEquals(error.kind, "RightsRegistryEvidenceConflicting");
+  assertEquals(error.context.ownerId, job.ownerId);
+  assertEquals(error.context.sourceId, job.sourceId);
+  assertEquals(error.context.sourceRevision, job.sourceRevision);
+  assertEquals(error.context.registryIds.join(","), "registry-a,registry-b");
+});
+
+Deno.test("rights registry cannot satisfy a request from another owner, source, or revision", async () => {
+  const cases = [
+    [row({ owner_id: "owner-b" }), "RightsRegistryOwnerMismatch"],
+    [row({ source_id: "source-b" }), "RightsRegistrySourceMismatch"],
+    [row({ source_revision: 2 }), "RightsRegistryRevisionMismatch"],
+  ];
+  for (const [entry, kind] of cases) {
+    const result = await registry([entry]).resolve(job);
+    if (result.ok) throw new Error("Expected identity mismatch.");
+    assertEquals(result.error.kind, kind);
+  }
+});
+
+Deno.test("rights registry failure is unchanged when database row order changes", async () => {
+  const duplicateRows = [row(), row({ registry_id: "registry-b" })];
+  const contradictoryRows = [row(), row({ registry_id: "registry-b", storage_outcome: "denied" })];
+  for (const [rows, expectedKind] of [
+    [duplicateRows, "RightsRegistryEvidenceAmbiguous"],
+    [[...duplicateRows].reverse(), "RightsRegistryEvidenceAmbiguous"],
+    [contradictoryRows, "RightsRegistryEvidenceConflicting"],
+    [[...contradictoryRows].reverse(), "RightsRegistryEvidenceConflicting"],
+  ]) {
+    const result = await registry(/** @type {readonly unknown[]} */ (/** @type {unknown} */ (rows))).resolve(job);
+    if (result.ok) throw new Error("Expected multiple rights records to fail.");
+    const error = conflictError(result.error);
+    assertEquals(error.kind, expectedKind);
+    assertEquals(error.context.registryIds.join(","), "registry-a,registry-b");
   }
 });
 
@@ -46,7 +113,6 @@ Deno.test("rights registry names missing, unavailable, malformed, and conflictin
     [registry([], true), "RightsRegistryUnavailable"],
     [registry(null), "RightsRegistrySchemaInvalid"],
     [registry([row({ evidence_json: "{" })]), "RightsRegistrySchemaInvalid"],
-    [registry([row(), row({ registry_id: "registry-b" })]), "RightsRegistryEvidenceConflicting"],
   ];
   for (const [subject, kind] of cases) {
     const result = await /** @type {D1SourceRightsRegistry} */ (subject).resolve(job);

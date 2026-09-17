@@ -220,7 +220,6 @@ h1,
 h2,
 h3 {
   margin-top: 0;
-  letter-spacing: 0;
 }
 
 h1 {
@@ -329,6 +328,16 @@ h2 {
   font-weight: 730;
 }
 
+.nav-notification-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--signal-three);
+  vertical-align: middle;
+}
+
 .topbar-actions {
   display: flex;
   gap: var(--space-2);
@@ -336,8 +345,7 @@ h2 {
   justify-self: end;
 }
 
-.local-badge,
-.format-badge {
+.local-badge {
   padding: 5px var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--control-radius);
@@ -480,10 +488,66 @@ h2 {
 
 .section-heading {
   display: flex;
-  gap: var(--space-5);
-  align-items: end;
+  align-items: start;
   justify-content: space-between;
   margin-bottom: var(--space-5);
+}
+
+.library-processing-spinner {
+  display: inline-block;
+  animation: lp 0.9s linear infinite;
+}
+
+.library-upload {
+  margin-bottom: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+}
+
+.library-upload summary {
+  padding: var(--space-4);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.library-upload form {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 680px;
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.library-upload form > label {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.library-upload form > label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: start;
+  gap: var(--space-2);
+}
+
+.library-upload :is(input:not([type="checkbox"]), textarea) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  color: var(--text);
+  background: var(--surface);
+}
+
+.library-upload input[type="checkbox"] { margin-top: 4px; }
+.library-upload form > p { margin: 0; line-height: 1.5; }
+.library-upload form > .button { justify-self: start; }
+
+@keyframes lp {
+  to {
+    rotate: 1turn;
+  }
 }
 
 .eyebrow {
@@ -491,63 +555,7 @@ h2 {
   color: var(--signal-two);
   font-size: 0.76rem;
   font-weight: 800;
-  letter-spacing: 0;
   text-transform: uppercase;
-}
-
-.feed-stack {
-  display: grid;
-  gap: var(--space-5);
-}
-
-.learning-snapshot {
-  align-self: start;
-  padding: var(--space-5);
-  border: 1px solid var(--border);
-  border-top: 4px solid var(--signal-three);
-  background: var(--surface);
-}
-
-.workspace[data-layout="split-desk"] > .learning-snapshot {
-  position: sticky;
-  top: 88px;
-}
-
-.snapshot-heading h2 {
-  margin-bottom: var(--space-4);
-}
-
-.snapshot-progress div {
-  display: flex;
-  gap: var(--space-4);
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-}
-
-.snapshot-progress progress {
-  width: 100%;
-  height: 10px;
-  border: 0;
-  border-radius: 0;
-  color: var(--meter-fill);
-  background: var(--meter-track);
-}
-
-.snapshot-progress progress::-webkit-progress-bar {
-  background: var(--meter-track);
-}
-
-.snapshot-progress progress::-webkit-progress-value {
-  background: var(--meter-fill);
-}
-
-.snapshot-progress progress::-moz-progress-bar {
-  background: var(--meter-fill);
-}
-
-.snapshot-progress span {
-  color: var(--text-muted);
-  font-size: 0.82rem;
 }
 
 .learning-card {
@@ -585,14 +593,6 @@ h2 {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.format-badge {
-  position: absolute;
-  right: var(--space-3);
-  bottom: var(--space-3);
-  color: var(--text);
-  background: var(--surface);
 }
 
 .card-body {
@@ -644,8 +644,6 @@ h2 {
   margin: 0;
 }
 
-.study-row,
-.quiz-footer,
 .preference-controls {
   display: flex;
   flex-wrap: wrap;
@@ -653,12 +651,7 @@ h2 {
   align-items: center;
 }
 
-.study-row {
-  justify-content: space-between;
-}
-
-.signal-summary,
-.quiz-footer span {
+.signal-summary {
   color: var(--text-muted);
   font-size: 0.84rem;
 }
@@ -732,25 +725,6 @@ h2 {
   margin-bottom: var(--space-5);
 }
 
-.quiz-panel {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.quiz-panel fieldset {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.quiz-panel legend {
-  margin-bottom: var(--space-3);
-  font-weight: 760;
-}
-
 .quiz-options {
   display: grid;
   gap: var(--space-2);
@@ -778,11 +752,6 @@ h2 {
   height: 18px;
   margin: 2px 0 0;
   accent-color: var(--action);
-}
-
-.quiz-footer {
-  justify-content: space-between;
-  margin-top: 14px;
 }
 
 .answer-feedback {
@@ -860,8 +829,7 @@ h2 {
 .recall-metric span,
 .recall-metric small,
 .review-question-meta,
-.response-guidance,
-.recall-ready-time {
+.response-guidance {
   color: var(--text-muted);
   font-size: 0.82rem;
 }
@@ -964,34 +932,6 @@ h2 {
   background: var(--surface);
 }
 
-.queue-list {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding: 0;
-  border-top: 1px solid var(--border);
-  list-style: none;
-}
-
-.queue-row {
-  display: flex;
-  gap: var(--space-4);
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.queue-row div {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.queue-row span {
-  color: var(--text-muted);
-  font-size: 0.84rem;
-}
-
 .daily-settings-form {
   margin-top: var(--space-4);
   padding-top: var(--space-4);
@@ -1023,36 +963,11 @@ h2 {
   white-space: nowrap;
 }
 
-.preference-panel {
-  display: flex;
-  gap: var(--space-4);
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
-}
-
-.preference-panel p {
-  margin: 0;
-  font-weight: 690;
-}
-
-.feed-end,
 .state-panel {
   margin-top: var(--space-5);
   padding: var(--space-5);
   border: 1px solid var(--border);
   background: var(--surface);
-}
-
-.feed-end {
-  color: var(--text-muted);
-  text-align: center;
-}
-
-.feed-end p {
-  margin: 0;
 }
 
 .data-list {
@@ -1078,6 +993,17 @@ h2 {
 .data-list p,
 .data-list span {
   color: var(--text-muted);
+}
+
+.library-knowledge {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+
+.library-knowledge h4 {
+  margin: 0;
 }
 
 .library-layout {
@@ -1389,7 +1315,6 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .queue-row,
   .open-response-card dl div,
   .open-response-actions {
     align-items: stretch;
@@ -1454,7 +1379,6 @@ h2 {
   }
 
   .section-heading,
-  .preference-panel,
   .card-body {
     padding: var(--space-4);
   }
@@ -1472,12 +1396,6 @@ h2 {
   .source-details dl div {
     grid-template-columns: 1fr;
     gap: 2px;
-  }
-
-  .study-row,
-  .quiz-footer {
-    align-items: stretch;
-    flex-direction: column;
   }
 
   .preference-controls .button {
@@ -1518,8 +1436,7 @@ h2 {
   }
 
   .learning-card,
-  .review-card,
-  .learning-snapshot {
+  .review-card {
     border-top-color: CanvasText;
   }
 

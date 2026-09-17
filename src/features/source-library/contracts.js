@@ -3,8 +3,10 @@
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
 /** @typedef {"active" | "disabled"} LibrarySourceState */
+/** @typedef {"web" | "private-document"} LibrarySourceOrigin */
 
 /** @typedef {"keyword" | "semantic" | "combined"} SourceSearchMode */
+/** @typedef {"sources" | "knowledge"} SourceSearchScope */
 
 /**
  * @typedef {{
@@ -42,6 +44,7 @@
  * @typedef {{
  *   readonly id: string,
  *   readonly ownerId: string,
+ *   readonly origin?: LibrarySourceOrigin,
  *   readonly submittedUrl: string,
  *   readonly canonicalUrl: string,
  *   readonly title: string,
@@ -78,6 +81,26 @@
  *   readonly source: LibrarySource,
  *   readonly score: number
  * }} SourceSearchHit
+ */
+
+/**
+ * @typedef {{
+ *   readonly knowledgeId: string,
+ *   readonly sourceId: string,
+ *   readonly sourceTitle: string,
+ *   readonly summary: string,
+ *   readonly sourceUrl: string,
+ *   readonly evidenceAnchorIds: readonly string[],
+ *   readonly questionLocked: boolean
+ * }} LibraryKnowledgeSearchResult
+ */
+
+/**
+ * @typedef {{
+ *   readonly knowledge: LibraryKnowledgeSearchResult,
+ *   readonly score: number,
+ *   readonly matchedBy: "exact" | "semantic" | "combined"
+ * }} KnowledgeSearchHit
  */
 
 /**
@@ -138,7 +161,8 @@
  * } | {
  *   readonly kind: "SourceStateConflict",
  *   readonly sourceId: string,
- *   readonly state: LibrarySourceState
+ *   readonly state: LibrarySourceState,
+ *   readonly revision: number
  * } | {
  *   readonly kind: "SourceIdempotencyConflict",
  *   readonly idempotencyKey: string
@@ -176,6 +200,8 @@
  *   readonly kind: "SourceEmbeddingDimensionMismatch"
  * } | {
  *   readonly kind: "SourceSemanticIndexUnavailable"
+ * } | {
+ *   readonly kind: "SourceSemanticConsentRequired"
  * } | {
  *   readonly kind: "SourceSemanticIndexOutOfSync"
  * }} SourceLibraryFailure

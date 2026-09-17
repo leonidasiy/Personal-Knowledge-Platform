@@ -25,7 +25,8 @@ class Database {
   classB = 0;
   observedAt = "2026-07-23T00:00:00.000Z";
   /** @type {Map<string,{size:number,state:"stored"|"uncertain"}>} */ objects = new Map();
-  /** @type {Map<string,{operation:string,key:string,bytes:number,state:string}>} */ reservations = new Map();
+  /** @type {Map<string,{operation:string,key:string,bytes:number,state:string,outcome?:string,measured?:number}>} */ reservations = new Map();
+  omitReconcileMetadata = false;
   /** @param {string} query */
   prepare(query) { return new Statement(this, query); }
   /** @param {readonly {readonly bind:(...values:readonly (string|number|null)[])=>unknown,readonly run:()=>Promise<{readonly success:boolean,readonly meta?:{readonly changes?:number}}>,readonly first:()=>Promise<unknown|null>}[]} statements */
@@ -38,6 +39,10 @@ class Database {
   first(statement) {
     if (statement.query.includes("source_r2_account_capacity")) {
       return { stored_bytes: this.storedBytes, class_a_operations: this.classA, class_b_operations: this.classB, observed_at: this.observedAt };
+    }
+    if (statement.query.includes("source_r2_reservations")) {
+      const reservation = this.reservations.get(String(statement.bindings.at(-1)));
+      return reservation === undefined ? null : { state: reservation.state, outcome: reservation.outcome ?? null, measured_stored_bytes: reservation.measured ?? null };
     }
     const object = this.objects.get(String(statement.bindings.at(-1)));
     return object === undefined ? null : { byte_size: object.size, state: object.state };
@@ -69,10 +74,14 @@ class Database {
     if (reservation === undefined || reservation.state !== "active") return { success: true, meta: { changes: 0 } };
     if (outcome === "uncertain") {
       reservation.state = "uncertain";
+      reservation.outcome = String(outcome);
+      reservation.measured = Number(measured);
       this.objects.set(reservation.key, { size: reservation.bytes, state: "uncertain" });
       return { success: true, meta: { changes: 1 } };
     }
     reservation.state = "closed";
+    reservation.outcome = String(outcome);
+    reservation.measured = Number(measured);
     if (outcome === "not-started") {
       if (reservation.operation === "write") this.storedBytes -= reservation.bytes;
       reservation.operation === "read" ? this.classB -= 1 : this.classA -= 1;
@@ -83,7 +92,7 @@ class Database {
       this.storedBytes -= this.objects.get(reservation.key)?.size ?? 0;
       this.objects.delete(reservation.key);
     }
-    return { success: true, meta: { changes: 1 } };
+    return this.omitReconcileMetadata ? { success: true } : { success: true, meta: { changes: 1 } };
   }
 }
 
@@ -132,6 +141,17 @@ Deno.test("R2 ledger reconciles bytes and fails closed on uncertain usage", asyn
   const retry = await subject.reserve({ ownerId: "owner-a", objectKey: "source-content/uncertain", operation: "write", expectedStoredBytes: 3 });
   if (retry.ok) throw new Error("Expected uncertain retry rejection.");
   equal(retry.error.kind, "R2CapacityUsageUncertain");
+});
+
+Deno.test("R2 ledger verifies the reservation when D1 omits update metadata", async () => {
+  const database = new Database();
+  database.omitReconcileMetadata = true;
+  const subject = ledger(database);
+  const write = await subject.reserve({ ownerId: "owner-a", objectKey: "source-content/item", operation: "write", expectedStoredBytes: 5 });
+  if (!write.ok) throw new Error(write.error.kind);
+  const result = await subject.reconcile({ reservation: write.value, outcome: "completed", measuredStoredBytes: 5 });
+  equal(result.ok, true);
+  equal(database.storedBytes, 5);
 });
 
 Deno.test("R2 ledger rejects stale observations before capacity reservation", async () => {

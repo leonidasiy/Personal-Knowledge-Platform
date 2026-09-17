@@ -17,7 +17,7 @@ function context(overrides = {}) {
     itemId: "item-a",
     itemVersionId: "version-a",
     contentDigest: "sha256:content-a",
-    generatorVersion: "deepseek-v4-flash-adapter-v1",
+    generatorVersion: "openrouter-glm-5.3-flash-adapter-v1",
     policyVersion: "learning-generation-v1",
     samplingVersion: "factual-sampling-v1",
     factualSamplingRatePercent: 0,
