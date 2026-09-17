@@ -13,6 +13,7 @@
 .wrangler/
 coverage/
 dist/
+!/vendor/yaml/dist/
 dist 2/
 dist.tmp-*/
 logs/

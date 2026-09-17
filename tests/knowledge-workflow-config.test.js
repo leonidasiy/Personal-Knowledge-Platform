@@ -2,6 +2,25 @@
 
 import { createAgentConfigurationLoader } from "../src/features/knowledge-workflows/config.js";
 
+Deno.test("every vendored YAML runtime file is tracked for fresh checkouts", async () => {
+  const present = [];
+  const directories = ["vendor/yaml/dist"];
+  while (directories.length > 0) {
+    const directory = directories.pop();
+    if (directory === undefined) throw new Error("YAML directory traversal failed.");
+    for await (const entry of Deno.readDir(directory)) {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory) directories.push(path);
+      else if (entry.isFile) present.push(path);
+    }
+  }
+  if (present.length === 0) throw new Error("Vendored YAML runtime is missing.");
+  const result = await new Deno.Command("git", { args: ["ls-files", "--", "vendor/yaml/dist"] }).output();
+  if (!result.success) throw new Error("Git tracking check failed.");
+  const tracked = new Set(new TextDecoder().decode(result.stdout).trim().split("\n"));
+  for (const path of present) if (!tracked.has(path)) throw new Error(`Vendored YAML runtime is untracked: ${path}`);
+});
+
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) {
   if (!Object.is(actual, expected)) {
