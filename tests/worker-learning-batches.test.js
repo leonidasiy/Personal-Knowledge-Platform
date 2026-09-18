@@ -20,8 +20,11 @@ class Statement {
   /** @param {...(string | number | null)} values */
   bind(...values) { this.bindings = values; return this; }
   async all() { return this.database.all(this.query); }
-  async first() { return this.database.first(this.query); }
-  async run() { return { success: true, meta: { changes: 1 } }; }
+  async first() { return this.database.first(this.query, this.bindings); }
+  async run() {
+    if (this.query.startsWith("UPDATE learner_batch_commands")) this.database.commandResults.set(String(this.bindings[2]), String(this.bindings[0]));
+    return { success: true, meta: { changes: 1 } };
+  }
 }
 
 class Database {
@@ -29,6 +32,7 @@ class Database {
   /** @type {unknown[]} */ rows;
   /** @type {unknown | null} */ reviewRow = null;
   /** @type {number | null} */ answerCount = null;
+  /** @type {Map<string, string>} */ commandResults = new Map();
   /** @param {unknown[]} rows */
   constructor(rows) { this.rows = rows; }
   /** @param {string} query */
@@ -36,15 +40,19 @@ class Database {
   /** @param {string} query */
   async all(query) { return { success: true, results: query.includes("FROM extraction_knowledge_points kp") ? this.rows : [] }; }
   /** @param {string} query */
-  async first(query) {
+  /** @param {string} query @param {readonly (string | number | null)[]} [bindings] */
+  async first(query, bindings = []) {
     if (query.includes("FROM learner_feed_batches")) return null;
     if (query.includes("FROM learner_review_batches")) return this.reviewRow;
-    if (query.includes("FROM learner_batch_commands")) return null;
+    if (query.includes("FROM learner_batch_commands")) { const result = this.commandResults.get(String(bindings[1])); return result === undefined ? null : { result_json: result }; }
     if (query.includes("COUNT(*)") && this.answerCount !== null) return { count: this.answerCount };
     return null;
   }
   /** @param {readonly Statement[]} statements */
-  async batch(statements) { return statements.map(() => ({ success: true, meta: { changes: 1 } })); }
+  async batch(statements) {
+    for (const statement of statements) if (statement.query.startsWith("INSERT INTO learner_batch_commands")) this.commandResults.set(String(statement.bindings[1]), String(statement.bindings[2]));
+    return statements.map(() => ({ success: true, meta: { changes: 1 } }));
+  }
 }
 
 function rows(count = 5) {
@@ -145,12 +153,86 @@ Deno.test("learner D1 answer returns the stored explanation and correct choice o
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
   database.answerCount = 1;
   const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
-  const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: ["choice-1"], idempotencyKey: "answer-1" });
+  const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: ["choice-1"], answerText: null, blankAnswers: null, idempotencyKey: "answer-1" });
   assertEquals(result.ok, true);
   if (!result.ok) return;
   const answer = /** @type {{ readonly feedback: { readonly explanation: string, readonly correctAnswer: string } }} */ (result.value);
   assertEquals(answer.feedback.explanation, "The paired evidence explains it.");
   assertEquals(answer.feedback.correctAnswer, "Correct");
+});
+
+Deno.test("multi-blank review scores each part, keeps partial review short, and hides keys before submission", async () => {
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
+  due[0].task_json = JSON.stringify({ id: "task-0", kind: "fill-blank", prompt: "A ____ resolves to the ____.", explanation: "The dominant resolves to the tonic.", sourceAnchorIds: ["anchor-0"], choices: null, correctChoiceIds: null, acceptedAnswers: null, blankId: null, blanks: [{ id: "blank-1", acceptedAnswers: ["dominant"] }, { id: "blank-2", acceptedAnswers: ["tonic"] }], revision: 1 });
+  const database = new Database(due);
+  database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
+  database.answerCount = 1;
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", semanticGrader: async () => ({ ok: true, value: [false] }), logger: () => {} });
+  const review = await service.loadReview("owner-a", "2026-08-19");
+  assertEquals(review.ok, true);
+  if (!review.ok) return;
+  const projected = /** @type {{ readonly questions: readonly Record<string, unknown>[] }} */ (review.value).questions[0];
+  assertEquals(JSON.stringify(projected).includes("acceptedAnswers"), false);
+  assertEquals(JSON.stringify(projected).includes("dominant"), false);
+  const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: [], blankAnswers: [{ id: "blank-1", text: "dominant" }, { id: "blank-2", text: "subdominant" }], idempotencyKey: "answer-1" });
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  const answer = /** @type {{ readonly score: number, readonly correct: boolean, readonly nextDueAt: string, readonly feedback: { readonly components: readonly { readonly correct: boolean }[] } }} */ (result.value);
+  assertEquals(answer.score, 0.5);
+  assertEquals(answer.correct, false);
+  assertEquals(answer.nextDueAt, "2026-08-20T00:00:00.000Z");
+  assertEquals(answer.feedback.components[0].correct, true);
+  assertEquals(answer.feedback.components[1].correct, false);
+  assertEquals(database.queries.some((query) => query.includes("INSERT INTO learner_review_answers") && query.includes("score")), true);
+  const inserts = database.queries.filter((query) => query.includes("INSERT INTO learner_review_answers")).length;
+  const retry = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: [], blankAnswers: [{ id: "blank-1", text: "dominant" }, { id: "blank-2", text: "subdominant" }], idempotencyKey: "answer-1" });
+  assertEquals(retry.ok, true);
+  if (retry.ok) assertEquals(/** @type {{ readonly score: number }} */ (retry.value).score, 0.5);
+  assertEquals(database.queries.filter((query) => query.includes("INSERT INTO learner_review_answers")).length, inserts);
+});
+
+Deno.test("unavailable semantic grading leaves an uncertain fill response pending without writing an attempt", async () => {
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
+  due[0].task_json = JSON.stringify({ id: "task-0", kind: "fill-blank", prompt: "Name the target.", explanation: "The target is tonic.", sourceAnchorIds: ["anchor-0"], choices: null, correctChoiceIds: null, acceptedAnswers: ["tonic"], blankId: "blank-1", revision: 1 });
+  const database = new Database(due);
+  database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", semanticGrader: async () => ({ ok: false, error: { kind: "KnowledgeModelUnavailable" } }), logger: () => {} });
+  const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: [], answerText: "home note", idempotencyKey: "answer-1" });
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.kind, "ReviewGradePending");
+  assertEquals(database.queries.some((query) => query.includes("INSERT INTO learner_review_answers")), false);
+});
+
+Deno.test("legacy single-blank answers and semantic equivalents remain gradeable", async () => {
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z", scheduled_days: 2 }));
+  due[0].task_json = JSON.stringify({ id: "task-0", kind: "fill-blank", prompt: "Name the home note.", explanation: "The tonic is the home note.", sourceAnchorIds: ["anchor-0"], choices: null, correctChoiceIds: null, acceptedAnswers: ["tonic"], blankId: "blank-1", revision: 1 });
+  const database = new Database(due);
+  database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
+  database.answerCount = 1;
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", semanticGrader: async () => ({ ok: true, value: [true] }), logger: () => {} });
+  const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: [], answerText: "home pitch", idempotencyKey: "answer-1" });
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  const answer = /** @type {{ readonly score: number, readonly correct: boolean, readonly nextDueAt: string }} */ (result.value);
+  assertEquals(answer.score, 1);
+  assertEquals(answer.correct, true);
+  assertEquals(answer.nextDueAt, "2026-08-23T00:00:00.000Z");
+});
+
+Deno.test("multi-select partial credit penalizes wrong selections without extending the interval", async () => {
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z", scheduled_days: 2 }));
+  due[0].task_json = JSON.stringify({ id: "task-0", kind: "multiple-choice", prompt: "Which relationships hold?", explanation: "The source supports A and B.", sourceAnchorIds: ["anchor-0"], choices: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }], correctChoiceIds: ["a", "b"], acceptedAnswers: null, blankId: null, revision: 1 });
+  const database = new Database(due);
+  database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
+  database.answerCount = 1;
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", logger: () => {} });
+  const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: ["a", "b", "c"], answerText: null, blankAnswers: null, idempotencyKey: "answer-1" });
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  const answer = /** @type {{ readonly score: number, readonly correct: boolean, readonly nextDueAt: string }} */ (result.value);
+  assertEquals(answer.score, 0.5);
+  assertEquals(answer.correct, false);
+  assertEquals(answer.nextDueAt, "2026-08-20T00:00:00.000Z");
 });
 
 Deno.test("learner D1 deletion contract removes current batches and every paired descendant", async () => {

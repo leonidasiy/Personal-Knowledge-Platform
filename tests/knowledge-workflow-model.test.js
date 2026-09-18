@@ -101,6 +101,13 @@ Deno.test("knowledge model accepts the bounded semantic-ranker role", async () =
   assertEquals(result.ok, true);
 });
 
+Deno.test("knowledge model accepts the review grader role with synthetic learner answers", async () => {
+  const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async () => Response.json({ id: "request-review", choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ equivalent: [true] }) } }] }), now: () => 1_000, logger: () => {} });
+  const result = await model.generate({ role: "review-grader", systemPrompt: "Judge equivalence.", input: { prompt: "Name the tonic.", answers: [{ response: "home note", acceptedAnswers: ["tonic"] }] }, maxOutputTokens: 128 });
+  assertEquals(result.ok, true);
+  if (result.ok) assertEquals(JSON.stringify(result.value.output.equivalent), "[true]");
+});
+
 Deno.test("knowledge model maps an aborted DOMException fetch to its named timeout", async () => {
   const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 5, maximumInputCharacters: 10_000, fetch: async (_input, init) => await new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true })), now: Date.now, logger: () => {} });
   const result = await model.generate(command());

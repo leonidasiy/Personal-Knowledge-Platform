@@ -32,13 +32,13 @@ function assertFailure(result, kind) {
   assertEquals(result.error.kind, kind);
 }
 
-test("validates the ordered migration chain through 0013 and its SQLite invariants", async () => {
+test("validates the ordered migration chain through 0014 and its SQLite invariants", async () => {
   const output = await execFileAsync(process.execPath, ["--permission", "--allow-fs-read=worker/migrations", "./scripts/validate-migration-chain.mjs"], { encoding: "utf8" });
 
   assertEquals(output.stderr, "");
   assertMatch(
     output.stdout.trim(),
-    /^Validated 13 migrations and [1-9]\d* schema objects\.$/,
+    /^Validated 14 migrations and [1-9]\d* schema objects\.$/,
   );
 });
 

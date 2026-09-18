@@ -174,3 +174,20 @@ Deno.test("all checked-in role configurations satisfy the closed schema", async 
     }
   }
 });
+
+Deno.test("deployed workflow digests match the checked-in role configurations", async () => {
+  const config = await Deno.readTextFile(new URL("../wrangler.jsonc", import.meta.url));
+  const encoded = /"KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS":\s*("(?:\\.|[^"\\])*")/.exec(config)?.[1];
+  if (encoded === undefined) throw new Error("Workflow digest configuration is missing.");
+  const digests = JSON.parse(JSON.parse(encoded));
+  const hash = async (/** @type {string} */ input) => `sha256:${Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input))),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("")}`;
+  const canonical = createAgentConfigurationLoader({ sha256: hash });
+  for (const role of ["rights-assessor", "knowledge-scraper", "question-generator", "question-evaluator"]) {
+    const source = await Deno.readTextFile(new URL(`../agent-config/${role}.yaml`, import.meta.url));
+    const loaded = await canonical.load({ source, expectedRole: /** @type {import("../src/features/knowledge-workflows/config.js").AgentRole} */ (role), expectedDigest: digests[role] });
+    if (!loaded.ok) throw new Error(`${role}: ${loaded.error.kind}`);
+  }
+});

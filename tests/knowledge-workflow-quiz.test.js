@@ -105,6 +105,7 @@ Deno.test("quiz actor-critic rejects duplicate choice meanings and duplicate ans
   for (const draft of [
     { kind: "single-choice", options: ["Method A maps to term B", " method a maps to term b "], answer: "Method A maps to term B" },
     { kind: "multiple-choice", options: ["A applies to B", "C applies to D"], answer: ["A applies to B", "A applies to B"] },
+    { kind: "multiple-choice", options: ["A applies to B", "C applies to D"], answer: ["A applies to B", "C applies to D"] },
   ]) {
     const fixture = setup();
     const actor = createQuizActorCritic({
@@ -117,6 +118,27 @@ Deno.test("quiz actor-critic rejects duplicate choice meanings and duplicate ans
     assertEquals(fixture.published.length, 0);
     assertEquals(fixture.attempts.length, 3);
     assertEquals(fixture.attempts[0].failureKind, "QuizDraftSchemaInvalid");
+  }
+});
+
+Deno.test("quiz actor-critic accepts ordered multi-blank drafts and rejects malformed blank boundaries", async () => {
+  const base = { id: "draft-blanks", knowledgeId: "knowledge-a", knowledgeRevision: 1, kind: "fill-blank", prompt: "A ____ resolves to the ____.", options: [], answer: ["dominant", "tonic"], explanation: "The dominant resolves to the tonic.", citedEvidenceUrls: ["https://example.test/a"] };
+  for (const blanks of [
+    [{ id: "blank-1", acceptedAnswers: ["dominant"] }, { id: "blank-2", acceptedAnswers: ["tonic", "home tone"] }],
+    [{ id: "blank-1", acceptedAnswers: ["tonic"] }, { id: "blank-2", acceptedAnswers: ["dominant"] }],
+    [{ id: "dominant", acceptedAnswers: ["dominant"] }, { id: "blank-2", acceptedAnswers: ["tonic"] }],
+    [{ id: "same", acceptedAnswers: ["dominant"] }, { id: "same", acceptedAnswers: ["tonic"] }],
+  ]) {
+    const fixture = setup();
+    let evaluations = 0;
+    const actor = createQuizActorCritic({
+      generator: { async generate() { return { ok: true, value: { ...base, blanks } }; } },
+      evaluator: { async evaluate() { evaluations += 1; return { ok: true, value: { score: 9, reasons: ["Grounded"], feedback: "Ready", groundingProblems: [] } }; } },
+      repository: fixture.repository, now: () => "2026-09-18T00:00:00.000Z", logger: () => {}, maxAttempts: 3,
+    });
+    await actor.run({ ownerId: "owner-a", runId: "run-blanks", points: [points()[0]] });
+    assertEquals(fixture.published.length, blanks[0].id === "blank-1" && blanks[0].acceptedAnswers[0] === "dominant" ? 1 : 0);
+    assertEquals(evaluations, fixture.published.length);
   }
 });
 

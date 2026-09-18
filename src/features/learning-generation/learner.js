@@ -25,7 +25,7 @@ export function createLearnerController(dependencies) {
   const gateway = new LearningBatchGatewayClient({ fetch: dependencies.fetch, baseUrl: dependencies.baseUrl, timeoutMs: dependencies.timeoutMs });
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: FeedBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let feed = { state: "idle", value: null, error: null };
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: ReviewBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let review = { state: "idle", value: null, error: null };
-  /** @type {Map<string, { readonly correct: boolean, readonly explanation: string, readonly correctAnswer: string }> } */ const answers = new Map();
+  /** @type {Map<string, { readonly correct: boolean, readonly score: number, readonly explanation: string, readonly correctAnswer: string, readonly components: readonly { readonly id: string, readonly correct: boolean, readonly correctAnswer: string }[] }> } */ const answers = new Map();
 
   function day() { return now().slice(0, 10); }
 
@@ -89,8 +89,9 @@ export function createLearnerController(dependencies) {
     const selectedChoiceIds = formData.getAll("selectedChoiceIds").filter((value) => typeof value === "string");
     const answerText = formData.get("answerText");
     const question = review.value?.questions.find((candidate) => candidate.questionId === questionId);
-    if (batchId === "" || questionId === "" || question === undefined || (question.kind === "fill-blank" ? typeof answerText !== "string" || answerText.trim() === "" : selectedChoiceIds.length === 0)) return;
-    const result = await gateway.answerReview(batchId, questionId, /** @type {string[]} */ (selectedChoiceIds), `review-answer:${batchId}:${questionId}`, typeof answerText === "string" ? answerText : null);
+    const blankAnswers = question?.blanks?.map((blank) => ({ id: blank.id, text: formData.get(`blank:${blank.id}`) })) ?? null;
+    if (batchId === "" || questionId === "" || question === undefined || (question.kind === "fill-blank" ? blankAnswers === null ? typeof answerText !== "string" || answerText.trim() === "" : blankAnswers.some((answer) => typeof answer.text !== "string" || answer.text.trim() === "") : selectedChoiceIds.length === 0)) return;
+    const result = await gateway.answerReview(batchId, questionId, /** @type {string[]} */ (selectedChoiceIds), `review-answer:${batchId}:${questionId}`, typeof answerText === "string" ? answerText : null, blankAnswers === null ? null : blankAnswers.map((answer) => ({ id: answer.id, text: /** @type {string} */ (answer.text) })));
     if (!result.ok) {
       review = { state: "error", value: review.value, error: result.error };
       onChange();
@@ -98,7 +99,7 @@ export function createLearnerController(dependencies) {
     }
     const correct = result.value.correct === true;
     const alreadyAnswered = answers.has(questionId);
-    answers.set(questionId, { correct, explanation: result.value.feedback.explanation, correctAnswer: result.value.feedback.correctAnswer });
+    answers.set(questionId, { correct, score: result.value.score, explanation: result.value.feedback.explanation, correctAnswer: result.value.feedback.correctAnswer, components: result.value.feedback.components });
     if (review.value !== null) {
       const batch = result.value.completed === true && review.value.batch !== null
         ? { ...review.value.batch, status: /** @type {const} */ ("completed"), completedAt: now() }
@@ -141,6 +142,7 @@ export function createLearnerController(dependencies) {
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchInsufficientCandidates") return "A complete five-card learning batch is not available yet. Add or finish another source first.";
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchIncomplete") return "Finish the current five-card batch before refreshing it.";
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewRefreshLocked") return "Answer every question in the current Review batch before refreshing it.";
+    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradePending") return "Your answer is still being checked. Try again; this attempt has not been recorded.";
     return "The learning batch could not be updated. Try again.";
   }
 
@@ -165,22 +167,22 @@ export function createLearnerController(dependencies) {
     const value = review.value;
     if (value === null || value.questions.length === 0) return `<section class="wide-view state-panel" aria-labelledby="review-title"><p class="eyebrow">Review</p><h1 id="review-title">No questions are due</h1><p>Questions unlock after a Feed batch is studied and return according to their review interval.</p><button class="button secondary" type="button" data-action="refresh-learner-review">Refresh questions</button></section>`;
     const complete = value.batch?.status === "completed" || [...answers.keys()].filter((id) => value.questions.some((question) => question.questionId === id)).length === value.questions.length;
-    return `<section class="review-route wide-view" aria-labelledby="review-title"><div class="section-heading"><div><p class="eyebrow">Due batch · ${value.questions.length} question${value.questions.length === 1 ? "" : "s"}</p><h1 id="review-title">Review</h1></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-review">Refresh questions</button>` : `<p class="batch-lock-status">Answer every question before refreshing</p>`}</div><div class="review-question-list">${value.questions.map(renderQuestion).join("")}</div></section>`;
+    return `<section class="review-route wide-view" aria-labelledby="review-title"><div class="section-heading"><div><p class="eyebrow">Due batch · ${value.questions.length} question${value.questions.length === 1 ? "" : "s"}</p><h1 id="review-title">Review</h1></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-review">Refresh questions</button>` : `<p class="batch-lock-status">Answer every question before refreshing</p>`}</div>${review.error === null ? "" : `<p class="state-inline" role="alert">${escapeHtml(friendly(review.error))}</p>`}<div class="review-question-list">${value.questions.map(renderQuestion).join("")}</div></section>`;
   }
 
   /** @param {LearningReviewQuestion} question */
   function renderQuestion(question) {
     const answer = answers.get(question.questionId);
     const input = question.kind === "fill-blank"
-      ? `<label><span class="sr-only">Answer</span><input type="text" name="answerText" autocomplete="off"></label>`
+      ? question.blanks === null ? `<label>Answer<input type="text" name="answerText" autocomplete="off" required></label>` : question.blanks.map((blank, index) => `<label>Blank ${index + 1}<input type="text" name="blank:${escapeHtml(blank.id)}" autocomplete="off" required></label>`).join("")
       : question.choices === null
       ? `<p>This question type is not answerable in the current Review batch.</p>`
       : `<fieldset class="quiz-options"><legend class="sr-only">${escapeHtml(question.prompt)}</legend>${question.choices.map((choice) => `<label><input type="${question.kind === "multiple-choice" ? "checkbox" : "radio"}" name="selectedChoiceIds" value="${escapeHtml(choice.id)}"><span>${escapeHtml(choice.label)}</span></label>`).join("")}</fieldset>`;
     const completed = review.value?.batch?.status === "completed";
     const body = answer === undefined && !completed
       ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate>${input}<button class="button primary" type="submit" ${question.choices === null && question.kind !== "fill-blank" ? "disabled" : ""}>Check answer</button></form>`
-      : `<p class="answer-feedback ${answer === undefined ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status">${answer === undefined ? "Completed. This question has been scheduled for its next interval." : answer.correct ? "Correct." : "Not quite."}</p>`;
-    const feedback = answer === undefined ? "" : `<details class="source-details" open><summary>Answer and source explanation</summary><p><strong>Correct answer:</strong> ${escapeHtml(answer.correctAnswer)}</p><p>${escapeHtml(answer.explanation)}</p><p>Evidence anchors: ${escapeHtml(question.sourceAnchorIds.join(", "))}</p></details>`;
+      : `<p class="answer-feedback ${answer === undefined ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status">${answer === undefined ? "Completed. This question has been scheduled for its next interval." : answer.correct ? "Correct." : answer.score > 0 ? `Partly correct (${Math.round(answer.score * 100)}%).` : "Not quite."}</p>`;
+    const feedback = answer === undefined ? "" : `<details class="source-details" open><summary>Answer and source explanation</summary><p><strong>Correct answer:</strong> ${escapeHtml(answer.correctAnswer)}</p>${answer.components.length > 1 ? `<ul>${answer.components.map((component, index) => `<li>${question.kind === "fill-blank" ? `Blank ${index + 1}` : escapeHtml(question.choices?.find((choice) => choice.id === component.id)?.label ?? component.id)}: ${component.correct ? "correct" : "review"}${component.correctAnswer === "" ? "" : ` · ${escapeHtml(component.correctAnswer)}`}</li>`).join("")}</ul>` : ""}<p>${escapeHtml(answer.explanation)}</p><p>Evidence anchors: ${escapeHtml(question.sourceAnchorIds.join(", "))}</p></details>`;
     return `<article class="review-card" data-review-question="${escapeHtml(question.questionId)}"><p class="review-question-meta">Paired with ${escapeHtml(question.title)}</p><h2>${escapeHtml(question.prompt)}</h2>${body}${feedback}</article>`;
   }
 

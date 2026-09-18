@@ -61,7 +61,7 @@ export class D1KnowledgeContentRepository {
     if (!isKnowledgePoint(point) || !text(ownerId) || !text(runId) || !text(createdAt)) return { ok: false, error: { kind: "KnowledgePersistenceFailed" } };
     try {
       const result = await this.#database.prepare("INSERT INTO extraction_knowledge_points (owner_id, run_id, knowledge_id, source_id, source_revision, normalized_hash, point_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING").bind(ownerId, runId, point.id, point.sourceId, point.sourceRevision, point.normalizedHash, JSON.stringify(point), createdAt).run();
-      if (changed(result)) return { ok: true, value: null };
+      if (result.success && Number.isSafeInteger(result.meta?.changes) && /** @type {number} */ (result.meta?.changes) > 0) return { ok: true, value: null };
       if (!result.success || result.meta?.changes !== 0) return { ok: false, error: { kind: "KnowledgePersistenceFailed" } };
       const existing = await this.#database.prepare("SELECT point_json FROM extraction_knowledge_points WHERE owner_id = ? AND run_id = ? AND knowledge_id = ? LIMIT 1").bind(ownerId, runId, point.id).first();
       const parsed = isRecord(existing) && text(existing.point_json) ? JSON.parse(existing.point_json) : null;
@@ -261,13 +261,25 @@ function isKnowledgePoint(value) { return isRecord(value) && typeof value.id ===
 /** @param {unknown} value @returns {value is QuizAttempt} */
 function isQuizAttempt(value) { return isRecord(value) && typeof value.id === "string" && typeof value.ownerId === "string" && typeof value.runId === "string" && typeof value.knowledgeId === "string" && positiveInteger(value.attempt) && (value.draftId === null || typeof value.draftId === "string") && (value.score === null || (typeof value.score === "number" && Number.isInteger(value.score) && value.score >= 1 && value.score <= 10)) && (value.feedback === null || typeof value.feedback === "string") && (value.failureKind === null || typeof value.failureKind === "string") && typeof value.createdAt === "string"; }
 /** @param {unknown} value @returns {value is QuestionDraft} */
-function isDraft(value) { return isRecord(value) && typeof value.id === "string" && typeof value.knowledgeId === "string" && typeof value.knowledgeRevision === "number" && typeof value.kind === "string" && typeof value.prompt === "string" && Array.isArray(value.options) && value.options.every((option) => typeof option === "string") && ((typeof value.answer === "string" && value.answer !== "") || (Array.isArray(value.answer) && value.answer.length > 0 && value.answer.every((answer) => typeof answer === "string" && answer !== ""))) && Array.isArray(value.citedEvidenceUrls) && value.citedEvidenceUrls.length > 0 && value.citedEvidenceUrls.every((url) => typeof url === "string" && url !== ""); }
+function isDraft(value) {
+  if (!isRecord(value) || !text(value.id) || !text(value.knowledgeId) || !positiveInteger(value.knowledgeRevision) || !text(value.kind) || !text(value.prompt) || !Array.isArray(value.options) || !value.options.every(text) || !Array.isArray(value.citedEvidenceUrls) || value.citedEvidenceUrls.length === 0 || !value.citedEvidenceUrls.every(text)) return false;
+  if (!text(value.answer) && !(Array.isArray(value.answer) && value.answer.length > 0 && value.answer.every(text))) return false;
+  const options = value.options;
+  if (value.kind === "single-choice" && (options.length < 2 || typeof value.answer !== "string" || !options.includes(value.answer))) return false;
+  if (value.kind === "multiple-choice" && (!Array.isArray(value.answer) || value.answer.length >= options.length || new Set(value.answer).size !== value.answer.length || value.answer.some((answer) => !options.includes(answer)))) return false;
+  if (value.kind === "fill-blank" && options.length !== 0) return false;
+  if (value.blanks === undefined) return true;
+  if (value.kind !== "fill-blank" || !Array.isArray(value.answer) || !Array.isArray(value.blanks) || value.blanks.length < 2 || value.blanks.length > 4 || value.blanks.length !== value.answer.length || (value.prompt.match(/_{2,}/gu) ?? []).length !== value.blanks.length) return false;
+  const blanks = value.blanks;
+  const answers = value.answer;
+  return blanks.every((blank, index) => isRecord(blank) && blank.id === `blank-${index + 1}` && Array.isArray(blank.acceptedAnswers) && blank.acceptedAnswers.length > 0 && blank.acceptedAnswers.every(text) && blank.acceptedAnswers[0] === answers[index]);
+}
 
 /** @param {unknown} draft @returns {string | null} */
 function draftFingerprint(draft) {
   if (!isDraft(draft)) return null;
   const answer = Array.isArray(draft.answer) ? [...draft.answer].sort() : draft.answer;
-  const canonical = JSON.stringify({ kind: draft.kind, prompt: draft.prompt.trim(), options: [...draft.options], answer, citedEvidenceUrls: [...draft.citedEvidenceUrls].sort() });
+  const canonical = JSON.stringify({ kind: draft.kind, prompt: draft.prompt.trim(), options: [...draft.options], answer, blanks: draft.blanks, citedEvidenceUrls: [...draft.citedEvidenceUrls].sort() });
   let hash = 2166136261;
   for (const character of canonical) { hash ^= character.codePointAt(0) ?? 0; hash = Math.imul(hash, 16777619); }
   return `sha256:quiz-${(hash >>> 0).toString(16).padStart(8, "0")}`;
@@ -315,8 +327,9 @@ function projectReviewQueue(command, createdAt) {
     sourceAnchorIds: /** @type {[string, ...string[]]} */ ([...anchors]),
     choices: choiceProjection(command.draft),
     correctChoiceIds: correctChoiceProjection(command.draft),
-    blankId: command.draft.kind === "fill-blank" ? `${taskId}:blank` : null,
+    blankId: command.draft.kind === "fill-blank" && command.draft.blanks === undefined ? `${taskId}:blank` : null,
     acceptedAnswers: acceptedAnswerProjection(command.draft),
+    blanks: command.draft.blanks === undefined ? null : Object.freeze(command.draft.blanks.map((/** @type {{ readonly id: string, readonly acceptedAnswers: readonly string[] }} */ blank) => Object.freeze({ id: blank.id, acceptedAnswers: Object.freeze([...blank.acceptedAnswers]) }))),
     expectedConcepts: expectedConceptProjection(command.draft),
     minimumWords: responseKind(command.draft.kind) === "text" && command.draft.kind === "short-response" ? 1 : null,
     stimulus: command.draft.kind === "case-study" || command.draft.kind === "symbolic" || command.draft.kind === "notation" ? command.knowledge.summary : null,
@@ -380,7 +393,7 @@ function correctChoiceProjection(draft) {
 }
 /** @param {QuestionDraft} draft @returns {LearningTask["acceptedAnswers"]} */
 function acceptedAnswerProjection(draft) {
-  if (draft.kind !== "fill-blank") return null;
+  if (draft.kind !== "fill-blank" || draft.blanks !== undefined) return null;
   const answers = Array.isArray(draft.answer) ? draft.answer : [draft.answer];
   return /** @type {[string, ...string[]]} */ (Object.freeze([...answers]));
 }

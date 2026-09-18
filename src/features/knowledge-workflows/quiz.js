@@ -13,6 +13,7 @@
  *   readonly prompt: string,
  *   readonly options: readonly string[],
  *   readonly answer: string | readonly string[],
+ *   readonly blanks?: readonly { readonly id: string, readonly acceptedAnswers: readonly string[] }[],
  *   readonly explanation?: string,
  *   readonly citedEvidenceUrls: readonly string[]
  * }} QuestionDraft
@@ -99,6 +100,7 @@ function quizKind(value) { return typeof value === "string" && acceptedKinds.has
 /** @param {unknown} value @returns {value is QuestionDraft} */
 function validDraft(value) {
   if (record(value) && value.explanation !== undefined && (!text(value.explanation) || value.explanation.length > 4000)) return false;
+  if (record(value) && value.blanks !== undefined && (!Array.isArray(value.blanks) || value.blanks.length < 2 || value.blanks.length > 4 || value.blanks.some((blank, index) => !record(blank) || blank.id !== `blank-${index + 1}` || !Array.isArray(blank.acceptedAnswers) || blank.acceptedAnswers.length === 0 || !blank.acceptedAnswers.every(text)))) return false;
   return record(value) && text(value.id) && text(value.knowledgeId) && positiveInteger(value.knowledgeRevision) && quizKind(value.kind) && text(value.prompt) && Array.isArray(value.options) && value.options.every(text) && Array.isArray(value.citedEvidenceUrls) && value.citedEvidenceUrls.length > 0 && value.citedEvidenceUrls.every(text) && ((typeof value.answer === "string" && text(value.answer)) || (Array.isArray(value.answer) && value.answer.length > 0 && value.answer.every(text)));
 }
 
@@ -114,7 +116,10 @@ function validateGrounding(draft, knowledge) {
   if (draft.citedEvidenceUrls.some((url) => !evidence.has(url))) return { kind: "QuizDraftUngrounded" };
   if (new Set(draft.options.map((option) => option.normalize("NFKC").trim().toLocaleLowerCase())).size !== draft.options.length) return { kind: "QuizDraftSchemaInvalid" };
   if (draft.kind === "single-choice" && (draft.options.length < 2 || typeof draft.answer !== "string" || !draft.options.includes(draft.answer))) return { kind: "QuizDraftSchemaInvalid" };
-  if (draft.kind === "multiple-choice" && (draft.options.length < 2 || !Array.isArray(draft.answer) || new Set(draft.answer).size !== draft.answer.length || draft.answer.some((answer) => !draft.options.includes(answer)))) return { kind: "QuizDraftSchemaInvalid" };
+  if (draft.kind === "multiple-choice" && (draft.options.length < 2 || !Array.isArray(draft.answer) || draft.answer.length >= draft.options.length || new Set(draft.answer).size !== draft.answer.length || draft.answer.some((answer) => !draft.options.includes(answer)))) return { kind: "QuizDraftSchemaInvalid" };
+  if (draft.kind === "fill-blank") {
+    if (draft.options.length !== 0 || (draft.blanks !== undefined && (!Array.isArray(draft.answer) || draft.answer.length !== draft.blanks.length || draft.blanks.some((blank, index) => blank.acceptedAnswers[0] !== draft.answer[index]) || (draft.prompt.match(/_{2,}/gu) ?? []).length !== draft.blanks.length))) return { kind: "QuizDraftSchemaInvalid" };
+  } else if (draft.blanks !== undefined) return { kind: "QuizDraftSchemaInvalid" };
   return null;
 }
 

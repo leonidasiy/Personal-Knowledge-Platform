@@ -4,8 +4,8 @@
 /** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly questionId: string, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly media: { readonly assetId: string, readonly kind: string, readonly url: string, readonly attribution: string } | null, readonly questionLocked: boolean }} LearningKnowledgeCard */
 /** @typedef {{ readonly batchId: string, readonly learningDay: string, readonly status: "open" | "completed", readonly itemIds: readonly string[], readonly revision: number, readonly createdAt: string, readonly completedAt: string | null }} LearningBatchProjection */
 /** @typedef {{ readonly batch: LearningBatchProjection | null, readonly items: readonly LearningKnowledgeCard[] }} FeedBatchProjection */
-/** @typedef {{ readonly questionId: string, readonly knowledgeId: string, readonly title: string, readonly prompt: string, readonly kind: string, readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly sourceAnchorIds: readonly string[], readonly revision: number }} LearningReviewQuestion */
-/** @typedef {{ readonly correct: boolean, readonly completed: boolean, readonly nextDueAt: string, readonly feedback: { readonly explanation: string, readonly correctAnswer: string } }} LearningReviewAnswer */
+/** @typedef {{ readonly questionId: string, readonly knowledgeId: string, readonly title: string, readonly prompt: string, readonly kind: string, readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly blanks: readonly { readonly id: string }[] | null, readonly sourceAnchorIds: readonly string[], readonly revision: number }} LearningReviewQuestion */
+/** @typedef {{ readonly correct: boolean, readonly score: number, readonly completed: boolean, readonly nextDueAt: string, readonly feedback: { readonly explanation: string, readonly correctAnswer: string, readonly components: readonly { readonly id: string, readonly correct: boolean, readonly correctAnswer: string }[] } }} LearningReviewAnswer */
 /** @typedef {{ readonly batch: LearningBatchProjection | null, readonly questions: readonly LearningReviewQuestion[], readonly dueCount: number }} ReviewBatchProjection */
 /** @typedef {{ readonly kind: "LearningBatchGatewayCommandInvalid", readonly field: string } | { readonly kind: "LearningBatchGatewayUnauthenticated" } | { readonly kind: "LearningBatchGatewayUnauthorized" } | { readonly kind: "LearningBatchGatewayUnavailable" } | { readonly kind: "LearningBatchGatewayTimedOut" } | { readonly kind: "LearningBatchGatewayResponseInvalid" } | { readonly kind: "LearningBatchGatewayRejected", readonly failureKind: string }} LearningBatchGatewayFailure */
 
@@ -40,13 +40,14 @@ function parseQuestion(value) {
   if (!record(value) || !text(value.questionId) || !text(value.knowledgeId) || !text(value.title) || !text(value.prompt) || !text(value.kind) || !Array.isArray(value.sourceAnchorIds) || value.sourceAnchorIds.length === 0 || !value.sourceAnchorIds.every(text) || !positiveInteger(value.revision)) return null;
   if (Object.hasOwn(value, "explanation") || Object.hasOwn(value, "correctChoiceIds") || Object.hasOwn(value, "acceptedAnswers") || Object.hasOwn(value, "blankId")) return null;
   const choices = value.choices === null ? null : Array.isArray(value.choices) && value.choices.length > 0 && value.choices.every((choice) => record(choice) && text(choice.id) && text(choice.label)) ? freeze(value.choices.map((choice) => freeze({ id: /** @type {string} */ (choice.id), label: /** @type {string} */ (choice.label) }))) : undefined;
-  return choices === undefined ? null : freeze({ questionId: value.questionId, knowledgeId: value.knowledgeId, title: value.title, prompt: value.prompt, kind: value.kind, choices, sourceAnchorIds: freeze([...value.sourceAnchorIds]), revision: value.revision });
+  const blanks = value.blanks === undefined || value.blanks === null ? null : Array.isArray(value.blanks) && value.blanks.length >= 2 && value.blanks.length <= 4 && value.blanks.every((blank, index) => record(blank) && blank.id === `blank-${index + 1}` && !Object.hasOwn(blank, "acceptedAnswers")) ? freeze(value.blanks.map((blank) => freeze({ id: /** @type {string} */ (blank.id) }))) : undefined;
+  return choices === undefined || blanks === undefined ? null : freeze({ questionId: value.questionId, knowledgeId: value.knowledgeId, title: value.title, prompt: value.prompt, kind: value.kind, choices, blanks, sourceAnchorIds: freeze([...value.sourceAnchorIds]), revision: value.revision });
 }
 
 /** @param {unknown} value @returns {LearningReviewAnswer | null} */
 function parseReviewAnswer(value) {
-  if (!record(value) || typeof value.correct !== "boolean" || typeof value.completed !== "boolean" || !iso(value.nextDueAt) || !record(value.feedback) || !text(value.feedback.explanation) || !text(value.feedback.correctAnswer)) return null;
-  return freeze({ correct: value.correct, completed: value.completed, nextDueAt: value.nextDueAt, feedback: freeze({ explanation: value.feedback.explanation, correctAnswer: value.feedback.correctAnswer }) });
+  if (!record(value) || typeof value.correct !== "boolean" || typeof value.score !== "number" || !Number.isFinite(value.score) || value.score < 0 || value.score > 1 || typeof value.completed !== "boolean" || !iso(value.nextDueAt) || !record(value.feedback) || !text(value.feedback.explanation) || !text(value.feedback.correctAnswer) || !Array.isArray(value.feedback.components) || !value.feedback.components.every((component) => record(component) && text(component.id) && typeof component.correct === "boolean" && typeof component.correctAnswer === "string")) return null;
+  return freeze({ correct: value.correct, score: value.score, completed: value.completed, nextDueAt: value.nextDueAt, feedback: freeze({ explanation: value.feedback.explanation, correctAnswer: value.feedback.correctAnswer, components: freeze(value.feedback.components.map((component) => freeze({ id: /** @type {string} */ (component.id), correct: /** @type {boolean} */ (component.correct), correctAnswer: /** @type {string} */ (component.correctAnswer) }))) }) });
 }
 
 /** @param {unknown} value @returns {Result<FeedBatchProjection, LearningBatchGatewayFailure>} */
@@ -132,9 +133,9 @@ export class LearningBatchGatewayClient {
     if (!response.ok) return response;
     return parseReview(resultValue(response.value));
   }
-  /** @param {string} batchId @param {string} questionId @param {readonly string[]} selectedChoiceIds @param {string} idempotencyKey @param {string | null} [answerText] @returns {Promise<Result<LearningReviewAnswer, LearningBatchGatewayFailure>>} */
-  async answerReview(batchId, questionId, selectedChoiceIds, idempotencyKey, answerText = null) {
-    const result = await this.#command("api/learning-generation/review-batch/answer", { batchId, questionId, selectedChoiceIds, answerText, idempotencyKey });
+  /** @param {string} batchId @param {string} questionId @param {readonly string[]} selectedChoiceIds @param {string} idempotencyKey @param {string | null} [answerText] @param {readonly { readonly id: string, readonly text: string }[] | null} [blankAnswers] @returns {Promise<Result<LearningReviewAnswer, LearningBatchGatewayFailure>>} */
+  async answerReview(batchId, questionId, selectedChoiceIds, idempotencyKey, answerText = null, blankAnswers = null) {
+    const result = await this.#command("api/learning-generation/review-batch/answer", { batchId, questionId, selectedChoiceIds, answerText, blankAnswers, idempotencyKey });
     if (!result.ok) return result;
     const parsed = parseReviewAnswer(result.value);
     return parsed === null ? bad() : { ok: true, value: parsed };

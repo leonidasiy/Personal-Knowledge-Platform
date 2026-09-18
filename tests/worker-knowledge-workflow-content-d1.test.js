@@ -19,6 +19,16 @@ function database() {
   return { queries, preparedQueries, batches, prepare(/** @type {string} */ query) { preparedQueries.push(query); return statement; }, batch: async (/** @type {readonly unknown[]} */ statements) => { batches.push(statements.length); return statements.map(() => ({ success: true, meta: { changes: 1 } })); } };
 }
 
+Deno.test("knowledge append accepts D1 change counts that include search-index triggers", async () => {
+  const fixture = database();
+  const prepare = fixture.prepare;
+  fixture.prepare = (query) => ({ ...prepare(query), bind() { return this; }, async run() { return { success: true, meta: { changes: 4 } }; } });
+  const content = new D1KnowledgeContentRepository({ database: fixture, logger: () => {} });
+  const point = { id: "knowledge-a", sourceId: "source-a", sourceRevision: 1, summary: "A supported claim.", normalizedHash: "hash-a", evidenceAnchors: [{ url: "https://example.test/a", selector: "#a" }] };
+  const result = await content.appendKnowledgePoint(point, "owner-a", "run-a", "2026-09-18T00:00:00.000Z");
+  assertEquals(result.ok, true);
+});
+
 Deno.test("knowledge append replays only an identical owner/run-scoped point after interrupted checkpoint", async () => {
   const point = { id: "knowledge-a", sourceId: "source-a", sourceRevision: 1, summary: "Bounded", normalizedHash: "hash-a", evidenceAnchors: [{ url: "https://example.test/a", selector: "#a" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://example.test/a" }, extractionVersion: "v1" };
   let stored = JSON.stringify(point);
@@ -80,4 +90,17 @@ Deno.test("D1 quiz repository detects a duplicate draft for the same source revi
   if (result.ok) assertEquals(result.value, true);
   assertEquals(preparedQueries.some((query) => query.includes("draft_fingerprint")), true);
   assertEquals(bound.length > 0, true);
+});
+
+Deno.test("D1 quiz publication persists ordered blanks and rejects mismatched answers", async () => {
+  const fixture = database();
+  const repository = new D1QuizRepository({ database: fixture, logger: () => {}, now: () => "2026-09-18T00:00:00.000Z" });
+  const knowledge = { id: "knowledge-a", sourceId: "source-a", sourceRevision: 1, summary: "The dominant resolves to the tonic.", normalizedHash: "hash-a", evidenceAnchors: [{ url: "https://example.test/a", selector: "#a" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://example.test/a" }, extractionVersion: "v1" };
+  const draft = { id: "draft-blanks", knowledgeId: "knowledge-a", knowledgeRevision: 1, kind: "fill-blank", prompt: "A ____ resolves to the ____.", options: [], answer: ["dominant", "tonic"], blanks: [{ id: "blank-1", acceptedAnswers: ["dominant"] }, { id: "blank-2", acceptedAnswers: ["tonic"] }], explanation: "The dominant resolves to the tonic.", citedEvidenceUrls: ["https://example.test/a"] };
+  const accepted = await repository.publish({ ownerId: "owner-a", runId: "run-a", knowledge, draft, score: 9, attempt: 1, status: "published" });
+  assertEquals(accepted.ok, true);
+  assertEquals(fixture.queries.some((bound) => Array.isArray(bound) && bound.some((value) => typeof value === "string" && value.includes('"blanks"'))), true);
+  const rejected = await repository.publish({ ownerId: "owner-a", runId: "run-b", knowledge, draft: { ...draft, blanks: [{ id: "blank-1", acceptedAnswers: ["tonic"] }, ...draft.blanks.slice(1)] }, score: 9, attempt: 1, status: "published" });
+  assertEquals(rejected.ok, false);
+  if (!rejected.ok) assertEquals(rejected.error.kind, "QuizPublicationFailed");
 });

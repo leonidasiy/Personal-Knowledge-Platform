@@ -92,7 +92,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     const now = () => new Date().toISOString();
     const workerFetch = globalThis.fetch.bind(globalThis);
     const logger = createKnowledgeWorkflowLogger({ sink: (record) => console.info(JSON.stringify(record)), now });
-    const browser = createKnowledgeWorkflowBrowser({
+    const createBrowser = () => createKnowledgeWorkflowBrowser({
       launcher: {
         limits: (binding) => puppeteer.limits(binding),
         launch: (binding) => puppeteer.launch(binding),
@@ -171,10 +171,10 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     if (!current.ok) throw new Error(current.error.kind);
     const configurations = await step.do("validate workflow role configurations", async () => loadConfigurationSnapshots(current.value.configDigests));
     if (!configurations.ok) throw new Error(configurations.error.kind);
-    const runtime = createKnowledgeWorkflowRuntime({
+    const createRuntime = () => createKnowledgeWorkflowRuntime({
       database,
       fetch: workerFetch,
-      browser,
+      browser: createBrowser(),
       apiKey: typeof this.env.OPENROUTER_API_KEY === "string" ? this.env.OPENROUTER_API_KEY : null,
       endpoint: "https://openrouter.ai/api/v1/chat/completions",
       now,
@@ -190,6 +190,8 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       resolveAddresses: (hostname) => resolvePublicAddresses(hostname, workerFetch),
       transition: (command) => service.advance({ ownerId: command.run.ownerId, runId: command.run.runId, expectedRevision: command.run.revision, nextState: command.nextState, ...(command.counts === undefined ? {} : { counts: command.counts }), ...(command.failureKind === undefined ? {} : { failureKind: command.failureKind }), ...(command.robotsEvidence === undefined ? {} : { robotsEvidence: command.robotsEvidence }) }),
     });
+    /** @type {ReturnType<typeof createKnowledgeWorkflowRuntime> | null} */
+    let runtime = null;
     if (current.value.state === "source-added") {
       const assessed = await step.do("begin rights assessment", async () => service.advance({ ownerId, runId, expectedRevision: current.value.revision, nextState: "rights-assessment" }));
       if (!assessed.ok) throw new Error(assessed.error.kind);
@@ -206,11 +208,12 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     }
     /** @param {string} stepName @returns {Promise<import("../src/features/knowledge-workflows/workflow.js").Result<unknown, { readonly kind: string, readonly detailKind?: string, readonly detailDiagnosticToken?: string }>>} */
     async function executeOrAwaitMaterial(stepName) {
+      runtime = createRuntime();
       const executed = await executeAuthoritativeWorkflowStep({
         step,
         name: stepName,
         load: () => service.status({ ownerId, runId }),
-        execute: (authoritativeRun) => runtime.execute(authoritativeRun),
+        execute: (authoritativeRun) => /** @type {ReturnType<typeof createKnowledgeWorkflowRuntime>} */ (runtime).execute(authoritativeRun),
       });
       if (executed.ok) return executed;
       if (executed.error.kind !== "WorkflowRobotsFailed" && executed.error.kind !== "WorkflowUploadRequired") {
@@ -269,7 +272,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       if (!Number.isFinite(expiryMs)) throw new Error("WorkflowRuntimeOutputInvalid");
       await step.sleepUntil("wait for quiz-attempt retention expiry", new Date(expiryMs));
       for (const knowledgeId of restrictedKnowledgeIds) {
-        const purged = await step.do(`purge retained quiz attempt ${knowledgeId}`, async () => runtime.purgeExpired({ run: /** @type {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} */ (finalRun), knowledgeId, restrictedUntil, before: restrictedUntil }));
+        const purged = await step.do(`purge retained quiz attempt ${knowledgeId}`, async () => (runtime ?? createRuntime()).purgeExpired({ run: /** @type {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} */ (finalRun), knowledgeId, restrictedUntil, before: restrictedUntil }));
         if (!purged.ok) throw new Error(purged.error.kind);
       }
     }

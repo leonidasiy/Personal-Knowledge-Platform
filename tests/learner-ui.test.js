@@ -79,6 +79,17 @@ Deno.test("Review renders the paired quiz prompt, not the knowledge-card summary
   assert(html.includes("data-review-question=\"question-1\""), "Review must render the paired question container.");
 });
 
+Deno.test("Review renders ordered blank inputs without revealing answers", async () => {
+  const multi = { ...review, questions: [{ ...review.questions[0], prompt: "A ____ resolves to the ____.", kind: "fill-blank", choices: null, blanks: [{ id: "blank-1" }, { id: "blank-2" }] }] };
+  const controller = createLearnerController({ fetch: async () => response({ result: multi }), baseUrl: "https://app.example.test/", timeoutMs: 1_000, escapeHtml: (value) => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "id-1", onChange: () => {} });
+  const loaded = await controller.loadReview();
+  assert(loaded.ok, "Review must accept ordered blank definitions.");
+  const html = controller.renderReview();
+  assert(html.includes('name="blank:blank-1"') && html.includes('name="blank:blank-2"'), "Both blanks need accessible inputs.");
+  assert(html.includes("Blank 1") && html.includes("Blank 2"), "Each input needs a distinct label.");
+  assert(!html.includes("dominant") && !html.includes("tonic"), "The pre-attempt view must not reveal answers.");
+});
+
 Deno.test("Review empty state contains no knowledge-card content", async () => {
   const controller = createLearnerController({
     fetch: async () => response({ result: { batch: null, questions: [], dueCount: 0 } }),

@@ -105,6 +105,19 @@ Deno.test("learner gateway parses answerable fill-blank Review questions", async
   }
 });
 
+Deno.test("learner gateway keeps multi-blank answer keys private and parses scored feedback", async () => {
+  const multi = { ...fillBlankReview, questions: [{ ...fillBlankReview.questions[0], blanks: [{ id: "blank-1" }, { id: "blank-2" }] }] };
+  const gateway = new LearningBatchGatewayClient({ fetch: async (input) => String(input).includes("review-batch/answer") ? response({ result: { completed: true, correct: false, score: 0.5, nextDueAt: "2026-08-20T00:00:00.000Z", feedback: { explanation: "The source distinguishes both terms.", correctAnswer: "dominant, tonic", components: [{ id: "blank-1", correct: true, correctAnswer: "dominant" }, { id: "blank-2", correct: false, correctAnswer: "tonic" }] } } }) : response({ result: multi }), baseUrl: "https://app.example.test/", timeoutMs: 1_000 });
+  const loaded = await gateway.loadReview("2026-08-19");
+  assertEquals(loaded.ok, true);
+  if (!loaded.ok) return;
+  assertEquals(loaded.value.questions[0].blanks?.length, 2);
+  assertEquals(JSON.stringify(loaded.value).includes("acceptedAnswers"), false);
+  const answer = await gateway.answerReview("review:fill", "q-fill", [], "one", null, [{ id: "blank-1", text: "dominant" }, { id: "blank-2", text: "subdominant" }]);
+  assertEquals(answer.ok, true);
+  if (answer.ok) assertEquals(answer.value.score, 0.5);
+});
+
 Deno.test("learner gateway sends bounded completion, answer, preference, and deletion commands", async () => {
   /** @type {string[]} */ const methods = [];
   /** @type {unknown[]} */ const bodies = [];
@@ -113,7 +126,7 @@ Deno.test("learner gateway sends bounded completion, answer, preference, and del
       methods.push(init?.method ?? "GET");
       bodies.push(init?.body === undefined || init.body === null ? null : JSON.parse(String(init.body)));
       const body = init?.body === undefined || init.body === null ? null : JSON.parse(String(init.body));
-      return response({ ownerId: "owner-a", result: body !== null && Object.hasOwn(body, "questionId") ? { completed: true, correct: true, nextDueAt: "2026-08-20T00:00:00.000Z", feedback: { explanation: "Source-backed explanation.", correctAnswer: "A" } } : { ok: true, completed: true, correct: true } });
+      return response({ ownerId: "owner-a", result: body !== null && Object.hasOwn(body, "questionId") ? { completed: true, correct: true, score: 1, nextDueAt: "2026-08-20T00:00:00.000Z", feedback: { explanation: "Source-backed explanation.", correctAnswer: "A", components: [{ id: "choice-1", correct: true, correctAnswer: "A" }] } } : { ok: true, completed: true, correct: true } });
     },
     baseUrl: "https://app.example.test/",
     timeoutMs: 1_000,

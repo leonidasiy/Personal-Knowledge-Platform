@@ -141,6 +141,7 @@
  *   readonly correctChoiceIds: readonly [string, ...string[]] | null,
  *   readonly blankId: string | null,
  *   readonly acceptedAnswers: readonly [string, ...string[]] | null,
+ *   readonly blanks?: readonly { readonly id: string, readonly acceptedAnswers: readonly [string, ...string[]] }[] | null,
  *   readonly expectedConcepts: readonly [string, ...string[]] | null,
  *   readonly minimumWords: number | null,
  *   readonly stimulus: LearningSymbolicStimulus | string | null,

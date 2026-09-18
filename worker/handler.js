@@ -1054,6 +1054,7 @@ function learningBatchFailureResponse(failure) {
         failure.kind === "ReviewAnswerNotAllowed"
     ? 409
     : failure.kind === "LearningBatchUnavailable" ||
+        failure.kind === "ReviewGradePending" ||
         failure.kind === "LearningBatchPersistenceFailed" ||
         failure.kind === "KnowledgePurgeFailed" ||
         failure.kind === "LearningPreferencePersistenceFailed"

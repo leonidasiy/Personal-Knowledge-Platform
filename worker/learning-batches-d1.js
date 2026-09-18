@@ -9,11 +9,11 @@ import { selectKnowledgeBatch } from "../src/features/learning-generation/batche
 /** @typedef {{ readonly delete: (key: string) => Promise<unknown> }} MediaBucket */
 /** @typedef {{ readonly event: string, readonly ownerId?: string, readonly batchId?: string, readonly knowledgeId?: string, readonly failureKind?: string, readonly itemCount?: number }} LearnerBatchLog */
 /** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly questionId: string, readonly viewCount: number, readonly lastAnswerCorrect: boolean | null, readonly scheduledDays: number, readonly preference: number, readonly dueAt: string | null, readonly studiedAt: string | null, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly question: PublicQuestion, readonly media: PublicMedia | null }} LearnerCandidate */
-/** @typedef {{ readonly id: string, readonly kind: string, readonly prompt: string, readonly explanation: string, readonly sourceAnchorIds: readonly string[], readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly correctChoiceIds: readonly string[] | null, readonly acceptedAnswers: readonly string[] | null, readonly blankId: string | null, readonly revision: number }} PublicQuestion */
+/** @typedef {{ readonly id: string, readonly kind: string, readonly prompt: string, readonly explanation: string, readonly sourceAnchorIds: readonly string[], readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly correctChoiceIds: readonly string[] | null, readonly acceptedAnswers: readonly string[] | null, readonly blankId: string | null, readonly blanks: readonly { readonly id: string, readonly acceptedAnswers: readonly string[] }[] | null, readonly revision: number }} PublicQuestion */
 /** @typedef {{ readonly assetId: string, readonly kind: string, readonly url: string, readonly attribution: string }} PublicMedia */
 /** @typedef {{ readonly batchId: string, readonly learningDay: string, readonly status: "open" | "completed", readonly itemIds: readonly string[], readonly revision: number, readonly createdAt: string, readonly completedAt: string | null }} BatchRow */
 /** @typedef {{ readonly ownerId: string, readonly batchId: string, readonly idempotencyKey: string }} FeedCompleteCommand */
-/** @typedef {{ readonly ownerId: string, readonly batchId: string, readonly questionId: string, readonly selectedChoiceIds: readonly string[], readonly idempotencyKey: string }} ReviewAnswerCommand */
+/** @typedef {{ readonly ownerId: string, readonly batchId: string, readonly questionId: string, readonly selectedChoiceIds: readonly string[], readonly answerText?: string | null, readonly blankAnswers?: readonly { readonly id: string, readonly text: string }[], readonly idempotencyKey: string }} ReviewAnswerCommand */
 /** @typedef {{ readonly ownerId: string, readonly knowledgeId: string, readonly choice: "more" | "less", readonly idempotencyKey: string }} PreferenceCommand */
 /** @typedef {{ readonly ownerId: string, readonly knowledgeId: string, readonly idempotencyKey: string }} KnowledgeRemoveCommand */
 /** @typedef {{ readonly ownerId: string, readonly sourceId: string, readonly idempotencyKey: string }} SourceRemoveCommand */
@@ -43,9 +43,11 @@ function parseQuestion(value) {
   const correctChoiceIds = value.correctChoiceIds === null ? null : stringList(value.correctChoiceIds) ? [...value.correctChoiceIds] : undefined;
   const acceptedAnswers = value.acceptedAnswers === undefined || value.acceptedAnswers === null ? null : stringList(value.acceptedAnswers) ? [...value.acceptedAnswers] : undefined;
   const blankId = value.blankId === undefined || value.blankId === null ? null : text(value.blankId) ? value.blankId : undefined;
-  if (choices === undefined || correctChoiceIds === undefined || acceptedAnswers === undefined || blankId === undefined) return null;
-  if (value.kind === "fill-blank" && (acceptedAnswers === null || blankId === null)) return null;
-  return Object.freeze({ id: value.id, kind: value.kind, prompt: value.prompt, explanation: value.explanation, sourceAnchorIds: Object.freeze([...value.sourceAnchorIds]), choices: choices === null ? null : Object.freeze(choices), correctChoiceIds: correctChoiceIds === null ? null : Object.freeze(correctChoiceIds), acceptedAnswers: acceptedAnswers === null ? null : Object.freeze(acceptedAnswers), blankId, revision: value.revision });
+  const blanks = value.blanks === undefined || value.blanks === null ? null : Array.isArray(value.blanks) && value.blanks.length >= 2 && value.blanks.length <= 4 && value.blanks.every((blank, index) => record(blank) && blank.id === `blank-${index + 1}` && stringList(blank.acceptedAnswers)) ? value.blanks.map((blank) => Object.freeze({ id: /** @type {string} */ (blank.id), acceptedAnswers: Object.freeze(/** @type {string[]} */ ([...blank.acceptedAnswers])) })) : undefined;
+  if (choices === undefined || correctChoiceIds === undefined || acceptedAnswers === undefined || blankId === undefined || blanks === undefined) return null;
+  if (value.kind === "fill-blank" && (blanks === null ? acceptedAnswers === null || blankId === null : acceptedAnswers !== null || blankId !== null || new Set(blanks.map((blank) => blank.id)).size !== blanks.length)) return null;
+  if (value.kind !== "fill-blank" && blanks !== null) return null;
+  return Object.freeze({ id: value.id, kind: value.kind, prompt: value.prompt, explanation: value.explanation, sourceAnchorIds: Object.freeze([...value.sourceAnchorIds]), choices: choices === null ? null : Object.freeze(choices), correctChoiceIds: correctChoiceIds === null ? null : Object.freeze(correctChoiceIds), acceptedAnswers: acceptedAnswers === null ? null : Object.freeze(acceptedAnswers), blankId, blanks: blanks === null ? null : Object.freeze(blanks), revision: value.revision });
 }
 
 /** @param {unknown} value @returns {BatchRow | null} */
@@ -87,20 +89,20 @@ function publicCandidate(candidate) {
 }
 /** @param {LearnerCandidate} candidate @returns {Record<string, unknown>} */
 function publicQuestion(candidate) {
-  return { questionId: candidate.questionId, knowledgeId: candidate.knowledgeId, title: candidate.title, prompt: candidate.question.prompt, kind: candidate.question.kind, choices: candidate.question.choices, sourceAnchorIds: candidate.question.sourceAnchorIds, revision: candidate.question.revision };
+  return { questionId: candidate.questionId, knowledgeId: candidate.knowledgeId, title: candidate.title, prompt: candidate.question.prompt, kind: candidate.question.kind, choices: candidate.question.choices, blanks: candidate.question.blanks?.map((blank) => ({ id: blank.id })) ?? null, sourceAnchorIds: candidate.question.sourceAnchorIds, revision: candidate.question.revision };
 }
 
 /** @param {PublicQuestion} question @returns {string | null} */
 function correctAnswer(question) {
-  if (question.kind === "fill-blank") return question.acceptedAnswers?.[0] ?? null;
+  if (question.kind === "fill-blank") return question.blanks?.map((blank) => blank.acceptedAnswers[0]).join(", ") ?? question.acceptedAnswers?.[0] ?? null;
   if (question.correctChoiceIds === null || question.choices === null) return null;
   const labels = question.correctChoiceIds.map((id) => question.choices?.find((choice) => choice.id === id)?.label);
   return labels.length === question.correctChoiceIds.length && labels.every(text) ? labels.join(", ") : null;
 }
 
-/** @param {{ readonly database: D1DatabasePort, readonly now: () => string, readonly random?: () => number, readonly logger: (entry: LearnerBatchLog) => void, readonly bucket?: MediaBucket | null, readonly fallbackPack?: readonly { readonly id: string, readonly path: string, readonly alt: string, readonly creator: string, readonly sourceUrl: string, readonly licence: string, readonly attribution: string }[] }} dependencies */
+/** @param {{ readonly database: D1DatabasePort, readonly now: () => string, readonly random?: () => number, readonly logger: (entry: LearnerBatchLog) => void, readonly semanticGrader?: (command: { readonly prompt: string, readonly answers: readonly { readonly response: string, readonly acceptedAnswers: readonly string[] }[] }) => Promise<Result<readonly boolean[]>>, readonly bucket?: MediaBucket | null, readonly fallbackPack?: readonly { readonly id: string, readonly path: string, readonly alt: string, readonly creator: string, readonly sourceUrl: string, readonly licence: string, readonly attribution: string }[] }} dependencies */
 export function createLearningBatchService(dependencies) {
-  if (typeof dependencies?.database?.prepare !== "function" || typeof dependencies.database.batch !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || (dependencies.bucket !== undefined && dependencies.bucket !== null && typeof dependencies.bucket.delete !== "function")) throw new TypeError("Learning batch dependencies are invalid.");
+  if (typeof dependencies?.database?.prepare !== "function" || typeof dependencies.database.batch !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || (dependencies.semanticGrader !== undefined && typeof dependencies.semanticGrader !== "function") || (dependencies.bucket !== undefined && dependencies.bucket !== null && typeof dependencies.bucket.delete !== "function")) throw new TypeError("Learning batch dependencies are invalid.");
   const random = dependencies.random ?? Math.random;
   if (typeof random !== "function") throw new TypeError("Learning batch random source is invalid.");
   const database = dependencies.database;
@@ -279,46 +281,98 @@ export function createLearningBatchService(dependencies) {
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
   async function answerReview(command) {
-    if (!record(command) || !text(command.ownerId) || !text(command.batchId) || !text(command.questionId) || !text(command.idempotencyKey) || !Array.isArray(command.selectedChoiceIds) || command.selectedChoiceIds.some((id) => !text(id)) || (command.answerText !== undefined && command.answerText !== null && !text(command.answerText))) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+    if (!record(command) || !text(command.ownerId) || !text(command.batchId) || !text(command.questionId) || !text(command.idempotencyKey) || !Array.isArray(command.selectedChoiceIds) || command.selectedChoiceIds.some((id) => !text(id)) || (command.answerText !== undefined && command.answerText !== null && !text(command.answerText)) || (command.blankAnswers !== undefined && command.blankAnswers !== null && (!Array.isArray(command.blankAnswers) || command.blankAnswers.some((answer) => !record(answer) || !text(answer.id) || !text(answer.text))))) {
+      dependencies.logger({ event: "learning-review-answer-failure", failureKind: "ReviewAnswerNotAllowed" });
+      return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+    }
+    dependencies.logger({ event: "learning-review-answer-entry", ownerId: command.ownerId, batchId: command.batchId });
+    /** @param {string} kind @returns {Result<never>} */
+    const fail = (kind) => { dependencies.logger({ event: "learning-review-answer-failure", ownerId: /** @type {string} */ (command.ownerId), batchId: /** @type {string} */ (command.batchId), failureKind: kind }); return { ok: false, error: { kind } }; };
+    try {
     const replay = await commandResult(command.ownerId, command.idempotencyKey);
-    if (!replay.ok) return replay;
-    if (replay.value !== null) return replay.value;
+    if (!replay.ok) return fail(replay.error.kind);
+    if (replay.value !== null) { dependencies.logger({ event: "learning-review-answer-success", ownerId: command.ownerId, batchId: command.batchId }); return replay.value; }
     const batchRowValue = await database.prepare("SELECT batch_id, learning_day, status, question_ids_json AS item_ids_json, revision, created_at, completed_at FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? LIMIT 1").bind(command.ownerId, command.batchId).first();
     const batch = parseBatch(batchRowValue, true);
-    if (batch === null || batch.status !== "open" || !batch.itemIds.includes(command.questionId)) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+    if (batch === null || batch.status !== "open" || !batch.itemIds.includes(command.questionId)) return fail("ReviewAnswerNotAllowed");
     const all = await candidates(command.ownerId, dependencies.now());
-    if (!all.ok) return all;
+    if (!all.ok) return fail(all.error.kind);
     const candidate = all.value.find((item) => item.questionId === command.questionId);
-    if (candidate === undefined || candidate.studiedAt === null) return { ok: false, error: { kind: "KnowledgePairNotFound" } };
-    let correct;
+    if (candidate === undefined || candidate.studiedAt === null) return fail("KnowledgePairNotFound");
+    if (candidate.question.kind === "fill-blank" ? command.selectedChoiceIds.length !== 0 || (candidate.question.blanks === null ? command.blankAnswers !== undefined && command.blankAnswers !== null : command.answerText !== undefined && command.answerText !== null) : command.blankAnswers !== undefined && command.blankAnswers !== null || command.answerText !== undefined && command.answerText !== null) return fail("ReviewAnswerNotAllowed");
+    let score;
+    /** @type {{ id: string, correct: boolean, correctAnswer: string }[]} */
+    const components = [];
     if (candidate.question.kind === "fill-blank") {
+      if (candidate.question.blanks !== null) {
+        const submitted = command.blankAnswers;
+        const blanks = candidate.question.blanks;
+        if (!Array.isArray(submitted) || submitted.length !== blanks.length || new Set(submitted.map((answer) => answer.id)).size !== blanks.length || submitted.some((answer, index) => answer.id !== blanks[index].id)) return fail("ReviewAnswerNotAllowed");
+        /** @param {string} value */
+        const normalized = (value) => value.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ");
+        const exact = blanks.map((blank, index) => blank.acceptedAnswers.some((answer) => normalized(answer) === normalized(submitted[index].text)));
+        if (exact.some((value) => !value)) {
+          if (dependencies.semanticGrader === undefined) return fail("ReviewGradePending");
+          let judged;
+          try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: blanks.filter((_, index) => !exact[index]).map((blank) => ({ response: submitted[blanks.indexOf(blank)].text, acceptedAnswers: blank.acceptedAnswers })) }); } catch (error) { return fail("ReviewGradePending"); }
+          if (!judged.ok || judged.value.length !== exact.filter((value) => !value).length || judged.value.some((value) => typeof value !== "boolean")) return fail("ReviewGradePending");
+          let cursor = 0;
+          for (let index = 0; index < exact.length; index += 1) if (!exact[index]) exact[index] = judged.value[cursor++];
+        }
+        blanks.forEach((blank, index) => components.push({ id: blank.id, correct: exact[index], correctAnswer: blank.acceptedAnswers[0] }));
+        score = exact.filter(Boolean).length / blanks.length;
+      } else {
       const answerText = typeof command.answerText === "string" ? command.answerText : null;
       const acceptedAnswers = candidate.question.acceptedAnswers;
-      if (answerText === null || acceptedAnswers === null) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      if (answerText === null || acceptedAnswers === null) return fail("ReviewAnswerNotAllowed");
       const normalized = answerText.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ");
-      correct = normalized !== "" && acceptedAnswers.some((answer) => answer.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ") === normalized);
+      const exact = normalized !== "" && acceptedAnswers.some((answer) => answer.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ") === normalized);
+      if (!exact) {
+        if (dependencies.semanticGrader === undefined) return fail("ReviewGradePending");
+        let judged;
+        try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: [{ response: answerText, acceptedAnswers }] }); } catch (error) { return fail("ReviewGradePending"); }
+        if (!judged.ok || judged.value.length !== 1 || typeof judged.value[0] !== "boolean") return fail("ReviewGradePending");
+        score = judged.value[0] ? 1 : 0;
+      } else score = 1;
+      components.push({ id: /** @type {string} */ (candidate.question.blankId), correct: score === 1, correctAnswer: acceptedAnswers[0] });
+      }
     } else {
       const expected = candidate.question.correctChoiceIds;
-      if (expected === null) return { ok: false, error: { kind: "ReviewAnswerNotSupported" } };
-      const actual = [...command.selectedChoiceIds].sort();
-      correct = actual.length === expected.length && actual.every((id, index) => id === [...expected].sort()[index]);
+      const choices = candidate.question.choices;
+      const selected = /** @type {string[]} */ (command.selectedChoiceIds);
+      if (expected === null || choices === null || selected.length === 0 || new Set(selected).size !== selected.length || selected.some((id) => !choices.some((choice) => choice.id === id)) || (candidate.question.kind === "single-choice" && selected.length !== 1)) return fail("ReviewAnswerNotAllowed");
+      const hits = selected.filter((id) => expected.includes(id)).length;
+      const wrong = selected.length - hits;
+      score = candidate.question.kind === "multiple-choice" ? Math.max(0, (hits - wrong) / expected.length) : hits === 1 ? 1 : 0;
+      choices.forEach((choice) => components.push({ id: choice.id, correct: expected.includes(choice.id) === selected.includes(choice.id), correctAnswer: expected.includes(choice.id) ? choice.label : "" }));
     }
     const now = dependencies.now();
+    const correct = score === 1;
     const nextDays = correct ? Math.min(365, Math.max(1, candidate.scheduledDays === 0 ? 1 : candidate.scheduledDays * 2)) : 1;
     const dueAt = new Date(Date.parse(now) + nextDays * 86_400_000).toISOString();
     const answerText = correctAnswer(candidate.question);
-    if (answerText === null) return { ok: false, error: { kind: "ReviewAnswerNotSupported" } };
-    const answer = { ownerId: command.ownerId, batchId: command.batchId, questionId: command.questionId, correct, nextDueAt: dueAt, feedback: { explanation: candidate.question.explanation, correctAnswer: answerText } };
+    if (answerText === null) return fail("ReviewAnswerNotSupported");
+    const answer = { ownerId: command.ownerId, batchId: command.batchId, questionId: command.questionId, correct, score, nextDueAt: dueAt, feedback: { explanation: candidate.question.explanation, correctAnswer: answerText, components } };
     const statements = [
-      database.prepare("INSERT INTO learner_review_answers (owner_id, batch_id, question_id, selected_choice_ids_json, correct, answered_at) VALUES (?, ?, ?, ?, ?, ?)").bind(command.ownerId, command.batchId, command.questionId, JSON.stringify(command.selectedChoiceIds), correct ? 1 : 0, now),
+      database.prepare("INSERT INTO learner_review_answers (owner_id, batch_id, question_id, selected_choice_ids_json, correct, score, answered_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(command.ownerId, command.batchId, command.questionId, JSON.stringify(command.selectedChoiceIds), correct ? 1 : 0, score, now),
       database.prepare("UPDATE learner_knowledge_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ?, review_count = review_count + 1, updated_at = ? WHERE owner_id = ? AND knowledge_id = ? AND studied_at IS NOT NULL").bind(correct ? 1 : 0, nextDays, dueAt, now, command.ownerId, candidate.knowledgeId),
       database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) VALUES (?, ?, 'review-answer', ?, ?)").bind(command.ownerId, command.idempotencyKey, JSON.stringify(answer), now),
     ];
     const written = await database.batch(statements);
-    if (written.length !== statements.length || written.some((entry) => !entry.success)) return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+    if (written.length !== statements.length || written.some((entry) => !entry.success)) return fail("LearningBatchPersistenceFailed");
     const count = await database.prepare("SELECT COUNT(*) AS count FROM learner_review_answers WHERE owner_id = ? AND batch_id = ?").bind(command.ownerId, command.batchId).first();
-    if (record(count) && count.count === batch.itemIds.length) await database.prepare("UPDATE learner_review_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open'").bind(now, command.ownerId, command.batchId).run();
-    return { ok: true, value: Object.freeze({ ...answer, completed: record(count) && count.count === batch.itemIds.length }) };
+    if (!record(count) || !nonNegativeInteger(count.count)) return fail("LearningBatchPersistenceFailed");
+    const completed = count.count === batch.itemIds.length;
+    if (completed) {
+      const closed = await database.prepare("UPDATE learner_review_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open'").bind(now, command.ownerId, command.batchId).run();
+      if (!changed(closed)) return fail("LearningBatchPersistenceFailed");
+    }
+    const result = Object.freeze({ ...answer, completed });
+    const savedReplay = await database.prepare("UPDATE learner_batch_commands SET result_json = ? WHERE owner_id = ? AND idempotency_key = ?").bind(JSON.stringify(result), command.ownerId, command.idempotencyKey).run();
+    if (!changed(savedReplay)) return fail("LearningBatchPersistenceFailed");
+    dependencies.logger({ event: "learning-review-answer-success", ownerId: command.ownerId, batchId: command.batchId });
+    return { ok: true, value: result };
+    } catch (error) { return fail("LearningBatchPersistenceFailed"); }
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
