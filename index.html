@@ -14,7 +14,7 @@
       href="./manifest.webmanifest"
       crossorigin="use-credentials"
     />
-    <link rel="icon" href="./assets/icon-192.webp" type="image/webp" />
+    <link rel="icon" href="./assets/fallback-media/Headphones%20Music%20Image.jpg" type="image/jpeg" />
     <link rel="stylesheet" href="./src/styles.css" />
     <title>Resonance Learning</title>
   </head>
@@ -154,16 +154,16 @@
           "sourceUnavailable": "<button class=\"button primary\" type=\"button\" disabled {{description}}>{{label}} link unavailable</button>",
           "sourceLink": "<a class=\"button primary\" href=\"{{url}}\" target=\"_blank\" rel=\"noopener noreferrer\" aria-label=\"{{action}}: {{title}} (new tab)\">{{action}}</a>",
           "detail": "<aside class=\"discover-detail\" aria-labelledby=\"discover-detail-title\" data-selected-item-id=\"{{itemId}}\"><a class=\"discover-back-link\" href=\"#discover\">Back to results</a><p class=\"eyebrow\">Evidence review</p><h2 id=\"discover-detail-title\">{{title}}</h2><p>{{sourceLabel}}</p><dl class=\"discover-provenance\"><div><dt>Observed</dt><dd>{{observed}}</dd></div><div><dt>Rights</dt><dd>{{rights}}</dd></div><div><dt>Provenance</dt><dd>{{provenance}}</dd></div><div><dt>Evidence status</dt><dd>{{evidence}}</dd></div>{{podcast}}{{boundary}}<div class=\"discover-actions\" aria-label=\"Source action\">{{sourceAction}}</div></aside>",
-          "youtubePolicy": "<p>Resonance does not download YouTube video, audio, captions, or transcripts. After watching the video, you may add it with a transcript you are permitted to store and use for learning.</p>",
-          "manualUpload": "<details><summary>Upload my permitted transcript</summary><form data-discovery-upload=\"{{itemId}}\"><label>Interest area<select name=\"interest-area\" {{areaDisabled}}>{{areas}}</select></label><label>Transcript file<input name=\"transcript\" type=\"file\" accept=\".txt,.vtt,text/plain,text/vtt\" required></label><label><input name=\"rights-attestation\" type=\"checkbox\" required> I confirm I am permitted to store this transcript and transform it into private learning material.</label><button class=\"button secondary\" type=\"submit\" {{submitDisabled}}>{{submitLabel}}</button></form></details>",
+          "youtubePolicy": "<p>Resonance does not download YouTube video, audio, captions, or transcripts. After watching the video, you may add it with material you are permitted to store and use for learning.</p>",
+          "manualUpload": "<details><summary>Provide permitted learning material</summary><form data-discovery-upload=\"{{itemId}}\"><label>Interest area<select name=\"interest-area\" {{areaDisabled}}>{{areas}}</select></label><label>Paste source text<textarea name=\"content\" rows=\"8\" placeholder=\"Paste the knowledge content here\"></textarea></label><p>Or attach a text file, PDF, or PowerPoint slide deck.</p><label>Material file<input name=\"material\" type=\"file\" accept=\".txt,.md,.vtt,.pdf,.pptx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation\"></label><label><input name=\"rights-attestation\" type=\"checkbox\" required> I confirm I am permitted to store this transcript or other material and transform it into private learning material.</label><button class=\"button secondary\" type=\"submit\" {{submitDisabled}}>{{submitLabel}}</button></form></details>",
           "decisionActions": "<div class=\"discover-actions\" aria-label=\"Library decision\"><form data-discovery-approve=\"{{itemId}}\" data-source-granularity=\"{{sourceGranularity}}\" data-source-capabilities=\"{{sourceCapabilities}}\"><label>Interest area<select name=\"interest-area\" {{areaDisabled}}>{{areas}}</select></label><button class=\"button secondary\" type=\"submit\" {{submitDisabled}}>{{submitLabel}}</button></form><button class=\"button danger\" type=\"button\" data-discovery-reject=\"{{itemId}}\" {{rejectDisabled}}>Reject</button>{{unavailable}}</div>",
           "sourceAreaRequired": "Select a configured interest area before adding this source.",
           "sourceAlreadyAdded": "Source is already in your Library.",
           "sourceAdded": "Source added to your Library.",
-          "uploadRequired": "Choose an interest area, transcript, and rights confirmation before uploading.",
+          "uploadRequired": "Choose an interest area, paste or attach material, and confirm your permission before uploading.",
           "uploadReadFailed": "The source was added, but the transcript file could not be read.",
           "uploadStoreFailed": "The source was added, but the transcript could not be stored. You can retry from the source workflow.",
-          "uploadStored": "Source added. Your transcript is stored privately and ready for later processing; no lesson or quiz has been generated yet.",
+          "uploadStored": "Source added. Your material is stored privately and the knowledge-and-quiz workflow has started.",
           "sourceRejected": "Source rejected and hidden from ordinary discovery results.",
           "enterDiscoveryValue": "Enter a discovery value.",
           "sourceReconnect": "Reconnect to the private source service. No decision was saved.",

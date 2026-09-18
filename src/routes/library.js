@@ -1,9 +1,10 @@
 // @ts-check
 
-/** @import { LibrarySource, SourceInterestArea, SourceSearchMode } from "../features/source-library/contracts.js" */
-/** @import { LearningChoice, LearningReviewQueueStatus, LearningReviewQueueTask } from "../features/learning-generation/contracts.js" */
+import { countProcessingWorkflowStatuses } from "../features/source-library/gateway.js";
+import { isRecord } from "../features/source-library/contracts.js";
 
-/** @typedef {{ readonly state: "idle" | "loading" | "success" | "error" | "offline", readonly sources: readonly { readonly sourceId: string, readonly title: string, readonly status: LearningReviewQueueStatus, readonly generationId: string | null, readonly pendingTaskCount: number, readonly reviewedTaskCount: number, readonly failureKind: string | null }[], readonly tasks: readonly LearningReviewQueueTask[], readonly message: string | null, readonly pendingTaskId: string | null }} LibraryReviewQueueModel */
+/** @import { LibrarySource, SourceInterestArea, SourceSearchScope } from "../features/source-library/contracts.js" */
+/** @import { WorkflowSourceStatus } from "../features/source-library/gateway.js" */
 
 /**
  * @typedef {{
@@ -12,7 +13,7 @@
  *   readonly interestAreas: readonly SourceInterestArea[],
  *   readonly nextCursor: string | null,
  *   readonly query: string,
- *   readonly mode: SourceSearchMode,
+ *   readonly searchScope?: SourceSearchScope,
  *   readonly pendingSourceId: string | null,
  *   readonly message: string | null
  * }} SourceCollectionModel
@@ -21,11 +22,9 @@
 /**
  * @typedef {{
  *   readonly collection: SourceCollectionModel,
- *   readonly queue: readonly { readonly promptId: string, readonly title: string, readonly dueAt: string | null, readonly reviewCount: number }[],
- *   readonly reviewQueue: LibraryReviewQueueModel,
- *   readonly page: "collection" | "review-queue",
- *   readonly recallAvailable: boolean,
- *   readonly now: string,
+ *   readonly knowledge?: readonly { readonly knowledgeId: string, readonly sourceId: string, readonly summary: string, readonly questionLocked: boolean }[],
+ *   readonly knowledgeSearchResults?: readonly { readonly knowledgeId: string, readonly sourceId: string, readonly sourceTitle: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds?: readonly string[], readonly questionLocked: boolean, readonly score: number, readonly matchedBy: "exact" | "semantic" | "combined" }[],
+ *   readonly workflowStatuses?: readonly WorkflowSourceStatus[],
  *   readonly escapeHtml: (value: string) => string,
  *   readonly formatDate: (value: string) => string
  * }} LibraryRouteModel
@@ -34,35 +33,46 @@
 /** @param {LibraryRouteModel} model */
 export function renderLibraryRoute(model) {
   validate(model);
-  const tabs = `<nav class="section-tabs" aria-label="Library sections">
-    <a href="#library" ${
-    model.page === "collection" ? 'aria-current="page"' : ""
-  }>Sources</a>
-    <a href="#library/review-queue" ${
-    model.page === "review-queue" ? 'aria-current="page"' : ""
-  }>Review queue</a>
-  </nav>`;
+  const tabs = `<nav class="section-tabs" aria-label="Library sections"><a href="#library" aria-current="page">Sources</a></nav>`;
   return `<section class="wide-view" aria-labelledby="library-title">
-    <div class="section-heading"><div><p class="eyebrow">Knowledge sources</p><h1 id="library-title">Library</h1></div></div>
-    ${tabs}${
-    model.page === "review-queue" ? renderQueue(model) : renderCollection(model)
-  }
+    <div class="section-heading"><div><p class="eyebrow">Knowledge sources</p><h1 id="library-title">Library</h1></div>${renderProcessingStatus(model)}</div>
+    ${tabs}${renderUploadForm("", model.collection.pendingSourceId !== null)}${renderCollection(model)}
   </section>`;
+}
+
+/** @param {string} sourceId HTML-escaped source identity, or empty for a new document. @param {boolean} pending */
+function renderUploadForm(sourceId, pending) {
+  return `<details class="library-upload"><summary>${sourceId === "" ? "Upload a private document" : "Upload authorized content"}</summary><form data-library-upload="${sourceId}">${sourceId === "" ? '<label>Title (optional for files)<input name="title" maxlength="300"></label>' : ""}<label><input type="checkbox" name="imageProcessing"> Process images in uploads</label><label>PDF pages (blank means all; e.g. 1,3-5)<input name="pageRange" inputmode="numeric" maxlength="300"></label><label>Paste text<textarea name="content" rows="5"></textarea></label><label>Or choose documents or images<input type="file" name="file" multiple accept=".txt,.md,.pdf,.pptx,.png,.jpg,.jpeg,.webp,.gif"></label><p>Text processing is the default. Image processing sends each selected image or PDF page to the vision model. Images are limited to 20 MiB each; the total upload limit is 100 MiB.</p><label><input type="checkbox" name="attested" required>I own this content or have permission for storage, transformation, and external AI processing.</label><button class="button secondary" type="submit" ${pending ? "disabled" : ""}>${pending ? "Uploading..." : "Upload and process"}</button><p role="alert" data-library-upload-message></p></form></details>`;
+}
+
+/** @param {LibraryRouteModel} model */
+function renderProcessingStatus(model) {
+  const count = countProcessingWorkflowStatuses(model.workflowStatuses ?? []);
+  if (count === 0) return "";
+  const noun = count === 1 ? "source" : "sources";
+  return `<div class="local-badge library-processing-status" data-library-processing-status role="status" aria-live="polite" aria-atomic="true"><span class="library-processing-spinner" aria-hidden="true">⟳</span><span>Processing ${count} ${noun}</span></div>`;
 }
 
 /** @param {LibraryRouteModel} model */
 function renderCollection(model) {
   const collection = model.collection;
+  const escapeHtml = model.escapeHtml;
+  const searchScope = collection.searchScope ?? "sources";
+  const searchingKnowledge = searchScope === "knowledge";
   const search = `<div class="discover-controls"><form data-library-search>
-    <label for="library-search">Search saved sources</label>
-    <div><input id="library-search" name="query" type="search" value="${
-    model.escapeHtml(collection.query)
-  }" autocomplete="off" placeholder="Title, description, or topic" aria-describedby="library-search-help">
+    <label for="library-search-scope">Search in</label>
+    <div class="library-search-row"><select id="library-search-scope" name="searchScope" aria-label="Search scope">
+      <option value="sources" ${searchingKnowledge ? "" : "selected"}>Search saved sources</option>
+      <option value="knowledge" ${searchingKnowledge ? "selected" : ""}>Search knowledge</option>
+    </select><input id="library-search" name="query" type="search" value="${
+    escapeHtml(collection.query)
+  }" autocomplete="off" placeholder="${searchingKnowledge ? "Fact, concept, or explanation" : "Title, description, or topic"}" aria-describedby="library-search-help">
     <button class="button secondary" type="submit">Search</button></div>
-    <p id="library-search-help">Combined search matches saved titles and descriptions by exact terms and related word forms.</p>
+    <label><input type="checkbox" name="externalProcessingAllowed"> Include AI semantic matches: send this query and candidate content to the configured external AI provider.</label>
+    <p id="library-search-help">Searches exact terms by default. Optional AI ranking considers up to 20 candidates from active sources; it is not an exhaustive semantic search.</p>
   </form></div>`;
   if (collection.state === "loading" && collection.items.length === 0) {
-    return `${search}<div class="state-panel" aria-busy="true"><h2>Opening sources</h2><p>Loading your approved Library sources.</p></div>`;
+    return `${search}<div class="state-panel" aria-busy="true"><h2>${searchingKnowledge ? "Searching knowledge" : "Opening sources"}</h2><p>${searchingKnowledge ? "Searching retained knowledge across your Library." : "Loading your approved Library sources."}</p></div>`;
   }
   if (collection.state === "error" || collection.state === "offline") {
     return `${search}<div class="state-panel" role="${
@@ -72,8 +82,11 @@ function renderCollection(model) {
         ? "Library is offline"
         : "Library could not load"
     }</h2><p>${
-      model.escapeHtml(collection.message ?? "Reconnect and try again.")
+      escapeHtml(collection.message ?? "Reconnect and try again.")
     }</p><button class="button secondary" type="button" data-library-retry>Try again</button></div>`;
+  }
+  if (searchingKnowledge) {
+    return `${search}${renderKnowledgeSearchResults(model)}`;
   }
   if (collection.items.length === 0) {
     return `${search}<div class="state-panel"><h2>${
@@ -106,7 +119,7 @@ function renderCollection(model) {
   }
   const content = [...groups.values()].map((group, index) =>
     `<section aria-labelledby="library-area-${index}"><h2 id="library-area-${index}">${
-      model.escapeHtml(group.label)
+      escapeHtml(group.label)
     }</h2><div class="data-list">${
       group.items.map((source) => renderSource(model, source)).join("")
     }</div></section>`
@@ -114,7 +127,7 @@ function renderCollection(model) {
   const retainedNotice = collection.message === null
     ? ""
     : `<div class="discover-notice" role="status"><p>${
-      model.escapeHtml(collection.message)
+      escapeHtml(collection.message)
     }</p><button class="button secondary" type="button" data-library-retry>Refresh sources</button></div>`;
   const more = collection.nextCursor === null
     ? ""
@@ -123,107 +136,137 @@ function renderCollection(model) {
     }>${
       collection.state === "loading" ? "Loading..." : "Load more"
     }</button></div>`;
-  return `${search}${retainedNotice}<div class="library-layout"><div>${content}${more}</div><aside class="data-controls"><h2>Source catalog</h2><p>Searches use sources already approved in your Library. Discovery is never called from this page.</p></aside></div>`;
+  return `${search}${retainedNotice}<div class="library-layout"><div>${content}${more}</div><aside class="data-controls"><h2>Source catalog</h2><p>Searches use sources already approved in your Library. Knowledge cards and paired questions appear in Feed and Review after processing completes.</p></aside></div>`;
+}
+
+/** @param {LibraryRouteModel} model @returns {string} */
+function renderKnowledgeSearchResults(model) {
+  const collection = model.collection;
+  const escapeHtml = model.escapeHtml;
+  const results = model.knowledgeSearchResults ?? [];
+  if (results.length === 0) {
+    const hasQuery = collection.query.trim() !== "";
+    return `<div class="state-panel"><h2>${hasQuery ? "No matching knowledge points" : "Search retained knowledge"}</h2><p>${hasQuery ? "Try a different term or switch to source search." : "Enter a concept, fact, or explanation to search across your active sources."}</p></div>`;
+  }
+  const content = results.map((result) => {
+    const knowledgeId = escapeHtml(result.knowledgeId);
+    const matchLabel = result.matchedBy === "exact"
+      ? "exact match"
+      : result.matchedBy === "semantic"
+      ? "semantic match"
+      : "exact + semantic match";
+    const score = Number.isFinite(result.score)
+      ? ` · score ${result.score.toFixed(2)}`
+      : "";
+    return `<article class="library-knowledge-search-result" data-library-knowledge="${knowledgeId}"><div><p class="eyebrow">Knowledge point</p><h3>${escapeHtml(result.summary)}</h3><p>From <a href="${escapeHtml(result.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.sourceTitle)}</a> · <span class="signal-summary">${matchLabel}${score}</span></p><p class="settings-form-note">${result.questionLocked ? "Question unlocks after Feed study" : "Question available in Review"}</p></div><button class="button quiet" type="button" data-library-knowledge-remove="${knowledgeId}">Remove knowledge</button></article>`;
+  }).join("");
+  return `<section class="library-knowledge-search" aria-labelledby="library-knowledge-search-title"><div class="section-heading"><div><p class="eyebrow">Knowledge results</p><h2 id="library-knowledge-search-title">${results.length} matching knowledge point${results.length === 1 ? "" : "s"}</h2></div></div><div class="data-list">${content}</div></section>`;
 }
 
 /** @param {LibraryRouteModel} model @param {LibrarySource} source */
 function renderSource(model, source) {
-  const pending = model.collection.pendingSourceId === source.id;
+  const escapeHtml = model.escapeHtml;
+  const formatDate = model.formatDate;
+  const collection = model.collection;
+  const sourceId = escapeHtml(source.id);
+  const pending = collection.pendingSourceId === source.id;
   const capabilities = source.adapter.capabilities.join(", ");
+  const workflowStatus = (model.workflowStatuses ?? []).find((status) => status.sourceId === source.id) ?? null;
+  const workflowMessage = workflowStatusMessage(source, workflowStatus);
+  const workflowNotice = workflowMessage === null ? "" : `<p class="library-workflow-status" role="status">${escapeHtml(workflowMessage)}</p>`;
+  const workflowRetry = workflowStatus?.run?.state === "retryable-failure"
+    ? `<button class="button secondary" type="button" data-library-workflow-retry="${escapeHtml(workflowStatus.run.runId)}" data-library-workflow-retry-revision="${workflowStatus.run.revision}">Retry processing</button>`
+    : "";
+  const robotsNotice = renderRobotsEvidence(model, workflowStatus);
+  const upload = workflowStatus?.run?.state === "awaiting-upload"
+    ? renderUploadForm(sourceId, pending)
+    : "";
+  const knowledge = (model.knowledge ?? []).filter((card) => card.sourceId === source.id);
+  const related = knowledge.length === 0
+    ? `<p class="library-knowledge-empty settings-form-note">Knowledge is still being processed, or this source has no retained knowledge yet.</p>`
+    : `<section class="library-knowledge" aria-labelledby="library-knowledge-${sourceId}"><h4 id="library-knowledge-${sourceId}">Related knowledge</h4><p class="library-knowledge-overview">${escapeHtml(knowledgeOverview(knowledge))}</p></section>`;
   return `<article data-library-source="${
-    model.escapeHtml(source.id)
-  }"><div><p class="eyebrow">${model.escapeHtml(source.adapter.id)}</p><h3>${
-    model.escapeHtml(source.title)
-  }</h3><p>${model.escapeHtml(source.description)}</p><p>${
-    model.escapeHtml(source.adapter.granularity)
+    sourceId
+  }"><div><p class="eyebrow">${escapeHtml(source.adapter.id)}</p><h3>${
+    escapeHtml(source.title)
+  }</h3><p>${escapeHtml(source.description)}</p><p>${
+    escapeHtml(source.adapter.granularity)
   }${
-    capabilities === "" ? "" : ` · ${model.escapeHtml(capabilities)}`
+    capabilities === "" ? "" : ` · ${escapeHtml(capabilities)}`
   }</p><p>Added ${
-    model.formatDate(source.approvedAt)
-  } · Policy assessment pending · Not yet refreshed</p><a href="${
-    model.escapeHtml(source.canonicalUrl)
-  }" target="_blank" rel="noopener noreferrer">Open original source</a></div><button class="button danger" type="button" data-library-disable="${
-    model.escapeHtml(source.id)
+    formatDate(source.approvedAt)
+  } · Processing is automatic</p>${workflowNotice}${workflowRetry}${robotsNotice}${upload}<a href="${
+    escapeHtml(source.canonicalUrl)
+  }" target="_blank" rel="noopener noreferrer">Open original source</a>${related}</div><button class="button danger" type="button" data-library-disable="${
+    sourceId
   }" data-source-revision="${source.revision}" ${pending ? "disabled" : ""}>${
     pending ? "Removing..." : "Remove"
   }</button></article>`;
 }
 
-/** @param {LibraryRouteModel} model */
-function renderQueue(model) {
-  const generated = renderGeneratedReview(model);
-  const scheduled = !model.recallAvailable
-    ? `<div class="state-panel review-state"><h2>Review queue needs attention</h2><p>Your source catalog remains available. Open Review to recover incompatible scheduling history.</p><a class="button secondary" href="#review">Open Review</a></div>`
-    : model.queue.length === 0
-    ? `<div class="state-panel review-state"><h2>Scheduled review is empty</h2><p>Scheduled prompts will appear here after your first finalized recall.</p></div>`
-    : `<ol class="queue-list">${
-    model.queue.map((item) => {
-      const due =
-        item.dueAt === null || Date.parse(item.dueAt) <= Date.parse(model.now)
-          ? "Due now"
-          : `Next ${model.formatDate(item.dueAt)}`;
-      return `<li class="queue-row"><div><strong>${
-        model.escapeHtml(item.title)
-      }</strong><span>${
-        model.escapeHtml(due)
-      } · ${item.reviewCount} reviews</span></div>${
-        item.dueAt === null || Date.parse(item.dueAt) <= Date.parse(model.now)
-          ? `<a class="button secondary" href="#review/scheduled/${
-            encodeURIComponent(item.promptId)
-          }">Review now</a>`
-          : ""
-      }</li>`;
-    }).join("")
-  }</ol>`;
-  return `${generated}${scheduled}`;
+/** @param {readonly { readonly summary: string }[]} knowledge @returns {string} */
+function knowledgeOverview(knowledge) {
+  // ponytail: first-sentence heuristic keeps this overview local and bounded; use persisted source summaries if topic quality becomes inadequate.
+  const topics = [...new Set(knowledge.map(({ summary }) => summary.replace(/^(?:this|the)\s+\w+\s+(?:introduces|explains|covers)\s+/iu, "").split(/[.!?]/u, 1)[0].trim()))].filter(Boolean);
+  const lead = `Contains ${knowledge.length} retained knowledge ${knowledge.length === 1 ? "point" : "points"} covering`;
+  const text = topics.length === 0 ? "broad concepts from this source" : topics.join("; ");
+  return `${lead} ${text.slice(0, 240 - lead.length - 1)}.`;
 }
 
-/** @param {LibraryRouteModel} model */
-function renderGeneratedReview(model) {
-  const queue = model.reviewQueue;
-  if (queue.state === "loading" || queue.state === "idle") {
-    return `<div class="state-panel review-state" role="status" aria-busy="true"><h2>Preparing generated questions</h2><p>Checking whether questions are generating or ready for human review.</p></div>`;
-  }
-  if (queue.state === "error" || queue.state === "offline") {
-    return `<div class="state-panel review-state" role="alert"><h2>Generated questions could not load</h2><p>${model.escapeHtml(queue.message ?? "Reconnect to check generation status and review items.")}</p></div>`;
-  }
-  const statusList = queue.sources.length === 0 ? "" : `<section class="review-generation-status" aria-labelledby="generated-status-title"><h2 id="generated-status-title">Question generation</h2><ul class="queue-list">${queue.sources.map((source) => `<li class="queue-row" data-generation-source="${model.escapeHtml(source.sourceId)}"><div><strong>${model.escapeHtml(source.title)}</strong><span data-generation-status="${model.escapeHtml(source.status)}">${model.escapeHtml(generationStatusText(source.status))}</span></div><span>${source.pendingTaskCount > 0 ? `${source.pendingTaskCount} awaiting review` : source.reviewedTaskCount > 0 ? `${source.reviewedTaskCount} reviewed` : "No questions ready yet"}</span></li>`).join("")}</ul></section>`;
-  const tasks = queue.tasks.length === 0 ? "" : `<section class="generated-review-tasks" aria-labelledby="generated-review-title"><h2 id="generated-review-title">Human review required</h2><p>Keep the questions that are grounded and useful. Discard the rest before they enter study.</p><div class="data-list">${queue.tasks.map((task) => renderGeneratedTask(model, task, queue.pendingTaskId)).join("")}</div></section>`;
-  const waiting = queue.sources.some((source) => source.status === "queued" || source.status === "generating");
-  if (statusList === "" && tasks === "") return `<div class="state-panel review-state"><h2>No generated questions yet</h2><p>Approve an eligible source in Discover. Questions will appear here after automatic generation and human review preparation.</p></div>`;
-  return `${statusList}${tasks}${waiting ? `<div class="discover-notice" role="status"><p>Questions generating soon. They will require human review afterward.</p></div>` : ""}`;
+/** @param {LibraryRouteModel} model @param {WorkflowSourceStatus | null} status @returns {string} */
+function renderRobotsEvidence(model, status) {
+  const escapeHtml = model.escapeHtml;
+  const formatDate = model.formatDate;
+  const evidence = status?.run?.robotsEvidence ?? null;
+  if (evidence === null) return "";
+  const robotsUrl = escapeHtml(evidence.robotsUrl);
+  const checked = `Checked ${formatDate(evidence.checkedAt)} · HTTP ${evidence.httpStatus}`;
+  if (evidence.availability === "absent") return `<details class="library-robots-evidence"><summary>robots.txt: no directives</summary><p>${escapeHtml(checked)}. The source returned no robots.txt file (HTTP ${evidence.httpStatus}).</p><a href="${robotsUrl}" target="_blank" rel="noopener noreferrer">Open robots.txt</a></details>`;
+  if (evidence.availability === "unavailable") return `<details class="library-robots-evidence"><summary>robots.txt: unavailable (HTTP 403)</summary><p>${escapeHtml(checked)}. The source refused the robots.txt request, but the source page was reachable and extraction was allowed by the configured policy.</p><a href="${robotsUrl}" target="_blank" rel="noopener noreferrer">Open robots.txt</a></details>`;
+  return `<details class="library-robots-evidence"><summary>View robots.txt</summary><p>${escapeHtml(checked)} · <a href="${robotsUrl}" target="_blank" rel="noopener noreferrer">Open robots.txt</a></p><pre>${escapeHtml(evidence.content)}</pre></details>`;
 }
 
-/** @param {LibraryRouteModel} model @param {LearningReviewQueueTask} task @param {string | null} pendingTaskId */
-function renderGeneratedTask(model, task, pendingTaskId) {
-  const choices = task.choices === null ? "" : `<ul>${task.choices.map((/** @type {LearningChoice} */ choice) => `<li>${model.escapeHtml(choice.label)}${task.correctChoiceIds?.includes(choice.id) ? " · expected" : ""}</li>`).join("")}</ul>`;
-  const concepts = task.expectedConcepts === null ? "" : `<p>Expected concepts: ${model.escapeHtml(task.expectedConcepts.join(", "))}</p>`;
-  const stimulus = task.stimulus === null ? "" : `<details><summary>Symbolic stimulus</summary><pre>${model.escapeHtml(typeof task.stimulus === "string" ? task.stimulus : JSON.stringify(task.stimulus))}</pre></details>`;
-  return `<article class="data-card generated-review-card" data-generated-review-task="${model.escapeHtml(task.id)}"><p class="eyebrow">${model.escapeHtml(task.kind)}</p><h3>${model.escapeHtml(task.prompt)}</h3>${choices}${concepts}${stimulus}<p>Evidence anchors: ${model.escapeHtml(task.sourceAnchorIds.join(", "))}</p><p>${model.escapeHtml(task.explanation)}</p><div class="button-row"><button class="button" type="button" data-learning-review-decision="approve" data-learning-task-id="${model.escapeHtml(task.id)}" data-learning-task-revision="${task.revision}" ${pendingTaskId !== null ? "disabled" : ""}>${pendingTaskId === task.id ? "Keeping..." : "Keep"}</button><button class="button secondary" type="button" data-learning-review-decision="reject" data-learning-task-id="${model.escapeHtml(task.id)}" data-learning-task-revision="${task.revision}" ${pendingTaskId !== null ? "disabled" : ""}>${pendingTaskId === task.id ? "Deciding..." : "Discard"}</button></div></article>`;
+/** @param {LibrarySource} source @param {WorkflowSourceStatus | null} status @returns {string | null} */
+function workflowStatusMessage(source, status) {
+  if (status === null) return null;
+  if (status.reasonCode === "rights-not-verified" && sourceHasAudioVideo(source)) return "This source contains audio or video, but native audio/video transcription is not available yet. Upload an authorized transcript or text/document instead.";
+  if (status.message !== null) return status.message;
+  if (status.run?.state === "completed") return "Knowledge extraction and paired question generation completed.";
+  if (status.run !== null && status.run.state !== "awaiting-upload") return "Knowledge extraction and paired question generation are still processing.";
+  return null;
 }
 
-/** @param {LearningReviewQueueStatus} status */
-function generationStatusText(status) {
-  if (status === "queued") return "Questions generating soon; human review will follow.";
-  if (status === "generating") return "Questions are being generated; human review will follow.";
-  if (status === "ready-for-review") return "Questions generated; human review required.";
-  if (status === "reviewed") return "Review complete; approved questions can enter study.";
-  if (status === "failed") return "Generation needs attention; the source remains available.";
-  return "Automatic question generation is unavailable for this source.";
+/** @param {LibrarySource} source @returns {boolean} */
+function sourceHasAudioVideo(source) {
+  return [source.adapter.granularity, ...source.adapter.capabilities].some((value) => /audio|video|podcast|episode/u.test(value.toLowerCase()));
 }
 
 /** @param {LibraryRouteModel} model */
 function validate(model) {
-  if (model.page !== "collection" && model.page !== "review-queue") {
-    throw new TypeError("Library page is invalid.");
-  }
   if (
     !Array.isArray(model.collection.items) ||
     !Array.isArray(model.collection.interestAreas) ||
-    !Array.isArray(model.queue) || !Array.isArray(model.reviewQueue.sources) ||
-    !Array.isArray(model.reviewQueue.tasks) || typeof model.escapeHtml !== "function" ||
+    (model.knowledge !== undefined && !Array.isArray(model.knowledge)) ||
+    (model.collection.searchScope !== undefined && model.collection.searchScope !== "sources" && model.collection.searchScope !== "knowledge") ||
+    (model.knowledgeSearchResults !== undefined && (!Array.isArray(model.knowledgeSearchResults) || model.knowledgeSearchResults.some((result) => !isKnowledgeSearchResult(result)))) ||
+    typeof model.escapeHtml !== "function" ||
     typeof model.formatDate !== "function"
   ) throw new TypeError("Library model is invalid.");
+}
+
+/** @param {unknown} value @returns {boolean} */
+function isKnowledgeSearchResult(value) {
+  if (!isRecord(value)) return false;
+  return typeof value.knowledgeId === "string" && value.knowledgeId.trim() !== "" &&
+    typeof value.sourceId === "string" && value.sourceId.trim() !== "" &&
+    typeof value.sourceTitle === "string" && value.sourceTitle.trim() !== "" &&
+    typeof value.summary === "string" && value.summary.trim() !== "" &&
+    typeof value.sourceUrl === "string" && URL.canParse(value.sourceUrl) &&
+    new URL(value.sourceUrl).protocol === "https:" &&
+    (value.evidenceAnchorIds === undefined || (Array.isArray(value.evidenceAnchorIds) && value.evidenceAnchorIds.every((anchor) => typeof anchor === "string" && anchor.trim() !== ""))) &&
+    typeof value.questionLocked === "boolean" &&
+    typeof value.score === "number" && Number.isFinite(value.score) &&
+    (value.matchedBy === "exact" || value.matchedBy === "semantic" || value.matchedBy === "combined");
 }
 
 export {};

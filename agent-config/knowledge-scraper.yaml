@@ -1,0 +1,33 @@
+role: knowledge-scraper
+version: knowledge-scraper-v8
+model:
+  provider: openrouter
+  name: z-ai/glm-5.3-flash
+procedureVersion: scraper-procedure-v4
+promptVersion: scraper-prompt-v6
+inputSchema: extraction-handoff-v1
+outputSchema: extraction-plan-and-observation-v3
+allowedTools:
+  - browser.page.read
+  - browser.screenshot.capture
+  - extraction.frontier.observe
+  - extraction.knowledge.commit
+memory:
+  namespace: knowledge-scraper
+  visibility: owner-run
+limits:
+  maxTurns: 24
+  maxToolCalls: 96
+  timeoutMs: 30000
+  maxOutputBytes: 262144
+  compactionThresholdTokens: 500000
+retry:
+  maxAttempts: 3
+  backoffMs: 500
+stopRules:
+  - rights-not-allowed
+  - robots-blocked
+  - coverage-complete
+  - extraction-time-limit
+  - manual-stop
+  - knowledge-set-empty

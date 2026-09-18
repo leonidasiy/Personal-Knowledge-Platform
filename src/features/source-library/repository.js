@@ -9,7 +9,7 @@ const freeze = Object.freeze;
  * @typedef {{
  *   readonly source: LibrarySource,
  *   readonly event: LibrarySourceEvent,
- *   readonly job: SourceIngestionJob,
+ *   readonly job: SourceIngestionJob | null,
  *   readonly initialItem?: SourceItemVersion | null,
  *   readonly fingerprint: string
  * }} ApprovalCommit
@@ -168,6 +168,7 @@ export class SourceLibraryRepository {
             kind: "SourceStateConflict",
             sourceId: existing.id,
             state: existing.state,
+            revision: existing.revision,
           },
         };
       }
@@ -194,14 +195,14 @@ export class SourceLibraryRepository {
     this.#sources.set(sourceKey, source);
     this.#canonicalSources.set(canonicalKey, source.id);
     this.#events.push(event);
-    this.#jobs.push(job);
+    if (job !== null) this.#jobs.push(job);
     if (commit.initialItem != null) this.#items.push(structuredClone(commit.initialItem));
     this.#idempotency.set(
       this.#idempotencyKey(source.ownerId, event.idempotencyKey),
       freeze({
         fingerprint: commit.fingerprint,
         sourceId: source.id,
-        jobId: job.id,
+        jobId: job?.id ?? null,
       }),
     );
     return {
@@ -272,6 +273,7 @@ export class SourceLibraryRepository {
           kind: "SourceStateConflict",
           sourceId: source.id,
           state: source.state,
+          revision: source.revision,
         },
       };
     }
@@ -358,6 +360,7 @@ export class SourceLibraryRepository {
           kind: "SourceStateConflict",
           sourceId: source.id,
           state: source.state,
+          revision: source.revision,
         },
       };
     }

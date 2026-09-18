@@ -29,9 +29,9 @@ Deno.test({
     );
     assert(
       document.includes(
-        '<link rel="icon" href="./assets/icon-192.webp" type="image/webp" />',
+        '<link rel="icon" href="./assets/fallback-media/Headphones%20Music%20Image.jpg" type="image/jpeg" />',
       ),
-      "The shell must declare its existing icon instead of relying on /favicon.ico.",
+      "The shell must declare an active fallback-media icon instead of relying on /favicon.ico.",
     );
   },
 });
@@ -39,11 +39,7 @@ Deno.test({
 const SOURCE_ENTRY = "./src/app.js";
 const DYNAMIC_IMPORT_BOUNDARIES = Object.freeze([
   "./src/features/daily-learning/runtime.js",
-  "./src/features/questions/grading.js",
-  "./src/features/recall/service.js",
-  "./src/features/recall/ts-fsrs-adapter.js",
   "./src/routes/library.js",
-  "./src/routes/review.js",
   "./src/startup/discovery-page.js",
   "./src/startup/library-page.js",
   "./src/startup/experience-actions.js",
@@ -146,14 +142,8 @@ Deno.test({
       "./src/app.js",
       "./src/styles.css",
       "./assets/catalog-fixtures.json",
-      "./assets/suspension-study-640.webp",
-      "./assets/suspension-study.webp",
-      "./assets/filter-spectrum-640.webp",
-      "./assets/filter-spectrum.webp",
-      "./assets/rhythmic-displacement-640.webp",
-      "./assets/rhythmic-displacement.webp",
-      "./assets/icon-192.webp",
-      "./assets/icon-512.webp",
+      "./assets/fallback-media/Heungsoon%20Sheet%20Music.jpg",
+      "./assets/fallback-media/Headphones%20Music%20Image.jpg",
     ]);
 
     for (const artifactPath of expected) {

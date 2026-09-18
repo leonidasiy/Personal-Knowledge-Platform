@@ -1,7 +1,6 @@
 // @ts-check
 
 import { D1SourceLibraryRepository } from "../worker/source-library-d1.js";
-import { vectorize } from "../worker/local-semantic-index.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) {
@@ -71,6 +70,11 @@ class DatabaseFixture {
 
   /** @param {string} query @param {readonly (string | number | null)[]} bindings */
   first(query, bindings) {
+    if (query.includes("private_derived_count")) {
+      return this.rows.get(`semantic-private:${bindings.join("|")}`) ?? {
+        private_derived_count: 0,
+      };
+    }
     if (query.includes("FROM source_suppressions")) {
       const field = query.includes("idempotency_key = ?")
         ? "idempotency"
@@ -183,6 +187,16 @@ Deno.test("D1 approval batches source, evidence, areas, event, and job", async (
   );
 });
 
+Deno.test("D1 private-document approval omits the unrelated crawler job", async () => {
+  const database = new DatabaseFixture();
+  const result = await new D1SourceLibraryRepository(database).approve({ source: { ...source, interestAreaIds: [], origin: "private-document" }, event, job: null, fingerprint: "private-fingerprint" });
+  assertEquals(result.ok, true);
+  if (!result.ok) throw new Error(result.error.kind);
+  assertEquals(result.value.job, null);
+  assertEquals(database.batches[0].length, 2);
+  assertEquals(database.batches[0].some((statement) => statement.query.includes("source_ingestion_jobs")), false);
+});
+
 Deno.test("D1 individual-resource approval atomically includes its initial item version", async () => {
   const database = new DatabaseFixture();
   database.rows.set("area:owner-a|area-a", { interest_area_id: "area-a" });
@@ -218,6 +232,40 @@ Deno.test("D1 approval maps database failure without partial success", async () 
   assertEquals(result.ok, false);
   if (result.ok) throw new Error("Expected D1 failure.");
   assertEquals(result.error.kind, "SourceApprovalPersistenceFailed");
+});
+
+Deno.test("D1 disabled-source approval conflicts expose the current revision", async () => {
+  const database = new DatabaseFixture();
+  database.rows.set("area:owner-a|area-a", { interest_area_id: "area-a" });
+  database.rows.set("canonical:owner-a|https://publisher.example/learn", {
+    owner_id: "owner-a",
+    source_id: "source:disabled",
+    submitted_url: "https://publisher.example/learn",
+    canonical_url: "https://publisher.example/learn",
+    title: "Disabled source",
+    description: "Source description.",
+    adapter_json: JSON.stringify(source.adapter),
+    identity_evidence_json: JSON.stringify(source.identityEvidence),
+    state: "disabled",
+    approved_at: source.approvedAt,
+    updated_at: source.updatedAt,
+    revision: 2,
+    interest_area_ids_json: JSON.stringify(source.interestAreaIds),
+  });
+  const result = await new D1SourceLibraryRepository(database).approve({
+    source: { ...source, canonicalUrl: "https://publisher.example/learn" },
+    event: { ...event, id: "event:disabled", idempotencyKey: "approve-disabled" },
+    job: { ...job, id: "job:disabled" },
+    fingerprint: "fingerprint-disabled",
+  });
+  assertEquals(result.ok, false);
+  if (result.ok) throw new Error("Expected disabled-source conflict.");
+  assertEquals(result.error.kind, "SourceStateConflict");
+  if (result.error.kind === "SourceStateConflict") {
+    assertEquals(result.error.sourceId, "source:disabled");
+    assertEquals(result.error.state, "disabled");
+    assertEquals(/** @type {Record<string, unknown>} */ (result.error).revision, 2);
+  }
 });
 
 Deno.test("D1 approval and revision require owner-scoped configured interest areas", async () => {
@@ -403,24 +451,23 @@ Deno.test("D1 keyword search parameterizes escaped terms and keeps owner scope",
   assertEquals(call.bindings[1], '"harmony" AND "OR" AND "rhythm"');
 });
 
-Deno.test("D1 local semantic search is bounded, owner scoped, and versioned", async () => {
+Deno.test("D1 semantic knowledge candidates fail closed for unconsented active uploaded runs before ranking", async () => {
   const database = new DatabaseFixture();
-  database.allRows.set("semantic:owner-a|501", [sourceRow()]);
-  const result = await new D1SourceLibraryRepository(database).semanticSearch({
+  database.allRows.set("browse:owner-a|5", [{ ...sourceRow(), knowledge_id: "knowledge:1", source_revision: 1, point_json: JSON.stringify({ summary: "A source concept.", attribution: { sourceUrl: "https://publisher.example/learn" }, evidenceAnchors: [{ id: "anchor:1" }] }), source_title: "Learning source", source_url: "https://publisher.example/learn", question_locked: 1 }]);
+  database.rows.set("semantic-private:owner-a", { private_derived_count: 0 });
+  const result = await new D1SourceLibraryRepository(database).knowledgeSemanticCandidates({
     ownerId: "owner-a",
-    vector: vectorize("Learning source Source description."),
-    modelId: "local-feature-hash",
-    modelVersion: "v1",
-    dimensions: 64,
     limit: 5,
   });
   assertEquals(result.ok, true);
   if (!result.ok) throw new Error(result.error.kind);
-  assertEquals(result.value[0].sourceId, "source:1");
-  assertEquals(result.value[0].ownerId, "owner-a");
-  assertEquals(result.value[0].dimensions, 64);
+  assertEquals(result.value.privateDerivedCount, 0);
+  assertEquals(result.value.candidates[0].knowledge.knowledgeId, "knowledge:1");
+  assertEquals(result.value.candidates[0].sourceRevision, 1);
   assertEquals(database.allCalls[0].bindings[0], "owner-a");
-  assertEquals(database.allCalls[0].bindings[1], 501);
+  assertEquals(database.allCalls[0].bindings[1], 5);
+  assertEquals(database.allCalls[0].query.includes("NOT EXISTS (SELECT 1 FROM knowledge_workflow_materials"), true);
+  assertEquals(database.allCalls[0].query.includes("json_type(m.material_json, '$.provenance.processingAllowed') IS NOT 'true'"), true);
 });
 
 Deno.test("D1 suppression checks are bounded by owner and candidate identities", async () => {

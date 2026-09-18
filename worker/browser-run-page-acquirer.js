@@ -51,21 +51,25 @@ export class BrowserRunPageAcquirer {
     /** @type {BrowserSession | null} */ let browser = null;
     /** @type {BrowserContext | null} */ let context = null;
     /** @type {BrowserPage | null} */ let page = null;
+    /** @type {{ readonly close: () => Promise<void> }[]} */ const acquired = [];
     /** @type {Result<BrowserRunAcquisitionBatch, SourceIngestionFailure>} */ let result = fail({ kind: "BrowserRunUnavailable" });
     let sessionCloseFailed = false;
     const startedAt = this.#time();
     try {
       const launched = await this.#dependencies.launcher.launch(this.#dependencies.binding);
+      track(launched, acquired);
       if (!validBrowser(launched)) {
         result = fail({ kind: "BrowserRunLaunchFailed" });
       } else {
         browser = launched;
         const createdContext = await browser.createBrowserContext();
+        track(createdContext, acquired);
         if (!validContext(createdContext)) {
           result = fail({ kind: "BrowserRunLaunchFailed" });
         } else {
           context = createdContext;
           const createdPage = await context.newPage();
+          track(createdPage, acquired);
           if (!validPage(createdPage)) {
             result = fail({ kind: "BrowserRunLaunchFailed" });
           } else {
@@ -94,7 +98,7 @@ export class BrowserRunPageAcquirer {
     } catch (error) {
       result = fail(classifyProviderFailure(error, this.#time()));
     } finally {
-      sessionCloseFailed = !(await closeAll(page, context, browser));
+      sessionCloseFailed = !(await closeAll(acquired));
     }
     if (sessionCloseFailed) return fail({ kind: "BrowserRunSessionCloseFailed" });
     return result;
@@ -315,14 +319,21 @@ function classifyProviderFailure(error, now) {
   return /** @type {const} */ ({ kind: "BrowserRunUnavailable" });
 }
 
-/** @param {BrowserPage | null} page @param {BrowserContext | null} context @param {BrowserSession | null} browser */
-async function closeAll(page, context, browser) {
+/** @param {readonly { readonly close: () => Promise<void> }[]} resources */
+async function closeAll(resources) {
   let ok = true;
-  for (const resource of [page, context, browser]) {
-    if (resource === null) continue;
-    try { await resource.close(); } catch { ok = false; }
+  const closed = new Set();
+  for (const resource of resources) {
+    if (closed.has(resource)) continue;
+    closed.add(resource);
+    try { await resource.close(); } catch (error) { ok = false; }
   }
   return ok;
+}
+
+/** @param {unknown} value @param {{ readonly close: () => Promise<void> }[]} resources */
+function track(value, resources) {
+  if (isRecord(value) && typeof value.close === "function") resources.push(/** @type {{ readonly close: () => Promise<void> }} */ (value));
 }
 
 /** @param {string} value */

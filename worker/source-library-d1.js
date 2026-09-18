@@ -1,15 +1,8 @@
 // @ts-check
 
 import { isRecord } from "../src/features/source-library/contracts.js";
-import {
-  LOCAL_SEMANTIC_DIMENSIONS,
-  LOCAL_SEMANTIC_MODEL_ID,
-  LOCAL_SEMANTIC_MODEL_VERSION,
-  cosineSimilarity,
-  vectorize,
-} from "./local-semantic-index.js";
 
-/** @import { LibrarySource, Result, SourceInterestArea, SourceLibraryFailure, SourceIngestionJob, SourceSearchHit, SourceSuppression } from "../src/features/source-library/contracts.js" */
+/** @import { LibrarySource, Result, SourceInterestArea, SourceLibraryFailure, SourceIngestionJob, SourceSearchHit, KnowledgeSearchHit, SourceSuppression } from "../src/features/source-library/contracts.js" */
 /** @import { ApprovalCommit, RevisionCommit, SuppressionCommit, TransitionCommit } from "../src/features/source-library/repository.js" */
 
 const freeze = Object.freeze;
@@ -62,6 +55,17 @@ export class D1SourceLibraryRepository {
       throw new TypeError("D1 source-library database is invalid.");
     }
     this.#database = database;
+  }
+
+  /** @param {string} ownerId @param {string} sourceId @returns {Promise<Result<LibrarySource | null, SourceLibraryFailure>>} */
+  async read(ownerId, sourceId) {
+    if (typeof ownerId !== "string" || ownerId.trim() === "" || typeof sourceId !== "string" || sourceId.trim() === "") throw new TypeError("Source read command is invalid.");
+    try {
+      return { ok: true, value: await this.#source(ownerId, sourceId) };
+    } catch (error) {
+      if (error instanceof Error) return { ok: false, error: { kind: "SourceCatalogReadFailed" } };
+      throw error;
+    }
   }
 
   /** @param {SuppressionCommit} commit @returns {Promise<Result<{ readonly suppression: SourceSuppression, readonly reused: boolean }, SourceLibraryFailure>>} */
@@ -212,72 +216,44 @@ export class D1SourceLibraryRepository {
     }
   }
 
-  /**
-   * Rank the bounded active catalog with the local feature-hash vector. The
-   * query service still rechecks every returned identity through activeByIds.
-   * @param {{ readonly ownerId: string, readonly vector: readonly number[], readonly modelId: string, readonly modelVersion: string, readonly dimensions: number, readonly limit: number }} query
-   * @returns {Promise<Result<readonly { readonly sourceId: string, readonly ownerId: string, readonly score: number, readonly modelId: string, readonly modelVersion: string, readonly dimensions: number }[], SourceLibraryFailure>>}
-   */
-  async semanticSearch(query) {
-    if (
-      !isRecord(query) || typeof query.ownerId !== "string" ||
-      query.ownerId.trim() === "" || query.modelId !== LOCAL_SEMANTIC_MODEL_ID ||
-      query.modelVersion !== LOCAL_SEMANTIC_MODEL_VERSION ||
-      query.dimensions !== LOCAL_SEMANTIC_DIMENSIONS ||
-      !Array.isArray(query.vector) ||
-      query.vector.length !== LOCAL_SEMANTIC_DIMENSIONS ||
-      query.vector.some((value) => !Number.isFinite(value)) ||
-      !Number.isInteger(query.limit) || query.limit < 1
-    ) {
-      return { ok: false, error: { kind: "SourceSemanticIndexUnavailable" } };
-    }
-    console.log(JSON.stringify({ event: "source-semantic-search-entry" }));
+  /** @param {{ readonly ownerId: string, readonly query: string, readonly limit: number }} query @returns {Promise<Result<readonly KnowledgeSearchHit[], SourceLibraryFailure>>} */
+  async knowledgeKeywordSearch(query) {
+    const match = ftsQuery(query.query);
+    if (match === null) return { ok: false, error: { kind: "SourceSearchQueryInvalid" } };
     try {
-      const candidates = await this.#allSources(
-        `${SOURCE_SELECT} WHERE s.owner_id = ? AND s.state = 'active' GROUP BY s.owner_id, s.source_id ORDER BY s.approved_at DESC, s.source_id DESC LIMIT ?`,
-        [query.ownerId.trim(), MAX_LOCAL_SEMANTIC_CANDIDATES + 1],
+      const rows = await this.#all(
+        `SELECT k.owner_id, k.knowledge_id, k.source_id, k.point_json, s.title AS source_title, s.canonical_url AS source_url, CASE WHEN l.studied_at IS NULL THEN 1 ELSE 0 END AS question_locked, bm25(knowledge_points_fts) AS search_rank FROM knowledge_points_fts JOIN extraction_knowledge_points k ON k.owner_id = knowledge_points_fts.owner_id AND k.knowledge_id = knowledge_points_fts.knowledge_id JOIN library_sources s ON s.owner_id = k.owner_id AND s.source_id = k.source_id LEFT JOIN learner_knowledge_state l ON l.owner_id = k.owner_id AND l.knowledge_id = k.knowledge_id WHERE k.owner_id = ? AND s.state = 'active' AND knowledge_points_fts MATCH ? ORDER BY search_rank ASC, k.created_at ASC, k.knowledge_id ASC LIMIT ?`,
+        [query.ownerId, match, query.limit],
       );
-      if (candidates.length > MAX_LOCAL_SEMANTIC_CANDIDATES) {
-        return { ok: false, error: { kind: "SourceSemanticIndexUnavailable" } };
-      }
-      const ranked = candidates.flatMap((source) => {
-        const score = cosineSimilarity(
-          query.vector,
-          vectorize(`${source.title} ${source.description}`),
-        );
-        return score === null || score <= 0 ? [] : [{ source, score }];
-      });
-      ranked.sort((left, right) =>
-        right.score - left.score ||
-        right.source.approvedAt.localeCompare(left.source.approvedAt) ||
-        right.source.id.localeCompare(left.source.id)
-      );
-      console.log(JSON.stringify({
-        event: "source-semantic-search-success",
-        resultCount: Math.min(ranked.length, query.limit),
-      }));
-      return {
-        ok: true,
-        value: Object.freeze(ranked.slice(0, query.limit).map((hit) =>
-          Object.freeze({
-            sourceId: hit.source.id,
-            ownerId: hit.source.ownerId,
-            score: hit.score,
-            modelId: query.modelId,
-            modelVersion: query.modelVersion,
-            dimensions: query.dimensions,
-          })
-        )),
-      };
+      return { ok: true, value: freeze(rows.map((row) => {
+        if (!isRecord(row) || typeof row.search_rank !== "number") throw new TypeError("Stored D1 knowledge search rank is invalid.");
+        return freeze({ knowledge: knowledgeSearchFromRow(row), score: -row.search_rank, matchedBy: /** @type {const} */ ("exact") });
+      })) };
     } catch (error) {
       if (error instanceof TypeError) throw error;
-      if (error instanceof Error) {
-        console.log(JSON.stringify({
-          event: "source-semantic-search-failure",
-          failureKind: "SourceSemanticIndexUnavailable",
-        }));
-        return { ok: false, error: { kind: "SourceSemanticIndexUnavailable" } };
-      }
+      if (error instanceof Error) return { ok: false, error: { kind: "SourceKeywordSearchUnavailable" } };
+      throw error;
+    }
+  }
+
+  /** @param {{ readonly ownerId: string, readonly limit: number }} query @returns {Promise<Result<{ readonly candidates: readonly { readonly knowledge: KnowledgeSearchHit["knowledge"], readonly sourceRevision: number }[], readonly privateDerivedCount: number }, SourceLibraryFailure>>} */
+  async knowledgeSemanticCandidates(query) {
+    if (!isRecord(query) || typeof query.ownerId !== "string" || query.ownerId.trim() === "" || !Number.isInteger(query.limit) || query.limit < 1) return { ok: false, error: { kind: "SourceSemanticIndexUnavailable" } };
+    try {
+      const [rows, privateRow] = await Promise.all([
+        this.#all("SELECT k.owner_id, k.knowledge_id, k.source_id, k.source_revision, k.point_json, s.title AS source_title, s.canonical_url AS source_url, CASE WHEN l.studied_at IS NULL THEN 1 ELSE 0 END AS question_locked FROM extraction_knowledge_points k JOIN library_sources s ON s.owner_id = k.owner_id AND s.source_id = k.source_id LEFT JOIN learner_knowledge_state l ON l.owner_id = k.owner_id AND l.knowledge_id = k.knowledge_id WHERE k.owner_id = ? AND s.state = 'active' AND NOT EXISTS (SELECT 1 FROM knowledge_workflow_materials m WHERE m.owner_id = k.owner_id AND m.run_id = k.run_id AND json_type(m.material_json, '$.provenance.processingAllowed') IS NOT 'true') ORDER BY k.created_at ASC, k.knowledge_id ASC LIMIT ?", [query.ownerId.trim(), query.limit]),
+        this.#database.prepare("SELECT COUNT(*) AS private_derived_count FROM extraction_knowledge_points k JOIN library_sources s ON s.owner_id = k.owner_id AND s.source_id = k.source_id WHERE k.owner_id = ? AND s.state = 'active' AND EXISTS (SELECT 1 FROM knowledge_workflow_materials m WHERE m.owner_id = k.owner_id AND m.run_id = k.run_id AND json_type(m.material_json, '$.provenance.processingAllowed') IS NOT 'true')").bind(query.ownerId.trim()).first(),
+      ]);
+      if (!isRecord(privateRow) || !Number.isSafeInteger(privateRow.private_derived_count) || /** @type {number} */ (privateRow.private_derived_count) < 0) throw new TypeError("Stored semantic provenance count is invalid.");
+      const privateDerivedCount = /** @type {number} */ (privateRow.private_derived_count);
+      const candidates = rows.map((row) => {
+        if (!isRecord(row) || !Number.isSafeInteger(row.source_revision) || /** @type {number} */ (row.source_revision) < 1) throw new TypeError("Stored knowledge source revision is invalid.");
+        return freeze({ knowledge: knowledgeSearchFromRow(row), sourceRevision: /** @type {number} */ (row.source_revision) });
+      });
+      return { ok: true, value: freeze({ candidates: freeze(candidates), privateDerivedCount }) };
+    } catch (error) {
+      if (error instanceof TypeError) throw error;
+      if (error instanceof Error) return { ok: false, error: { kind: "SourceSemanticIndexUnavailable" } };
       throw error;
     }
   }
@@ -380,6 +356,7 @@ export class D1SourceLibraryRepository {
               kind: "SourceStateConflict",
               sourceId: canonical.id,
               state: canonical.state,
+              revision: canonical.revision,
             },
           };
         }
@@ -424,7 +401,7 @@ export class D1SourceLibraryRepository {
             commit.event.occurredAt,
           )
         ),
-        this.#database.prepare(
+        ...(commit.job === null ? [] : [this.#database.prepare(
           "INSERT INTO source_ingestion_jobs (owner_id, job_id, source_id, source_revision, policy_version, state, idempotency_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ).bind(
           commit.job.ownerId,
@@ -436,7 +413,7 @@ export class D1SourceLibraryRepository {
           commit.event.idempotencyKey,
           commit.job.createdAt,
           commit.job.createdAt,
-        ),
+        )]),
         ...(commit.initialItem == null ? [] : [this.#database.prepare(
           "INSERT INTO source_item_versions (owner_id, source_id, item_id, version_id, canonical_url, title, description, content_digest, provenance_json, observed_at, published_at, source_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ).bind(
@@ -780,7 +757,6 @@ const SOURCE_FROM =
 const SOURCE_SELECT = `SELECT ${SOURCE_COLUMNS}${SOURCE_FROM}`;
 const SEARCH_SOURCE_COLUMNS =
   "s.owner_id, s.source_id, s.submitted_url, s.canonical_url, s.title, s.description, s.adapter_json, s.identity_evidence_json, s.state, s.approved_at, s.updated_at, s.revision, COALESCE((SELECT json_group_array(a.interest_area_id) FROM source_interest_areas a WHERE a.owner_id = s.owner_id AND a.source_id = s.source_id), '[]') AS interest_area_ids_json";
-const MAX_LOCAL_SEMANTIC_CANDIDATES = 500;
 
 /** @param {unknown} row @param {string} ownerId @returns {SourceInterestArea} */
 function interestAreaFromRow(row, ownerId) {
@@ -806,6 +782,20 @@ function ftsQuery(value) {
     : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" AND ");
 }
 
+/** @param {unknown} row @returns {KnowledgeSearchHit["knowledge"]} */
+function knowledgeSearchFromRow(row) {
+  if (!isRecord(row) || typeof row.knowledge_id !== "string" || typeof row.source_id !== "string" || typeof row.source_title !== "string" || typeof row.source_url !== "string" || typeof row.point_json !== "string" || (row.question_locked !== 0 && row.question_locked !== 1)) throw new TypeError("Stored D1 knowledge search row is invalid.");
+  const point = JSON.parse(row.point_json);
+  if (!isRecord(point) || typeof point.summary !== "string" || !isRecord(point.attribution) || typeof point.attribution.sourceUrl !== "string" || !Array.isArray(point.evidenceAnchors)) throw new TypeError("Stored D1 knowledge point is invalid.");
+  const evidenceAnchorIds = point.evidenceAnchors.flatMap((anchor) => {
+    if (!isRecord(anchor)) return [];
+    if (typeof anchor.id === "string" && anchor.id.trim() !== "") return [anchor.id];
+    return typeof anchor.url === "string" && typeof anchor.selector === "string" && anchor.url.trim() !== "" && anchor.selector.trim() !== "" ? [`${anchor.url}#${anchor.selector}`] : [];
+  });
+  if (evidenceAnchorIds.length === 0) throw new TypeError("Stored D1 knowledge evidence is invalid.");
+  return freeze({ knowledgeId: row.knowledge_id, sourceId: row.source_id, sourceTitle: row.source_title, summary: point.summary, sourceUrl: point.attribution.sourceUrl, evidenceAnchorIds: freeze(evidenceAnchorIds), questionLocked: row.question_locked === 1 });
+}
+
 /** @param {SourceRow & { readonly interest_area_ids_json: string }} row @returns {LibrarySource} */
 function sourceFromRow(row) {
   const adapter = JSON.parse(row.adapter_json);
@@ -822,6 +812,9 @@ function sourceFromRow(row) {
   return freeze({
     id: row.source_id,
     ownerId: row.owner_id,
+    origin: adapter.id === "private-document"
+      ? /** @type {const} */ ("private-document")
+      : /** @type {const} */ ("web"),
     submittedUrl: row.submitted_url,
     canonicalUrl: row.canonical_url,
     title: row.title,
@@ -859,6 +852,7 @@ function stateConflict(source) {
       kind: /** @type {const} */ ("SourceStateConflict"),
       sourceId: source.id,
       state: source.state,
+      revision: source.revision,
     },
   };
 }

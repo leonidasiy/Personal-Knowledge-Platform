@@ -1,0 +1,28 @@
+role: rights-assessor
+version: rights-assessor-v3
+model:
+  provider: openrouter
+  name: z-ai/glm-5.3-flash
+procedureVersion: rights-procedure-v1
+promptVersion: rights-prompt-v1
+inputSchema: rights-assessment-command-v1
+outputSchema: rights-decision-v1
+allowedTools:
+  - rights-evidence.read
+memory:
+  namespace: rights-assessor
+  visibility: owner-run
+limits:
+  maxTurns: 3
+  maxToolCalls: 8
+  timeoutMs: 15000
+  maxOutputBytes: 65536
+  compactionThresholdTokens: 500000
+retry:
+  maxAttempts: 2
+  backoffMs: 250
+stopRules:
+  - evidence-missing
+  - evidence-unknown
+  - evidence-conflicting
+  - access-not-public

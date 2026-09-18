@@ -16,13 +16,21 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   }),
   aggregateJavascript: Object.freeze({
     label: "Aggregate JavaScript",
-    rawBytes: 195_000,
-    gzipBytes: 62_000,
+    // Milestone 5 adds the authenticated Review queue controls and the
+    // published-source quiz Feed projection. Entry and lazy-chunk budgets
+    // remain unchanged; this aggregate allowance covers their shared graph.
+    rawBytes: 210_000,
+    gzipBytes: 67_000,
   }),
   stylesheet: Object.freeze({
     label: "CSS",
     rawBytes: 24_000,
     gzipBytes: 7_000,
+  }),
+  pdfRenderer: Object.freeze({
+    label: "On-demand PDF renderer",
+    rawBytes: 2_000_000,
+    gzipBytes: 650_000,
   }),
 });
 
@@ -257,11 +265,19 @@ export async function buildProject(configuration, dependencies) {
   try {
     await Deno.mkdir(joinPath(temporaryRoot, "src"), { recursive: true });
 
+    const fallbackPaths = await readFallbackAssetPaths(sourceRoot);
+    if (!fallbackPaths.ok) {
+      return await failWithCleanup(fallbackPaths.error, temporaryRoot);
+    }
     const staticCopies = [
       ["index.html", "index.html"],
       ["manifest.webmanifest", "manifest.webmanifest"],
       ["service-worker.js", "service-worker.js"],
-      ["assets", "assets"],
+      ["assets/catalog-fixtures.json", "assets/catalog-fixtures.json"],
+      ["assets/discovery-starters.json", "assets/discovery-starters.json"],
+      ["assets/fallback-media/manifest.json", "assets/fallback-media/manifest.json"],
+      ["node_modules/unpdf/dist/pdfjs.mjs", "pdfjs.mjs"],
+      ...fallbackPaths.value.map((path) => [path, path]),
     ];
     for (const [source, destination] of staticCopies) {
       const copied = await copyPath(
@@ -272,6 +288,10 @@ export async function buildProject(configuration, dependencies) {
         return await failWithCleanup(copied.error, temporaryRoot);
       }
     }
+    const pdfRenderer = await measureArtifact(joinPath(temporaryRoot, "pdfjs.mjs"), "pdfjs.mjs");
+    if (!pdfRenderer.ok) return await failWithCleanup(pdfRenderer.error, temporaryRoot);
+    const rendererBudget = validateArtifactBudget(pdfRenderer.artifact, ARTIFACT_BUDGETS.pdfRenderer);
+    if (!rendererBudget.ok) return await failWithCleanup(rendererBudget.error, temporaryRoot);
 
     const javascriptOutput = joinPath(temporaryRoot, "src/app.js");
     const javascriptBuild = await dependencies.runEsbuild({
@@ -430,6 +450,52 @@ export async function buildProject(configuration, dependencies) {
   }
 }
 
+/**
+ * Return only locally approved fallback files from the fallback manifest.
+ * Unlisted files in the developer's fallback directory are never copied into
+ * the hosted artifact.
+ *
+ * @param {string} sourceRoot
+ * @returns {Promise<{ ok: true, value: readonly string[] } | { ok: false, error: BuildFailure }>}
+ */
+async function readFallbackAssetPaths(sourceRoot) {
+  const manifestPath = joinPath(sourceRoot, "assets/fallback-media/manifest.json");
+  try {
+    const document = JSON.parse(await Deno.readTextFile(manifestPath));
+    if (!Array.isArray(document)) {
+      return { ok: false, error: { kind: "StaticCopyFailed", message: "The fallback-media manifest must be an array." } };
+    }
+    const paths = new Set();
+    for (const entry of document) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry) || typeof entry.url !== "string" || entry.url.trim() === "") {
+        return { ok: false, error: { kind: "StaticCopyFailed", message: "The fallback-media manifest contains an invalid asset entry." } };
+      }
+      let parsed;
+      try {
+        parsed = new URL(entry.url, "https://fallback-assets.invalid/");
+      } catch (error) {
+        return { ok: false, error: { kind: "StaticCopyFailed", message: "The fallback-media manifest contains an invalid asset URL." } };
+      }
+      if (parsed.origin !== "https://fallback-assets.invalid" || parsed.search !== "" || parsed.hash !== "" || !parsed.pathname.startsWith("/assets/fallback-media/")) {
+        return { ok: false, error: { kind: "StaticCopyFailed", message: "Fallback assets must be local files below assets/fallback-media/." } };
+      }
+      let relative;
+      try {
+        relative = decodeURIComponent(parsed.pathname.slice(1));
+      } catch (error) {
+        return { ok: false, error: { kind: "StaticCopyFailed", message: "The fallback-media manifest contains an improperly encoded path." } };
+      }
+      if (relative.includes("..") || relative.endsWith("/") || relative === "assets/fallback-media/manifest.json") {
+        return { ok: false, error: { kind: "StaticCopyFailed", message: "The fallback-media manifest contains an unsafe asset path." } };
+      }
+      paths.add(relative);
+    }
+    return { ok: true, value: Object.freeze([...paths].sort()) };
+  } catch (cause) {
+    return { ok: false, error: { kind: "StaticCopyFailed", message: `The fallback-media manifest could not be read: ${errorMessage(cause)}` } };
+  }
+}
+
 const SERVICE_WORKER_BUILD_TOKEN = "__RESONANCE_BUILD_ID__";
 
 /**
@@ -552,8 +618,32 @@ async function validateServiceWorkerPrecache(outputRoot, template) {
     };
   }
   for (const path of paths) {
+    let localPath;
     try {
-      await Deno.stat(joinPath(outputRoot, path.slice(2)));
+      localPath = decodeURIComponent(path.slice(2));
+    } catch {
+      return {
+        ok: false,
+        error: {
+          kind: "ServiceWorkerTemplateInvalid",
+          message: "The service-worker shell list contains an invalid URL path.",
+        },
+      };
+    }
+    if (
+      localPath.startsWith("/") ||
+      localPath.split("/").some((segment) => segment === "..")
+    ) {
+      return {
+        ok: false,
+        error: {
+          kind: "ServiceWorkerTemplateInvalid",
+          message: "The service-worker shell list contains an unsafe URL path.",
+        },
+      };
+    }
+    try {
+      await Deno.stat(joinPath(outputRoot, localPath));
     } catch (cause) {
       if (cause instanceof Deno.errors.NotFound) {
         return {

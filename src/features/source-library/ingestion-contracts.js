@@ -2,6 +2,8 @@
 
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
+/** @typedef {{ readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly registryIds: readonly string[] }} RightsRegistryEvidenceContext */
+
 /** @typedef {"allowed" | "denied" | "unknown"} EvidenceOutcome */
 /** @typedef {"sitemap" | "navigation"} StructuralEvidenceKind */
 
@@ -328,7 +330,11 @@
  * } | {
  *   readonly kind: "RightsRegistryEvidenceRevoked"
  * } | {
- *   readonly kind: "RightsRegistryEvidenceConflicting"
+ *   readonly kind: "RightsRegistryEvidenceAmbiguous",
+ *   readonly context: RightsRegistryEvidenceContext
+ * } | {
+ *   readonly kind: "RightsRegistryEvidenceConflicting",
+ *   readonly context?: RightsRegistryEvidenceContext
  * } | {
  *   readonly kind: "RightsRegistryMetadataPersistenceFailed"
  * } | {

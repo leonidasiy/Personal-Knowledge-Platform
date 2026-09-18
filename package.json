@@ -1,6 +1,9 @@
 {
   "name": "resonance-learning",
   "private": true,
+  "dependencies": {
+    "unpdf": "1.8.1"
+  },
   "devDependencies": {
     "@cloudflare/puppeteer": "1.1.0",
     "@types/node": "22.20.1",

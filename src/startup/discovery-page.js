@@ -39,26 +39,34 @@ export function createDiscoveryPage(dependencies) {
     typeof dependencies.navigateToLibrary !== "function" ||
     typeof dependencies.rerender !== "function"
   ) throw new TypeError("Discovery page dependencies are invalid.");
+  const {
+    createId,
+    fetch: requestFetch,
+    gatewayBaseUrl,
+    navigateToLibrary,
+    now,
+    policyStorage,
+  } = dependencies;
   const markup = dependencies.markup;
   const escapeHtml = dependencies.escapeHtml;
   const onNotice = dependencies.onNotice;
   const onError = dependencies.onError;
   const rerender = dependencies.rerender;
   const issued = new Map();
-  const sessionSeed = dependencies.createId();
+  const sessionSeed = createId();
   const runtime = createDiscoveryRuntime({
     ownerId: dependencies.ownerId,
     persistence: dependencies.persistence,
     clock: freeze({
       now: () => ({
         ok: /** @type {const} */ (true),
-        value: dependencies.now(),
+        value: now(),
       }),
     }),
-    createId: dependencies.createId,
+    createId,
     cursorCodec: freeze({
       encode: (cursor) => {
-        const token = dependencies.createId();
+        const token = createId();
         issued.set(token, cursor);
         return { ok: true, value: token };
       },
@@ -81,18 +89,18 @@ export function createDiscoveryPage(dependencies) {
       ),
   });
   const sourceLibrary = new SourceLibraryGatewayClient({
-    fetch: dependencies.fetch,
-    baseUrl: dependencies.gatewayBaseUrl,
+    fetch: requestFetch,
+    baseUrl: gatewayBaseUrl,
     timeoutMs: 15_000,
   });
   const centralGateway = new DiscoverySearchGatewayClient({
-    fetch: dependencies.fetch,
-    baseUrl: dependencies.gatewayBaseUrl,
+    fetch: requestFetch,
+    baseUrl: gatewayBaseUrl,
     timeoutMs: 15_000,
   });
   const youtubeConnection = createYouTubeConnectionController({
-    storage: dependencies.policyStorage,
-    now: dependencies.now,
+    storage: policyStorage,
+    now,
     markup,
     onNotice,
     onError,
@@ -237,13 +245,21 @@ export function createDiscoveryPage(dependencies) {
           );
           const data = new FormData(event.currentTarget);
           const areaId = data.get("interest-area");
-          const file = data.get("transcript");
+          const fileValue = data.get("material");
+          const file = fileValue instanceof File && fileValue.size > 0
+            ? fileValue
+            : null;
+          const contentValue = data.get("content");
+          const content = typeof contentValue === "string" &&
+              contentValue.trim() !== ""
+            ? contentValue
+            : null;
           const attested = data.get("rights-attestation") === "on";
           if (
             itemId !== null && typeof areaId === "string" &&
-            file instanceof File
+            (file !== null || content !== null)
           ) {
-            void approveAndUpload(itemId, areaId, file, attested);
+            void approveAndUpload(itemId, areaId, file, content, attested);
           }
         })
       );
@@ -265,7 +281,7 @@ export function createDiscoveryPage(dependencies) {
   function renderItems(projected, route, liveItems) {
     const projectedModel = toDiscoverRouteModel(
       projected,
-      dependencies.escapeHtml,
+      escapeHtml,
     );
     const visibleItems = liveItems ?? [...projectedModel.items];
     const items = visibleItems.filter((item) =>
@@ -299,7 +315,7 @@ export function createDiscoveryPage(dependencies) {
         pendingId: pendingDecisionItemId,
         canAct: sourceActionsAvailable && route.online,
         search: searchModel(route.online),
-        markup: dependencies.markup,
+        markup,
       }),
     );
   }
@@ -388,7 +404,7 @@ export function createDiscoveryPage(dependencies) {
       ...item.candidate,
       identityStatus: "resolved",
       interestAreaIds: [areaId],
-      idempotencyKey: `approve:${dependencies.createId()}`,
+      idempotencyKey: `approve:${createId()}`,
     });
     pendingDecisionItemId = null;
     if (!result.ok) {
@@ -399,18 +415,17 @@ export function createDiscoveryPage(dependencies) {
           ? markup.sourceAlreadyAdded
           : markup.sourceAdded,
       );
-      dependencies.navigateToLibrary(result.value.source.id);
+      navigateToLibrary(result.value.source.id);
     }
     rerender();
   }
 
-  /** @param {string} itemId @param {string} areaId @param {File} file @param {boolean} attested */
-  async function approveAndUpload(itemId, areaId, file, attested) {
+  /** @param {string} itemId @param {string} areaId @param {File | null} file @param {string | null} content @param {boolean} attested */
+  async function approveAndUpload(itemId, areaId, file, content, attested) {
     if (pendingDecisionItemId !== null) return;
     const item = routeItems.get(itemId);
-    const initialItem = item?.candidate.initialItem ?? null;
     if (
-      item === undefined || initialItem === null || !attested ||
+      item === undefined || !attested || (file === null && content === null) ||
       !interestAreas.some((area) => area.id === areaId)
     ) {
       onError(markup.uploadRequired);
@@ -423,7 +438,7 @@ export function createDiscoveryPage(dependencies) {
       ...item.candidate,
       identityStatus: "resolved",
       interestAreaIds: [areaId],
-      idempotencyKey: `approve:${dependencies.createId()}`,
+      idempotencyKey: `approve:${createId()}`,
     });
     if (!approved.ok) {
       pendingDecisionItemId = null;
@@ -431,43 +446,48 @@ export function createDiscoveryPage(dependencies) {
       rerender();
       return;
     }
-    let content;
-    try {
-      content = await file.text();
-    } catch (error) {
-      if (!(error instanceof Error)) throw error;
+    if (approved.value.workflow === null) {
       pendingDecisionItemId = null;
-      onError(markup.uploadReadFailed);
+      onError(markup.uploadStoreFailed);
       rerender();
       return;
     }
-    const mediaType =
-      file.type === "text/vtt" || file.name.toLowerCase().endsWith(".vtt")
-        ? "text/vtt"
-        : "text/plain";
-    const uploaded = await sourceLibrary.uploadManualMaterial({
+    const uploaded = await sourceLibrary.uploadWorkflowMaterial({
+      runId: approved.value.workflow.runId,
       sourceId: approved.value.source.id,
       sourceRevision: approved.value.source.revision,
-      itemId: initialItem.itemId,
-      itemVersionId: initialItem.versionId,
-      mediaType,
-      content,
+      sourceUrl: approved.value.source.canonicalUrl,
+      mediaType: file === null ? "text/plain" : materialMediaType(file),
+      fileName: file === null ? "paste.txt" : file.name,
       rightsAttestation: {
+        ownsOrPermitted: true,
         storageAllowed: true,
         transformationAllowed: true,
+        processingAllowed: true,
         basis: "learner-attested lawful copy",
-        reference: `learner-attestation:${dependencies.now()}`,
+        reference: `learner-attestation:${now()}`,
       },
-      idempotencyKey: `manual-upload:${dependencies.createId()}`,
+      idempotencyKey: `workflow-material:${createId()}`,
+      ...(file === null ? { content } : { file }),
     });
     pendingDecisionItemId = null;
     if (!uploaded.ok) {
       onError(markup.uploadStoreFailed);
     } else {
       onNotice(markup.uploadStored);
-      dependencies.navigateToLibrary(approved.value.source.id);
+      navigateToLibrary(approved.value.source.id);
     }
     rerender();
+  }
+
+  /** @param {File} file @returns {string} */
+  function materialMediaType(file) {
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".pdf")) return "application/pdf";
+    if (name.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    if (name.endsWith(".md")) return "text/markdown";
+    if (name.endsWith(".vtt")) return "text/plain";
+    return file.type.startsWith("text/") ? "text/plain" : file.type || "text/plain";
   }
 
   /** @param {string} itemId */
@@ -480,7 +500,7 @@ export function createDiscoveryPage(dependencies) {
     const result = await sourceLibrary.reject({
       canonicalIdentity: item.candidate.canonicalIdentity,
       identityEvidence: item.candidate.identityEvidence,
-      idempotencyKey: `reject:${dependencies.createId()}`,
+      idempotencyKey: `reject:${createId()}`,
     });
     pendingDecisionItemId = null;
     if (!result.ok) {
@@ -534,13 +554,13 @@ export function createDiscoveryPage(dependencies) {
 
   /** @param {import("../features/discovery/gateway.js").GatewayCentralCandidate} item @param {string} policyVersion */
   function centralRouteItem(item, policyVersion) {
-    const observedAt = dependencies.now();
+    const observedAt = now();
     const providerId = item.providerId;
     const canonicalUrl = item.canonicalUrl;
     const provider = searchCapabilities.find((entry) => entry.id === providerId);
     const youtube = item.sourceLevel === "video";
     const feed = item.sourceLevel === "feed";
-    const id = dependencies.createId();
+    const id = createId();
     const retainedTitle = youtube ? "Saved YouTube video" : feed ? "Saved podcast feed" : item.title;
     const retainedDescription = youtube
       ? "Saved video link. Upload a permitted transcript to create learning material."

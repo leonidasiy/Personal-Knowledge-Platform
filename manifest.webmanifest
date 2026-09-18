@@ -10,15 +10,15 @@
   "theme_color": "#176a61",
   "icons": [
     {
-      "src": "./assets/icon-192.webp",
+      "src": "./assets/fallback-media/Headphones%20Music%20Image.jpg",
       "sizes": "192x192",
-      "type": "image/webp",
+      "type": "image/jpeg",
       "purpose": "any maskable"
     },
     {
-      "src": "./assets/icon-512.webp",
+      "src": "./assets/fallback-media/Heungsoon%20Sheet%20Music.jpg",
       "sizes": "512x512",
-      "type": "image/webp",
+      "type": "image/jpeg",
       "purpose": "any maskable"
     }
   ]

@@ -1,0 +1,30 @@
+role: question-generator
+version: question-generator-v4
+model:
+  provider: openrouter
+  name: z-ai/glm-5.3-flash
+procedureVersion: question-procedure-v1
+promptVersion: question-prompt-v2
+inputSchema: knowledge-point-handoff-v1
+outputSchema: quiz-draft-v2
+allowedTools:
+  - quiz.question.validate
+  - quiz.evidence.lookup
+  - quiz.duplicate.check
+memory:
+  namespace: question-generator
+  visibility: owner-run
+limits:
+  maxTurns: 3
+  maxToolCalls: 8
+  timeoutMs: 30000
+  maxOutputBytes: 131072
+  compactionThresholdTokens: 500000
+retry:
+  maxAttempts: 2
+  backoffMs: 500
+stopRules:
+  - evidence-missing
+  - evaluator-limit-reached
+  - rights-revoked
+  - draft-accepted

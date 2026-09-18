@@ -1,5 +1,8 @@
 import puppeteer from "@cloudflare/puppeteer";
 import { createCloudflareDiscoveryWorker } from "./main.js";
+import { D1QuizRepository } from "./knowledge-workflow-content-d1.js";
+import { createKnowledgeWorkflowRestrictionReaper } from "./knowledge-workflow-reaper.js";
+import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
 import { createUnifiedWorkerRouter } from "./static-router.js";
 import { routeWithWorkerVersion } from "./versioned-router.js";
 
@@ -7,6 +10,7 @@ export {
   PublisherTranscriptAuthorizationDurableObject,
   YouTubeQuotaDurableObject,
 } from "./main.js";
+export { KnowledgeExtractionWorkflow } from "./knowledge-workflow-entry.mjs";
 
 export default {
   async fetch(request, environment, context) {
@@ -31,5 +35,14 @@ export default {
       request,
       environment.CF_VERSION_METADATA,
     );
+  },
+  async scheduled(_event, environment) {
+    if (!environment?.SOURCE_LIBRARY_DB || typeof environment.SOURCE_LIBRARY_DB.prepare !== "function") throw new Error("Knowledge workflow restriction reaper requires SOURCE_LIBRARY_DB.");
+    const now = () => new Date().toISOString();
+    const logger = createKnowledgeWorkflowLogger({ sink: (record) => console.info(JSON.stringify(record)), now });
+    const quizRepository = new D1QuizRepository({ database: environment.SOURCE_LIBRARY_DB, bucket: environment.SOURCE_CONTENT_BUCKET, now, logger });
+    const reaper = createKnowledgeWorkflowRestrictionReaper({ database: environment.SOURCE_LIBRARY_DB, quizRepository, now, logger });
+    const result = await reaper.run();
+    if (!result.ok) throw new Error(result.error.kind);
   },
 };

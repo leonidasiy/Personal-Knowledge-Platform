@@ -7,10 +7,14 @@
   },
   "tasks": {
     "build": "deno run --allow-read --allow-write --allow-run=npx scripts/build.mjs",
+    "check:migrations": "node --permission --allow-fs-read=worker/migrations ./scripts/validate-migration-chain.mjs",
+    "test:migrations": "node --test tests-node/migration-chain.test.mjs",
+    "test:material-batch": "node --test tests-node/knowledge-material-batch.test.mjs",
+    "test:semantic-consent": "node --test tests-node/semantic-consent.test.mjs",
     "browser:acceptance": "node scripts/browser-acceptance.mjs",
     "browser:acceptance:login": "node scripts/browser-acceptance-login.mjs",
     "check": "deno check src/app.js scripts/build.mjs src/features/discovery/*.js src/routes/*.js src/startup/*.js worker/*.js companion/*.js tests/*.test.js && deno check scripts/browser-acceptance-composition.mjs scripts/browser-acceptance-core.mjs scripts/browser-acceptance-login-core.mjs scripts/browser-acceptance-login.mjs scripts/browser-acceptance.mjs scripts/browser-session-state.mjs",
     "serve": "python3 -m http.server 4173 --directory dist",
-    "test": "deno test --allow-read --allow-write tests/"
+    "test": "deno test --allow-read --allow-write --allow-run=git tests/"
   }
 }

@@ -102,8 +102,10 @@
 /**
  * @typedef {(
  *   { readonly kind: "DiscoveryCommandInvalid", readonly field: string }
- *   | { readonly kind: "DiscoveryClientUnauthenticated" }
- *   | { readonly kind: "DiscoveryClientUnauthorized" }
+   *   | { readonly kind: "DiscoveryClientUnauthenticated" }
+   *   | { readonly kind: "DiscoveryClientUnauthorized" }
+ *   | { readonly kind: "DiscoveryAuthenticationFailed" }
+ *   | { readonly kind: "DiscoveryRequestLoggingFailed", readonly causeKind: "DiscoveryRequestLogEntryInvalid" | "DiscoveryRequestLogTimestampInvalid" | "DiscoveryRequestLoggerResultInvalid" | "DiscoveryRequestLoggerThrew" }
  *   | { readonly kind: "DiscoveryAccessTokenMissing" }
  *   | { readonly kind: "DiscoveryAccessTokenInvalid" }
  *   | { readonly kind: "DiscoveryAccessAudienceMismatch" }

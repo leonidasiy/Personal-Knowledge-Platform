@@ -19,14 +19,8 @@ const SHELL_URLS = [
   "./src/styles.css",
   "./assets/catalog-fixtures.json",
   "./assets/discovery-starters.json",
-  "./assets/suspension-study-640.webp",
-  "./assets/suspension-study.webp",
-  "./assets/filter-spectrum-640.webp",
-  "./assets/filter-spectrum.webp",
-  "./assets/rhythmic-displacement-640.webp",
-  "./assets/rhythmic-displacement.webp",
-  "./assets/icon-192.webp",
-  "./assets/icon-512.webp",
+  "./assets/fallback-media/Heungsoon%20Sheet%20Music.jpg",
+  "./assets/fallback-media/Headphones%20Music%20Image.jpg",
 ];
 const FRESH_PATHS = new Set([
   "/",

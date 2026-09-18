@@ -27,6 +27,14 @@ Deno.test("learning gateway parses queued source status and bounded pending task
   assertEquals(generated.value.tasks[0].prompt, "Explain.");
 });
 
+Deno.test("learning gateway parses published quizzes for the Feed", async () => {
+  const result = await gateway(() => Promise.resolve(Response.json({ result: [{ id: "task-a", kind: "single-choice", prompt: "Which cadence resolves?", explanation: "Evidence.", sourceAnchorIds: ["unit-a:anchor"], choices: [{ id: "choice-a", label: "Authentic" }, { id: "choice-b", label: "Plagal" }], correctChoiceIds: ["choice-a"], status: "published", revision: 2 }] }))).listPublished();
+  assertEquals(result.ok, true);
+  if (!result.ok) throw new Error(result.error.kind);
+  assertEquals(result.value[0].prompt, "Which cadence resolves?");
+  assertEquals(result.value[0].status, "published");
+});
+
 Deno.test("learning gateway posts a Keep or Discard decision without accepting a browser owner", async () => {
   /** @type {unknown} */ let body = null;
   const result = await gateway(async (request) => {

@@ -60,6 +60,15 @@ Deno.test("source approval atomically creates source, event, and ingestion job",
   assertEquals(repository.listIngestionJobs("owner-a").length, 1);
 });
 
+Deno.test("public source approval cannot forge the reserved private document identity", async () => {
+  const repository = new SourceLibraryRepository();
+  const result = await service(repository).approve({ ...approval, adapter: { ...approval.adapter, id: "private-document" } });
+  assertEquals(result.ok, false);
+  if (!result.ok && result.error.kind === "SourceCatalogCommandInvalid") assertEquals(result.error.field, "adapter.id");
+  else throw new Error("Expected a named adapter validation failure.");
+  assertEquals(repository.list("owner-a").length, 0);
+});
+
 Deno.test("individual-resource approval stores the exact discovered item version", async () => {
   const repository = new SourceLibraryRepository();
   const result = await service(repository).approve({
@@ -262,4 +271,49 @@ Deno.test("source rejection requires evidence and creates no fallback identity",
   if (rejected.ok) throw new Error("Expected identity failure.");
   assertEquals(rejected.error.kind, "SourceIdentityMissing");
   assertEquals(repository.listSuppressions("owner-a").length, 0);
+});
+
+Deno.test("private document creation persists an owner-scoped HTTPS document identity without crawl capability", async () => {
+  const repository = new SourceLibraryRepository();
+  const result = await service(repository).createPrivateDocument({
+    ownerId: "owner-a", title: "Week 3 student notes", fileName: "week3-student.pdf",
+    applicationOrigin: "https://app.example/", idempotencyKey: "private-document-1",
+    rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "learner-attested lawful copy", reference: "learner-attestation:1" },
+  });
+  assertEquals(result.ok, true);
+  if (!result.ok) throw new Error(result.error.kind);
+  assertEquals(result.value.source.origin, "private-document");
+  assertEquals(result.value.source.identityEvidence.find((entry) => entry.attribute === "processing-reference")?.value, "learner-attestation:1");
+  assertEquals(result.value.source.canonicalUrl, `https://app.example/api/private-documents/${encodeURIComponent(result.value.source.id)}`);
+  assertEquals(result.value.source.adapter.capabilities.includes("bounded-ingestion"), false);
+  assertEquals(result.value.source.interestAreaIds.length, 0);
+  assertEquals(result.value.job, null);
+  assertEquals(repository.listIngestionJobs("owner-a").length, 0);
+  const replay = await service(repository).createPrivateDocument({
+    ownerId: "owner-a", title: "Week 3 student notes", fileName: "week3-student.pdf",
+    applicationOrigin: "https://app.example/", idempotencyKey: "private-document-1",
+    rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "learner-attested lawful copy", reference: "learner-attestation:1" },
+  });
+  assertEquals(replay.ok, true);
+  if (!replay.ok) throw new Error(replay.error.kind);
+  assertEquals(replay.value.reused, true);
+  assertEquals(repository.list("owner-a").length, 1);
+});
+
+Deno.test("private document creation rejects missing processing authority and idempotency conflicts", async () => {
+  const repository = new SourceLibraryRepository();
+  const sourceLibrary = service(repository);
+  const command = { ownerId: "owner-a", title: "Week 3", fileName: "week3.pdf", applicationOrigin: "https://app.example/", idempotencyKey: "private-document-2", rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "learner-attested lawful copy", reference: "learner-attestation:2" } };
+  const missingRights = await sourceLibrary.createPrivateDocument({ ...command, rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: false, basis: "learner-attested lawful copy", reference: "learner-attestation:2" } });
+  assertEquals(missingRights.ok, false);
+  if (!missingRights.ok) assertEquals(missingRights.error.kind, "SourceCatalogCommandInvalid");
+  const created = await sourceLibrary.createPrivateDocument(command);
+  assertEquals(created.ok, true);
+  const changedGrant = await sourceLibrary.createPrivateDocument({ ...command, rightsAttestation: { ...command.rightsAttestation, reference: "different-grant" } });
+  assertEquals(changedGrant.ok, false);
+  if (!changedGrant.ok) assertEquals(changedGrant.error.kind, "SourceIdempotencyConflict");
+  const conflict = await sourceLibrary.createPrivateDocument({ ...command, title: "Other title" });
+  assertEquals(conflict.ok, false);
+  if (!conflict.ok) assertEquals(conflict.error.kind, "SourceIdempotencyConflict");
+  assertEquals(repository.list("owner-a").length, 1);
 });

@@ -46,15 +46,18 @@ function response(url, options = {}) {
   return { url: () => url, status: () => options.status ?? 200, headers: () => ({ "content-type": options.mediaType ?? "text/html; charset=utf-8" }), remoteAddress: () => options.peer === undefined ? { ip: "8.8.8.8", port: 443 } : options.peer, request: () => ({ redirectChain: () => redirectChain }) };
 }
 
-/** @param {{ readonly page?: Page, readonly limits?: unknown, readonly launchError?: Error, readonly closeFailure?: "page" | "context" | "browser", readonly times?: readonly string[] }} [options] */
+/** @param {{ readonly page?: Page, readonly limits?: unknown, readonly launchError?: Error, readonly malformed?: "browser" | "context" | "page", readonly closeFailure?: "page" | "context" | "browser", readonly times?: readonly string[] }} [options] */
 function setup(options = {}) {
   const page = options.page ?? new Page();
-  const context = { closed: 0, async newPage() { return page; }, async close() { this.closed += 1; if (options.closeFailure === "context") throw new Error("close"); } };
-  const browser = { closed: 0, async createBrowserContext() { return context; }, async close() { this.closed += 1; if (options.closeFailure === "browser") throw new Error("close"); } };
+  const malformedContext = { closed: 0, async close() { this.closed += 1; } };
+  const malformedPage = { closed: 0, async close() { this.closed += 1; } };
+  const context = { closed: 0, async newPage() { return options.malformed === "page" ? malformedPage : page; }, async close() { this.closed += 1; if (options.closeFailure === "context") throw new Error("close"); } };
+  const browser = { closed: 0, async createBrowserContext() { return options.malformed === "context" ? malformedContext : context; }, async close() { this.closed += 1; if (options.closeFailure === "browser") throw new Error("close"); } };
   if (options.closeFailure === "page") page.close = async () => { page.closed += 1; throw new Error("close"); };
   const times = [...(options.times ?? ["2026-07-22T12:00:00.000Z", "2026-07-22T12:00:00.010Z", "2026-07-22T12:00:00.020Z", "2026-07-22T12:00:00.030Z"])];
-  const subject = new BrowserRunPageAcquirer({ launcher: { limits: async () => options.limits ?? { activeSessions: [], allowedBrowserAcquisitions: 1, maxConcurrentSessions: 3, timeUntilNextAllowedBrowserAcquisition: 0 }, launch: async () => { if (options.launchError) throw options.launchError; return browser; } }, binding: {}, resolveAddresses: async () => ({ ok: true, value: ["8.8.8.8"] }), now: () => times.shift() ?? "2026-07-22T12:00:00.030Z", policy: { maximumPagesPerRun: 5, maximumRunMilliseconds: 60_000, navigationTimeoutMilliseconds: 15_000, maximumHtmlBytes: 10_000, maximumTextCharacters: 5_000, maximumLinksPerPage: 10, maximumFrontierEntries: 100 } });
-  return { subject, page, context, browser };
+  const malformedBrowser = { closed: 0, async close() { this.closed += 1; } };
+  const subject = new BrowserRunPageAcquirer({ launcher: { limits: async () => options.limits ?? { activeSessions: [], allowedBrowserAcquisitions: 1, maxConcurrentSessions: 3, timeUntilNextAllowedBrowserAcquisition: 0 }, launch: async () => { if (options.launchError) throw options.launchError; return /** @type {never} */ (options.malformed === "browser" ? malformedBrowser : browser); } }, binding: {}, resolveAddresses: async () => ({ ok: true, value: ["8.8.8.8"] }), now: () => times.shift() ?? "2026-07-22T12:00:00.030Z", policy: { maximumPagesPerRun: 5, maximumRunMilliseconds: 60_000, navigationTimeoutMilliseconds: 15_000, maximumHtmlBytes: 10_000, maximumTextCharacters: 5_000, maximumLinksPerPage: 10, maximumFrontierEntries: 100 } });
+  return { subject, page, context, browser, malformedBrowser, malformedContext, malformedPage };
 }
 
 Deno.test("Browser Run adapter intercepts before navigation, expands the bounded frontier, and closes all resources", async () => {
@@ -131,10 +134,22 @@ Deno.test("Browser Run adapter closes every resource after a non-Error provider 
   assertEquals(browser.closed, 1);
 });
 
+Deno.test("Browser Run adapter closes each acquired malformed launcher resource exactly once", async () => {
+  for (const malformed of ["browser", "context", "page"]) {
+    const fixture = setup({ malformed: /** @type {"browser" | "context" | "page"} */ (malformed) });
+    const result = await fixture.subject.acquire({ job, cursor, plan, rights });
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.error.kind, "BrowserRunLaunchFailed");
+    if (malformed === "browser") assertEquals(fixture.malformedBrowser.closed, 1);
+    if (malformed === "context") { assertEquals(fixture.malformedContext.closed, 1); assertEquals(fixture.browser.closed, 1); }
+    if (malformed === "page") { assertEquals(fixture.malformedPage.closed, 1); assertEquals(fixture.context.closed, 1); assertEquals(fixture.browser.closed, 1); }
+  }
+});
+
 Deno.test("Browser Run adapter rejects client-shaped commands and mismatched rights before launch", async () => {
   let launches = 0;
   const fixture = setup();
-  const subject = new BrowserRunPageAcquirer({ launcher: { limits: async () => ({ activeSessions: [], allowedBrowserAcquisitions: 1, maxConcurrentSessions: 3, timeUntilNextAllowedBrowserAcquisition: 0 }), launch: async () => { launches += 1; return fixture.browser; } }, binding: {}, resolveAddresses: async () => ({ ok: true, value: ["8.8.8.8"] }), now: () => "2026-07-22T12:00:00.000Z", policy: { maximumPagesPerRun: 5, maximumRunMilliseconds: 60_000, navigationTimeoutMilliseconds: 15_000, maximumHtmlBytes: 10_000, maximumTextCharacters: 5_000, maximumLinksPerPage: 10, maximumFrontierEntries: 100 } });
+  const subject = new BrowserRunPageAcquirer({ launcher: { limits: async () => ({ activeSessions: [], allowedBrowserAcquisitions: 1, maxConcurrentSessions: 3, timeUntilNextAllowedBrowserAcquisition: 0 }), launch: async () => { launches += 1; return /** @type {never} */ (fixture.browser); } }, binding: {}, resolveAddresses: async () => ({ ok: true, value: ["8.8.8.8"] }), now: () => "2026-07-22T12:00:00.000Z", policy: { maximumPagesPerRun: 5, maximumRunMilliseconds: 60_000, navigationTimeoutMilliseconds: 15_000, maximumHtmlBytes: 10_000, maximumTextCharacters: 5_000, maximumLinksPerPage: 10, maximumFrontierEntries: 100 } });
   const result = await subject.acquire({ job, cursor, plan, rights: { ...rights, ownerId: "owner-b" }, url: "https://client.example" });
   if (result.ok) throw new Error("Expected invalid command.");
   assertEquals(result.error.kind, "BrowserRunConfigurationInvalid");
