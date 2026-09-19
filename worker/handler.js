@@ -3,6 +3,7 @@
 import { isRecord, validateRssAcquisitionCommand } from "./contracts.js";
 import { isWorkflowRobotsEvidence } from "../src/features/knowledge-workflows/workflow.js";
 import { createDiscoveryRequestLogger } from "./request-logging.js";
+import { handleReminderRequest } from "./reminders/http.js";
 
 /** @import { AccessIdentity, Result, RssAcquisitionResult, WorkerFailure } from "./contracts.js" */
 /** @import { LibrarySource, SourceCatalogPage, SourceIngestionJob, SourceLibraryFailure, SourceSearchHit, KnowledgeSearchHit, SourceSuppression } from "../src/features/source-library/contracts.js" */
@@ -62,6 +63,8 @@ import { createDiscoveryRequestLogger } from "./request-logging.js";
    *     readonly listKnowledge?: (ownerId: string, sourceId?: string | null) => Promise<Result<unknown, { readonly kind: string }>>,
  *     readonly completeFeed: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
  *     readonly loadReview: (ownerId: string, learningDay: string, force?: boolean) => Promise<Result<unknown, { readonly kind: string }>>,
+ *     readonly loadProgress?: (ownerId:string, days:number, subject:string|null) => Promise<Result<unknown,{readonly kind:string}>>,
+ *     readonly correctClassification?: (command:unknown) => Promise<Result<unknown,{readonly kind:string}>>,
  *     readonly answerReview: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
  *     readonly setPreference: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
  *     readonly removeKnowledge: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
@@ -69,6 +72,7 @@ import { createDiscoveryRequestLogger } from "./request-logging.js";
  *     readonly clearGeneratedContent?: (ownerId: string) => Promise<Result<unknown, { readonly kind: string }>>
  *   },
  *   readonly waitUntil?: (promise: Promise<unknown>) => void,
+ *   readonly reminders?: ReturnType<typeof import('./reminders/service.js').createReminderService>|null,
  *   readonly manualMaterial?: null | { readonly upload: (command: unknown) => Promise<Result<{ readonly status: "processing-ready", readonly reference: import("../src/features/source-library/ingestion-contracts.js").SourceContentReference, readonly reused: boolean }, import("../src/features/source-library/ingestion-contracts.js").SourceIngestionFailure>> },
  *   readonly wikimediaTimedText?: null | { readonly retrieve: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>> },
  *   readonly learningGeneration?: null | {
@@ -136,6 +140,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const logged = emit({ event: "request-authenticated", ownerId: authenticated.value.ownerId });
       if (!logged.ok) return failureResponse(logged.error);
       const url = new URL(request.url);
+      const reminders = url.pathname === '/api/reminders';
       const rssPath = url.pathname === "/api/discovery/rss";
       const centralSearchPath = url.pathname === "/api/discovery/search";
       const centralCapabilitiesPath =
@@ -158,6 +163,8 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const learningPublished = url.pathname === "/api/learning-generation/published";
       const learningReview = url.pathname === "/api/learning-generation/review";
       const learningRevocation = url.pathname === "/api/learning-generation/revoke";
+      const learningProgress = url.pathname === "/api/learning-generation/progress";
+      const learningClassification = url.pathname === "/api/learning-generation/classification";
       const learningFeedBatch = url.pathname === "/api/learning-generation/feed-batch";
       const learningLibraryKnowledge = url.pathname === "/api/learning-generation/library-knowledge";
       const learningFeedRefresh = url.pathname === "/api/learning-generation/feed-batch/refresh";
@@ -175,12 +182,12 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const knowledgeWorkflowReplay = url.pathname === "/api/knowledge-workflows/replay";
       const learningMedia = url.pathname === "/api/learning-media";
       if (
-        !rssPath && !centralSearchPath &&
+        !reminders && !rssPath && !centralSearchPath &&
         !centralCapabilitiesPath && sourceAction === null && !privateDocumentCreate && privateDocumentId === null && !sourceRightsApproval && !sourceBrowse &&
         !sourceSearch && !sourceSuppressionCheck && !sourceActiveCheck &&
         !sourceIngestion && !manualMaterial && !wikimediaTimedText &&
         !learningStatus && !learningReviewQueue && !learningPublished && !learningReview && !learningRevocation &&
-        !learningFeedBatch && !learningLibraryKnowledge && !learningFeedRefresh && !learningFeedComplete && !learningReviewBatch && !learningReviewRefresh && !learningReviewAnswer && !learningPreference && !learningKnowledgeRemove &&
+        !learningProgress && !learningClassification && !learningFeedBatch && !learningLibraryKnowledge && !learningFeedRefresh && !learningFeedComplete && !learningReviewBatch && !learningReviewRefresh && !learningReviewAnswer && !learningPreference && !learningKnowledgeRemove &&
         !knowledgeWorkflowStatus && !knowledgeWorkflowSourceStatus && !knowledgeWorkflowControl && !knowledgeWorkflowMaterial && !knowledgeWorkflowBackfill && !knowledgeWorkflowReplay && !learningMedia
       ) {
         return json({ error: "Not found." }, 404);
@@ -189,6 +196,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
       if (origin !== null && origin !== configuration.allowedOrigin) {
         return failureResponse({ kind: "DiscoveryOriginRejected" });
       }
+      if (reminders) return handleReminderRequest(request, authenticated.value.ownerId, dependencies.reminders ?? null);
       if (learningMedia) {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
         if (dependencies.learningMedia == null) return mediaFailureResponse({ kind: "LearningMediaUnavailable" });
@@ -276,6 +284,14 @@ export function createDiscoveryWorker(configuration, dependencies) {
         const result = await dependencies.learningGeneration.status({ ownerId: authenticated.value.ownerId, generationId });
         return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : learningGenerationFailureResponse(result.error);
       }
+      if (learningProgress) {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        if (dependencies.learningBatches?.loadProgress === undefined) return learningBatchFailureResponse({ kind: "ProgressReadUnavailable" });
+        const days = url.searchParams.get("days");
+        if (days === null || !["7", "30", "90"].includes(days)) return learningBatchFailureResponse({ kind: "ProgressCommandInvalid" });
+        const result = await dependencies.learningBatches.loadProgress(authenticated.value.ownerId, Number(days), url.searchParams.get("subject"));
+        return result.ok ? json({ result: result.value }, 200) : learningBatchFailureResponse(result.error);
+      }
       if (learningFeedBatch || learningReviewBatch || learningLibraryKnowledge) {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
         if (dependencies.learningBatches == null) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
@@ -290,6 +306,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         if (result === undefined) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
         return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : learningBatchFailureResponse(result.error);
       }
+      if (learningClassification && request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
       if (learningFeedRefresh || learningFeedComplete || learningReviewRefresh || learningReviewAnswer || learningPreference || learningKnowledgeRemove) {
         if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
         if (dependencies.learningBatches == null) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
@@ -430,6 +447,12 @@ export function createDiscoveryWorker(configuration, dependencies) {
         return projection === null
           ? knowledgeWorkflowFailureResponse({ kind: "ReplayResponseInvalid" })
           : json({ ownerId: authenticated.value.ownerId, result: projection }, 200);
+      }
+      if (learningClassification) {
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return learningBatchFailureResponse({ kind: "ClassificationCommandInvalid" });
+        if (dependencies.learningBatches?.correctClassification === undefined) return learningBatchFailureResponse({ kind: "ClassificationWriteUnavailable" });
+        const result = await dependencies.learningBatches.correctClassification({ ...document, ownerId: authenticated.value.ownerId });
+        return result.ok ? json({ result: result.value }, 200) : learningBatchFailureResponse(result.error);
       }
       if (learningFeedRefresh || learningFeedComplete || learningReviewRefresh || learningReviewAnswer || learningPreference || learningKnowledgeRemove) {
         if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return learningBatchFailureResponse({ kind: "LearningBatchCommandInvalid" });
@@ -1051,9 +1074,9 @@ function learningBatchFailureResponse(failure) {
     : failure.kind === "LearningBatchIncomplete" ||
         failure.kind === "LearningBatchAlreadyClosed" ||
         failure.kind === "ReviewRefreshLocked" ||
-        failure.kind === "ReviewAnswerNotAllowed"
+        failure.kind === "ReviewAnswerNotAllowed" || failure.kind === "ClassificationConflict"
     ? 409
-    : failure.kind === "LearningBatchUnavailable" ||
+    : failure.kind === "ProgressReadUnavailable" || failure.kind === "ProgressHistoryLimitExceeded" || failure.kind === "ProgressDataInvalid" || failure.kind === "ClassificationWriteUnavailable" || failure.kind === "LearningBatchUnavailable" ||
         failure.kind === "ReviewGradePending" ||
         failure.kind === "LearningBatchPersistenceFailed" ||
         failure.kind === "KnowledgePurgeFailed" ||
@@ -1096,9 +1119,10 @@ function publicReplayResult(value, ownerId) {
   return Object.freeze({ status: value.status, ownerId, sourceCount: value.sourceCount, runIds: Object.freeze([...value.runIds]), blockedSources: Object.freeze(blockedSources) });
 }
 
-/** @param {string | null} failureKind @param {string} state @returns {{ readonly reasonCode: "paywall-or-login" | "robots-blocked" | "robots-check-unavailable" | "audio-video-transcription-unavailable" | "rights-not-verified" | "upload-content" | "retryable-failure", readonly message: string } | null} */
-function workflowStatusReason(failureKind, state) {
+/** @param {string | null} failureKind @param {string} state @param {number | null} remainingMs @returns {{ readonly reasonCode: "paywall-or-login" | "robots-blocked" | "robots-check-unavailable" | "audio-video-transcription-unavailable" | "rights-not-verified" | "upload-content" | "retryable-failure", readonly message: string } | null} */
+function workflowStatusReason(failureKind, state, remainingMs) {
   const normalized = (failureKind ?? "").toLowerCase();
+  if (state === "extraction-loop" && remainingMs === 0) return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped after its processing deadline elapsed. Retry processing to try again." });
   if (/extractionplaninvalid/u.test(normalized)) return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped because the planner returned an invalid ExtractionPlan after one correction attempt (ExtractionPlanInvalid). Retry processing to try again." });
   if (state === "retryable-failure") return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped because the workflow encountered a retryable error. Retry processing to try again." });
   if (/paywall|authentication|login|authenticated/u.test(normalized)) return Object.freeze({ reasonCode: "paywall-or-login", message: "This source could not be scraped because it is behind a paywall or requires sign-in. Upload authorized text, PDF, PPTX, or a transcript instead." });
@@ -1115,7 +1139,7 @@ function publicSourceWorkflowStatus(value, ownerId, nowValue) {
   if (!isRecord(value) || value.ownerId !== undefined && value.ownerId !== ownerId || !isNonEmptyText(value.sourceId) || (value.run !== null && !isRecord(value.run))) return null;
   const run = value.run === null ? null : publicWorkflowStatus(value.run, nowValue);
   if (value.run !== null && run === null) return null;
-  const reason = run === null ? null : workflowStatusReason(run.failureKind, run.state);
+  const reason = run === null ? null : workflowStatusReason(run.failureKind, run.state, run.remainingMs);
   return Object.freeze({ sourceId: value.sourceId, run, reasonCode: reason?.reasonCode ?? null, message: reason?.message ?? null });
 }
 

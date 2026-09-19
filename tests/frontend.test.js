@@ -59,7 +59,7 @@ Deno.test("active learner owns Feed rendering while app retains local history co
   );
 });
 
-Deno.test("theme and layout settings are dynamic, owner-scoped, exported, and erased", async () => {
+Deno.test("appearance is owner-scoped, exported, and erased; retired layouts remain storage-compatible", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
   const localDataActions = await Deno.readTextFile(
     new URL("src/startup/local-data-actions.js", root),
@@ -101,11 +101,14 @@ Deno.test("theme and layout settings are dynamic, owner-scoped, exported, and er
   );
   assert(
     source.includes('data-setting="theme"') &&
-      source.includes('data-setting="${setting}"') &&
-      source.includes('"visual-theme"') &&
-      source.includes('"layout"') &&
+      !source.includes('data-setting="layout"') &&
+      !source.includes('data-setting="${setting}"') &&
+      source.includes('themeOption("light", "Fieldnotes")') &&
+      source.includes('themeOption("dark", "Observatory")') &&
+      !source.includes("<legend>Visual theme</legend>") &&
+      !source.includes('<legend>Workspace layout</legend>') &&
       source.includes('data-setting="sound"'),
-    "Settings must expose appearance, dynamic theme/layout, and sound controls.",
+    "Settings must expose the showcase pair and sound, not the retired layout selector.",
   );
   for (
     const preset of [
@@ -119,7 +122,7 @@ Deno.test("theme and layout settings are dynamic, owner-scoped, exported, and er
   ) {
     assert(
       presetSource.includes(`"${preset}"`),
-      `${preset} must be selectable.`,
+      `${preset} must remain readable in existing persisted settings.`,
     );
   }
   assert(
@@ -171,7 +174,7 @@ Deno.test("active learner Feed completion has no legacy visibility tracker", asy
   );
   assert(
     learner.includes('data-action="complete-learner-feed"') &&
-      learner.includes("Bottom reached: mark all five cards studied."),
+      learner.includes("When you’ve studied all five ideas, mark this batch studied to unlock its questions."),
     "The learner owns the explicit Feed completion transition.",
   );
 });
@@ -366,44 +369,22 @@ Deno.test("feed reports a candidate removed after session creation", () => {
   if (!removed.ok) assertEquals(removed.error.kind, "CandidateUnavailable");
 });
 
-Deno.test("all themes and layouts consume independent tokens and preserve motion preferences", async () => {
+Deno.test("showcase themes own composition and preserve motion preferences", async () => {
   const css = await Deno.readTextFile(new URL("src/styles.css", root));
   assert(
     css.includes(':root[data-theme="dark"]'),
     "A paired dark theme is required.",
   );
-  for (
-    const theme of [
-      "collection-index",
-      "learning-pulse",
-    ]
-  ) {
-    assert(
-      css.includes(`:root[data-visual-theme="${theme}"]`) &&
-        css.includes(
-          `:root[data-visual-theme="${theme}"][data-theme="dark"]`,
-        ),
-      `${theme} must define paired token overrides.`,
-    );
+  assert(!css.includes("data-visual-theme"), "Retired presets must not override the selected pair.");
+  for (const family of ["Fraunces", "Syne", "Manrope"]) {
+    assert(css.includes(family), `${family} must be locally available.`);
   }
-  for (
-    const layout of ["guided-stack", "split-desk", "compact-index"]
-  ) {
-    assert(
-      layout === "split-desk" ||
-        css.includes(`.workspace[data-layout="${layout}"]`),
-      `${layout} must be available through the layout axis.`,
-    );
-  }
+  assert(!css.includes("data-layout"), "Persisted legacy layouts must not override the showcase.");
   assert(
-    !/\[data-visual-theme=[^\]]+\][^{,]*\[data-layout=/i.test(css),
-    "Theme and layout selectors must not be coupled.",
-  );
-  assert(
-    css.includes(".learning-card.signal-1") &&
-      css.includes(".learning-card.signal-2") &&
-      css.includes(".learning-card.signal-3"),
-    "All approved decorative signal slots must exist.",
+    css.includes(':root[data-theme="dark"] .app-layout') &&
+      css.includes('.feed-stack { display: grid; grid-template-columns: minmax(0, 1fr)') &&
+      css.includes('.daily-hero') && css.includes('.learner-feed-sentinel'),
+    "Keep distinct showcase shells and hero while the approved refinement makes all Feed cards full-row.",
   );
   assert(
     css.includes("@media (prefers-reduced-motion: reduce)") &&
@@ -424,52 +405,27 @@ Deno.test("all themes and layouts consume independent tokens and preserve motion
 Deno.test("all approved theme text tokens meet WCAG AA contrast", async () => {
   const css = await Deno.readTextFile(new URL("src/styles.css", root));
   const base = readSelectorPrimitives(css, ":root");
-  const collection = {
-    ...base,
-    ...readSelectorPrimitives(
-      css,
-      ':root[data-visual-theme="collection-index"]',
-    ),
-  };
-  const pulse = {
-    ...base,
-    ...readSelectorPrimitives(
-      css,
-      ':root[data-visual-theme="learning-pulse"]',
-    ),
-  };
   const dark = {
     ...base,
     ...readSelectorPrimitives(css, ':root[data-theme="dark"]'),
   };
-  const collectionDark = {
-    ...collection,
-    ...dark,
-    ...readSelectorPrimitives(
-      css,
-      ':root[data-visual-theme="collection-index"][data-theme="dark"]',
-    ),
-  };
-  const pulseDark = {
-    ...pulse,
-    ...dark,
-    ...readSelectorPrimitives(
-      css,
-      ':root[data-visual-theme="learning-pulse"][data-theme="dark"]',
-    ),
-  };
   for (
-    const theme of [base, collection, pulse, dark, collectionDark, pulseDark]
+    const theme of [base, dark]
   ) {
     assertContrast(theme["studio-ink"], theme["studio-paper"], 4.5);
     assertContrast(theme["studio-ink-muted"], theme["studio-paper"], 4.5);
     assertContrast(theme["studio-coral"], theme["studio-paper"], 4.5);
     assertContrast(theme["studio-danger"], theme["studio-white"], 4.5);
+    assertContrast(theme["studio-ink"], theme["studio-white"], 4.5);
+    assertContrast(theme["studio-ink-muted"], theme["studio-white"], 4.5);
+    assertContrast(theme["studio-ink"], theme["studio-teal-soft"], 4.5);
+    assertContrast(theme["studio-focus"], theme["studio-paper"], 3);
+    assertContrast(theme["studio-focus"], theme["studio-white"], 3);
   }
-  for (const theme of [base, collection, pulse]) {
+  for (const theme of [base]) {
     assertContrast(theme["studio-white"], theme["studio-teal"], 4.5);
   }
-  for (const theme of [dark, collectionDark, pulseDark]) {
+  for (const theme of [dark]) {
     assertContrast(theme["action-text"], theme["studio-teal"], 4.5);
   }
 });
@@ -485,7 +441,7 @@ Deno.test("Feed and Review keep study and quiz controls exclusive", async () => 
   assert(
     learner.includes("data-learner-feed-sentinel") &&
       learner.includes('data-action="complete-learner-feed"') &&
-      learner.includes("Reach the bottom to study all five"),
+      learner.includes("Read all five, then mark this batch studied"),
     "Feed must expose the fixed five-card bottom-sentinel study transition.",
   );
   assert(
@@ -611,7 +567,7 @@ Deno.test("Learner controls expose approved targets and batch ownership", async 
   assert(
     !libraryRoute.includes("Review queue") &&
       learner.includes("data-learner-feed-sentinel") &&
-      learner.includes("Reach the bottom to study all five") &&
+      learner.includes("Read all five, then mark this batch studied") &&
       learner.includes("Questions unlock after a Feed batch is studied"),
     "The Review tab must own paired questions and unlock them after Feed completion.",
   );
@@ -721,6 +677,8 @@ Deno.test("Discover route re-entry retries the hosted source capability probe", 
 Deno.test("every project-owned CSS class is used or documented as dynamic", async () => {
   const css = await Deno.readTextFile(new URL("src/styles.css", root));
   const application = [
+    await Deno.readTextFile(new URL("src/features/experience/reveal.js", root)),
+    await Deno.readTextFile(new URL("src/features/reminders/page.js", root)),
     await Deno.readTextFile(new URL("src/app.js", root)),
     await Deno.readTextFile(
       new URL("src/features/notifications/controller.js", root),
@@ -742,7 +700,7 @@ Deno.test("every project-owned CSS class is used or documented as dynamic", asyn
     "is-review-required",
   ]);
   const classes = new Set(
-    [...css.matchAll(/\.([a-z][\w-]*)/gi)].map((match) => match[1]),
+    [...css.replace(/url\([^)]*\)/g, "").matchAll(/\.([a-z][\w-]*)/gi)].map((match) => match[1]),
   );
   for (const className of classes) {
     assert(
@@ -795,10 +753,18 @@ Deno.test("app delegates Review answer feedback to the learner controller", asyn
 
 Deno.test("rerender paths preserve a deliberate focus target", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const libraryRoute = await Deno.readTextFile(new URL("src/routes/library.js", root));
   assert(
     source.includes("document.activeElement === preferred") &&
       source.includes("workspace instanceof HTMLElement"),
     "Failed focus restoration must fall back to the workspace instead of body.",
+  );
+  assert(
+      source.includes("captureTransientViewState()") &&
+      source.includes("restoreTransientViewState(transientState)") &&
+      source.includes("DataTransfer") &&
+      libraryRoute.includes("data-library-details-key"),
+    "Background rerenders must retain Library drafts, selected files, and disclosure state.",
   );
 });
 

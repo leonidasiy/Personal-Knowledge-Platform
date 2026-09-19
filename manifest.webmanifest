@@ -1,24 +1,25 @@
 {
   "name": "Resonance Learning",
   "short_name": "Resonance",
+  "id": "./",
   "description": "A private adaptive learning workspace.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#f4f6f3",
-  "theme_color": "#176a61",
+  "background_color": "#f1f2ec",
+  "theme_color": "#264fc4",
   "icons": [
     {
-      "src": "./assets/fallback-media/Headphones%20Music%20Image.jpg",
+      "src": "./assets/app-icon-192.png",
       "sizes": "192x192",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "./assets/fallback-media/Heungsoon%20Sheet%20Music.jpg",
+      "src": "./assets/app-icon-512.png",
       "sizes": "512x512",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]

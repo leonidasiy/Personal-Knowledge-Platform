@@ -97,7 +97,7 @@ export function createExperienceActions(dependencies) {
 
     /** @param {Event} event */
     updateSound(event) {
-      const target = event.currentTarget;
+      const target = event.target;
       if (!(target instanceof HTMLInputElement)) return;
       const current = dependencies.getSettings();
       const saved = dependencies.store.save(freeze({
@@ -112,6 +112,17 @@ export function createExperienceActions(dependencies) {
       dependencies.setSettings(saved.value, null);
       dependencies.render("settings-summary", null);
       if (saved.value.soundEnabled) dependencies.playInteractionCue();
+    },
+
+    /** @param {Event} event */
+    updateMotion(event) {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      const current = dependencies.getSettings();
+      const saved = dependencies.store.save(freeze({ ...current, motionEnabled: target.checked }));
+      dependencies.setSettings(saved.ok ? saved.value : current, saved.ok ? null : saved.error);
+      dependencies.applyPresentation();
+      dependencies.render("setting-motion", null);
     },
 
     reset() {

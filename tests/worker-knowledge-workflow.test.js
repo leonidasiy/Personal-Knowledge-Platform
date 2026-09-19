@@ -5,7 +5,7 @@ import { createDiscoveryWorker } from "../worker/handler.js";
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
 
-/** @param {{ readonly sourceFailureKind?: string, readonly sourceState?: string, readonly sourceReused?: boolean, readonly workflowMode?: "throw" | "hang" | "malformed" }} [options] */
+/** @param {{ readonly sourceFailureKind?: string, readonly sourceState?: string, readonly sourceReused?: boolean, readonly sourceExpired?: boolean, readonly workflowMode?: "throw" | "hang" | "malformed" }} [options] */
 function makeFixture(options = {}) {
   const source = { id: "source-a", ownerId: "owner-a", origin: "web", submittedUrl: "https://example.test/learn", canonicalUrl: "https://example.test/learn", title: "Learning source", description: "Description", adapter: { id: "adapter", version: "1", granularity: "root", capabilities: ["metadata"] }, interestAreaIds: ["area-a"], identityEvidence: [], state: "active", approvedAt: "2026-08-13T00:00:00.000Z", updatedAt: "2026-08-13T00:00:00.000Z", revision: 1 };
   /** @type {Record<string, unknown>[]} */ const started = [];
@@ -46,7 +46,7 @@ function makeFixture(options = {}) {
         if (options.workflowMode === "malformed") return /** @type {never} */ ({ ok: true });
         return { ok: true, value: { runId: "run-a", state: "extraction-loop", revision: 2, extractionStartedAt: "2026-08-13T00:00:00.000Z", decisionRequired: null, counts: { pages: 1, knowledgePoints: 1, acceptedQuizzes: 0, pendingQuizzes: 0 }, extractionDeadlineAt: "2026-08-13T00:30:00.000Z", failureKind: null } };
       },
-      sourceStatus: async (command) => ({ ok: true, value: { ownerId: /** @type {{ readonly ownerId: string }} */ (command).ownerId, sourceId: /** @type {{ readonly sourceId: string }} */ (command).sourceId, run: { runId: "run-a", state: options.sourceState ?? "awaiting-upload", revision: 3, extractionStartedAt: "2026-08-13T00:00:00.000Z", decisionRequired: options.sourceState === "retryable-failure" ? null : "upload-material", counts: { pages: 1, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0 }, extractionDeadlineAt: "2026-08-13T00:30:00.000Z", failureKind: options.sourceFailureKind ?? "KnowledgePagePaywallDetected" } } }),
+      sourceStatus: async (command) => ({ ok: true, value: { ownerId: /** @type {{ readonly ownerId: string }} */ (command).ownerId, sourceId: /** @type {{ readonly sourceId: string }} */ (command).sourceId, run: { runId: "run-a", state: options.sourceState ?? "awaiting-upload", revision: 3, extractionStartedAt: "2026-08-13T00:00:00.000Z", decisionRequired: options.sourceState === "retryable-failure" ? null : "upload-material", counts: { pages: 1, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0 }, extractionDeadlineAt: options.sourceExpired ? "2026-08-13T00:04:00.000Z" : "2026-08-13T00:30:00.000Z", failureKind: options.sourceFailureKind ?? "KnowledgePagePaywallDetected" } } }),
       control: async (command) => { const value = /** @type {{ readonly action: string, readonly expectedRevision: number }} */ (command); return { ok: true, value: { state: value.action === "stop" ? "paused" : "per-point-quiz-loop", revision: value.expectedRevision + 1 } }; },
       rightsApproved: async (command) => { rightsApproved.push(/** @type {Record<string, unknown>} */ (command)); return { ok: true, value: { state: "robots-check", revision: 3 } }; },
       material: async (command) => { materials.push(/** @type {Record<string, unknown>} */ (command)); return { ok: true, value: { status: "attached", materialId: "material-a", runId: "run-a", reused: false } }; },
@@ -178,6 +178,15 @@ Deno.test("source workflow status does not mislabel a non-planner retryable fail
   const body = /** @type {{ readonly result: Record<string, unknown> }} */ (await response.json());
   assertEquals(body.result.reasonCode, "retryable-failure");
   assertEquals(body.result.message, "Automatic extraction stopped because the workflow encountered a retryable error. Retry processing to try again.");
+});
+
+Deno.test("source workflow status explains an expired extraction as retryable", async () => {
+  const fixture = makeFixture({ sourceState: "extraction-loop", sourceExpired: true });
+  const response = await fixture.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a", { headers: { origin: "https://app.example" } }));
+  assertEquals(response.status, 200);
+  const body = /** @type {{ readonly result: Record<string, unknown> }} */ (await response.json());
+  assertEquals(body.result.reasonCode, "retryable-failure");
+  assertEquals(body.result.message, "Automatic extraction stopped after its processing deadline elapsed. Retry processing to try again.");
 });
 
 Deno.test("authorized material route derives owner, decodes pasted text, and preserves the attestation", async () => {

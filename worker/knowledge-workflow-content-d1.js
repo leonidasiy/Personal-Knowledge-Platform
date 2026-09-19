@@ -1,5 +1,7 @@
 // @ts-check
 
+import { parseClassification } from "../src/features/knowledge-subjects/public.js";
+
 /** @import { ExtractionScratchpad, KnowledgePoint } from "../src/features/knowledge-workflows/extraction.js" */
 /** @import { QuizAttempt, QuizRepository, QuestionDraft } from "../src/features/knowledge-workflows/quiz.js" */
 /** @import { LearningGenerationRecord, LearningTask, LearningUnit } from "../src/features/learning-generation/contracts.js" */
@@ -212,9 +214,11 @@ export class D1QuizRepository {
     }
   }
 
-  /** @param {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly before: string }} command @returns {Promise<ContentResult>} */
+  /** @param {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly before: string, readonly reason?: "quiz-attempt-retention" | "no-meaningful-quiz" }} command @returns {Promise<ContentResult>} */
   async purge(command) {
     if (!text(command?.ownerId) || !text(command.runId) || !text(command.knowledgeId) || !text(command.before)) return { ok: false, error: { kind: "QuizPurgeFailed" } };
+    const reason = command.reason ?? "quiz-attempt-retention";
+    if (reason !== "quiz-attempt-retention" && reason !== "no-meaningful-quiz") return { ok: false, error: { kind: "QuizPurgeFailed" } };
     try {
       const media = await this.#database.prepare("SELECT a.private_original_key, d.private_object_key FROM knowledge_workflow_media_assets a LEFT JOIN knowledge_workflow_media_derivatives d ON d.owner_id = a.owner_id AND d.asset_id = a.asset_id WHERE a.owner_id = ? AND a.run_id = ? AND a.knowledge_id = ?").bind(command.ownerId, command.runId, command.knowledgeId).all();
       if (!media.success || !Array.isArray(media.results)) return { ok: false, error: { kind: "QuizPurgeFailed" } };
@@ -240,15 +244,25 @@ export class D1QuizRepository {
         this.#database.prepare("DELETE FROM extraction_knowledge_points WHERE owner_id = ? AND run_id = ? AND knowledge_id = ?").bind(command.ownerId, command.runId, command.knowledgeId),
         this.#database.prepare("DELETE FROM knowledge_workflow_quiz_attempts WHERE owner_id = ? AND run_id = ? AND knowledge_id = ?").bind(command.ownerId, command.runId, command.knowledgeId),
         this.#database.prepare("DELETE FROM knowledge_workflow_quizzes WHERE owner_id = ? AND run_id = ? AND knowledge_id = ?").bind(command.ownerId, command.runId, command.knowledgeId),
-        this.#database.prepare("INSERT OR IGNORE INTO knowledge_workflow_purge_tombstones (owner_id, tombstone_id, run_id, knowledge_id, purged_before, reason, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(command.ownerId, `purge:${command.runId}:${command.knowledgeId}:${command.before}`, command.runId, command.knowledgeId, command.before, "quiz-attempt-retention", this.#now()),
-        this.#database.prepare("DELETE FROM knowledge_workflow_restrictions WHERE owner_id = ? AND run_id = ? AND knowledge_id = ? AND restricted_until <= ?").bind(command.ownerId, command.runId, command.knowledgeId, command.before),
+        this.#database.prepare("INSERT OR IGNORE INTO knowledge_workflow_purge_tombstones (owner_id, tombstone_id, run_id, knowledge_id, purged_before, reason, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(command.ownerId, `purge:${command.runId}:${command.knowledgeId}:${command.before}`, command.runId, command.knowledgeId, command.before, reason, this.#now()),
+        reason === "no-meaningful-quiz"
+          ? this.#database.prepare("DELETE FROM knowledge_workflow_restrictions WHERE owner_id = ? AND run_id = ? AND knowledge_id = ?").bind(command.ownerId, command.runId, command.knowledgeId)
+          : this.#database.prepare("DELETE FROM knowledge_workflow_restrictions WHERE owner_id = ? AND run_id = ? AND knowledge_id = ? AND restricted_until <= ?").bind(command.ownerId, command.runId, command.knowledgeId, command.before),
       ];
       const results = await this.#database.batch(statements);
-      return results.length === statements.length && results.every((result) => result.success === true) ? { ok: true, value: null } : { ok: false, error: { kind: "QuizPurgeFailed" } };
+      if (results.length !== statements.length || !results.every((result) => result.success === true)) return { ok: false, error: { kind: "QuizPurgeFailed" } };
+      this.#logger({ event: reason === "no-meaningful-quiz" ? "quiz-point-discarded" : "quiz-purge-success", ownerId: command.ownerId, runId: command.runId, knowledgeId: command.knowledgeId });
+      return { ok: true, value: null };
     } catch (error) {
       this.#logger({ event: "quiz-purge-d1-failure", ownerId: command.ownerId, runId: command.runId, knowledgeId: command.knowledgeId, failureKind: "QuizPurgeFailed" });
       return { ok: false, error: { kind: "QuizPurgeFailed" } };
     }
+  }
+
+  /** @param {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly reason: "no-meaningful-quiz" }} command @returns {Promise<ContentResult>} */
+  async discard(command) {
+    if (command?.reason !== "no-meaningful-quiz") return { ok: false, error: { kind: "QuizPurgeFailed" } };
+    return this.purge({ ownerId: command.ownerId, runId: command.runId, knowledgeId: command.knowledgeId, before: this.#now(), reason: command.reason });
   }
 }
 
@@ -257,7 +271,7 @@ function isRecord(value) { return typeof value === "object" && value !== null &&
 /** @param {unknown} value @param {{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number } | undefined} scope @returns {value is ExtractionScratchpad} */
 function isScratchpad(value, scope = undefined) { return isRecord(value) && (scope === undefined || (value.ownerId === scope.ownerId && value.runId === scope.runId && value.sourceId === scope.sourceId && value.sourceRevision === scope.sourceRevision)) && Array.isArray(value.processedUrls) && (value.frontier === undefined || Array.isArray(value.frontier)) && (value.discoveredUrls === undefined || Array.isArray(value.discoveredUrls)) && Array.isArray(value.acceptedHashes) && Array.isArray(value.similarityEvidence) && Array.isArray(value.coverage) && Array.isArray(value.unresolvedGaps) && typeof value.consecutiveNoveltyZero === "number" && typeof value.revision === "number"; }
 /** @param {unknown} value @returns {value is KnowledgePoint} */
-function isKnowledgePoint(value) { return isRecord(value) && typeof value.id === "string" && typeof value.sourceId === "string" && typeof value.sourceRevision === "number" && typeof value.summary === "string" && typeof value.normalizedHash === "string" && Array.isArray(value.evidenceAnchors); }
+function isKnowledgePoint(value) { return isRecord(value) && typeof value.id === "string" && typeof value.sourceId === "string" && typeof value.sourceRevision === "number" && typeof value.summary === "string" && typeof value.normalizedHash === "string" && Array.isArray(value.evidenceAnchors) && (value.classification === undefined || parseClassification(value.classification).ok); }
 /** @param {unknown} value @returns {value is QuizAttempt} */
 function isQuizAttempt(value) { return isRecord(value) && typeof value.id === "string" && typeof value.ownerId === "string" && typeof value.runId === "string" && typeof value.knowledgeId === "string" && positiveInteger(value.attempt) && (value.draftId === null || typeof value.draftId === "string") && (value.score === null || (typeof value.score === "number" && Number.isInteger(value.score) && value.score >= 1 && value.score <= 10)) && (value.feedback === null || typeof value.feedback === "string") && (value.failureKind === null || typeof value.failureKind === "string") && typeof value.createdAt === "string"; }
 /** @param {unknown} value @returns {value is QuestionDraft} */

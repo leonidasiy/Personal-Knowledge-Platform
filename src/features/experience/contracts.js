@@ -17,7 +17,8 @@
  *   readonly themeMode: ThemeMode,
  *   readonly visualTheme: VisualTheme,
  *   readonly layoutMode: LayoutMode,
- *   readonly soundEnabled: boolean
+ *   readonly soundEnabled: boolean,
+ *   readonly motionEnabled?: boolean
  * }} ExperienceSettings
  */
 
@@ -120,6 +121,7 @@
 /**
  * @typedef {{
  *   readonly enabled: boolean,
+ *   readonly cue?: AudioCue,
  *   readonly explicitActivation: boolean
  * }} PlayCueCommand
  */

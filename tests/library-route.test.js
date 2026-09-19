@@ -1,5 +1,6 @@
 import { renderLibraryRoute } from "../src/routes/library.js";
 import { createLibraryPage } from "../src/startup/library-page.js";
+import { SUBJECTS } from "../src/features/knowledge-subjects/public.js";
 
 /** @param {boolean} condition @param {string} message */
 function assert(condition, message) {
@@ -54,6 +55,55 @@ const sourceB = Object.freeze({
   id: "source-b",
   title: "Rhythm source",
   interestAreaIds: Object.freeze(["area-a"]),
+});
+
+Deno.test("Library shelves default to newest subject and sort newest first with stable ties", () => {
+  const newer = { ...sourceB, approvedAt: "2026-09-19T08:00:00.000Z" };
+  const tied = { ...newer, id: "source-c" };
+  const knowledge = [source, newer, tied].map((item, i) => ({ knowledgeId: `k${i}`, sourceId: item.id, summary: "A retained idea.", questionLocked: true, primarySubject: SUBJECTS[i === 0 ? 0 : 1].id }));
+  const model = { ...baseModel(), collection: { ...baseModel().collection, items: [source, newer, tied] }, knowledge };
+  const html = renderLibraryRoute(model);
+  assert(html.includes(`value="${SUBJECTS[1].id}" selected`), "Default shelf must follow the newest source, not incoming array order.");
+  assert(!html.includes('data-library-source="source-a"'), "Other subjects must not be stacked into the selected shelf.");
+  assert(html.indexOf('data-library-source="source-c"') < html.indexOf('data-library-source="source-b"'), "Tied dates need stable descending source identity.");
+  const sameSubject = renderLibraryRoute({ ...model, knowledge: knowledge.map(point => ({ ...point, primarySubject: SUBJECTS[1].id })) });
+  assert(sameSubject.indexOf('data-library-source="source-b"') < sameSubject.indexOf('data-library-source="source-a"'), "Newer dates must precede older sources.");
+  assert(html.includes('data-reveal="source:source-b"'), "Source cards must participate in progressive reveal.");
+});
+
+Deno.test("Library sources appear on each represented primary subject and legacy sources only on Unclassified", () => {
+  const knowledge = SUBJECTS.slice(0, 2).map((subject, i) => ({ knowledgeId: `k${i}`, sourceId: source.id, summary: "A retained idea.", questionLocked: true, primarySubject: subject.id }));
+  for (const selected of [SUBJECTS[0].id, SUBJECTS[1].id, "unclassified", SUBJECTS[2].id]) {
+    const html = renderLibraryRoute({ ...baseModel(), collection: { ...baseModel().collection, subject: selected, items: [source, sourceB] }, knowledge });
+    assert(html.includes('data-library-source="source-a"') === [SUBJECTS[0].id, SUBJECTS[1].id].includes(selected), "A multi-subject source belongs to both matching shelves only.");
+    assert(html.includes('data-library-source="source-b"') === (selected === "unclassified"), "Legacy source needs its explicit neutral shelf.");
+    if (selected === SUBJECTS[2].id) assert(html.includes("No loaded sources in this subject"), "An empty selected shelf must offer recovery.");
+  }
+  let rejected = false;
+  try { renderLibraryRoute({ ...baseModel(), collection: { ...baseModel().collection, subject: "invented-subject" } }); } catch (error) { rejected = error instanceof TypeError; }
+  assert(rejected, "Unknown selected subjects must fail validation.");
+});
+
+Deno.test("Library restores subject selection and reports unavailable or invalid stored preferences", async () => {
+  for (const stored of [SUBJECTS[1].id, "unclassified", "invalid", "throws", null]) {
+    const errors = /** @type {string[]} */ ([]);
+    const page = createLibraryPage({
+      fetch: async input => {
+        const path = new URL(String(input)).pathname;
+        if (path.endsWith("/source-library")) return Response.json({ result: { items: [source, sourceB], interestAreas: [], nextCursor: null } });
+        if (path.endsWith("/library-knowledge")) return Response.json({ result: { items: [source, sourceB].map((item, i) => ({ knowledgeId: `k${i}`, sourceId: item.id, questionId: `q${i}`, title: item.title, summary: "A useful idea.", sourceUrl: item.canonicalUrl, evidenceAnchorIds: ["anchor"], media: null, questionLocked: true, classification: { version: 1, primarySubject: SUBJECTS[i].id, secondarySubjects: [], subcategory: "Source context" }, classificationRevision: 0 })) } });
+        if (path.endsWith("/source-status")) return Response.json({ result: { sourceId: new URL(String(input)).searchParams.get("sourceId"), run: null, reasonCode: null, message: null } });
+        throw new Error(`Unexpected fixture path: ${path}`);
+      },
+      storage: { getItem: key => { assert(key === "resonance-library-subject", "Use the documented preference key."); if (stored === "throws") throw new Error("Synthetic storage denial"); return stored; }, setItem: () => { throw new Error("Reading must not write preferences"); } },
+      gatewayBaseUrl: "https://app.example/", escapeHtml: value => value, formatDate: value => value, createId: () => "id", confirmDisable: () => true,
+      createObserver: () => null, schedule: () => 1, cancel: () => {}, onNotice: () => {}, onError: message => errors.push(message), rerender: () => {},
+    });
+    await page.load();
+    const selected = stored === "unclassified" ? stored : SUBJECTS[1].id;
+    assert(page.render({}).includes(`value="${selected}" selected`), "Valid saved choice or newest-source default must be selected.");
+    assert(errors.length === (stored === "throws" || stored === "invalid" ? 1 : 0), "Invalid and inaccessible preferences need an explicit notice, missing storage does not.");
+  }
 });
 
 Deno.test("Library offers authorized material upload only for an awaiting-upload source", () => {
@@ -224,7 +274,7 @@ Deno.test("Library is source-only and renders a broad related-knowledge overview
   ]) assert(html.includes(expected), `Missing ${expected}.`);
   assert(!html.includes("data-library-knowledge-remove"), "Source cards must not expose individual knowledge controls.");
   assert(!html.includes("Question unlocks after Feed study"), "Source overviews must not expose quiz state for individual points.");
-  assert(html.includes('aria-current="page">Sources'), "Sources must be the only Library section.");
+  assert(html.includes("Library · source collection") && !html.includes('aria-label="Library sections"'), "The source collection must be identified without the retired one-item tab bar.");
   assert(!html.includes("Review queue"), "Library must not render a human or scheduled review queue.");
   assert(!html.includes("Keep") && !html.includes("Discard"), "Library must not render human approval controls.");
 });
@@ -296,6 +346,7 @@ Deno.test("Library announces the number of actively processing sources", () => {
   });
   assert(html.includes('data-library-processing-status'), "Library must render a processing status chip for active work.");
   assert(html.includes("Processing 1 source"), "The status chip must report a singular active source.");
+  assert(html.includes("extracting knowledge points"), "A single active source must expose its current processing stage.");
   assert(html.includes('role="status"'), "The processing chip must use status semantics.");
   assert(html.includes('aria-live="polite"'), "The processing chip must announce updates politely.");
   assert(html.includes('aria-atomic="true"'), "The processing announcement must be atomic.");
@@ -313,6 +364,7 @@ Deno.test("Library pluralizes active processing sources and excludes waiting sta
     ],
   });
   assert(active.includes("Processing 2 sources"), "The status chip must pluralize and count active sources once each.");
+  assert(active.includes("generating and validating review quizzes"), "An active quiz-generation status must explain what processing is doing.");
 
   const terminal = renderLibraryRoute({
     ...baseModel(),
@@ -333,10 +385,10 @@ Deno.test("Library offers unchecked external AI search consent and explains its 
   assert(html.includes("20 candidates"), "Search must disclose its bounded candidate scope.");
 });
 
-Deno.test("Library search reuses shared layout rules", async () => {
+Deno.test("Library search has the approved dedicated search composition and shared select styling", async () => {
   const css = await Deno.readTextFile(new URL("../src/styles.css", import.meta.url));
   assert(!css.includes(".library-knowledge-search {"), "Knowledge search must use the shared section layout.");
-  assert(!css.includes(".library-search-row {"), "Library search controls must use the shared flex defaults.");
+  assert(css.includes(".library-search .library-search-row {"), "Approved redesign gives Library a distinct responsive search composition.");
   assert(!css.includes(".library-search-row select {"), "Library search must not add a one-off select rule.");
 });
 
@@ -380,6 +432,28 @@ Deno.test("Library shows the planner failure reason and retry action", () => {
   assert(html.includes("Retry processing"), "Library must offer a retry action.");
   assert(html.includes('data-library-workflow-retry="run-source-a"'), "Retry action must carry the workflow run ID.");
   assert(!html.includes("data-library-processing-status"), "Retryable failure must not keep the processing spinner visible.");
+});
+
+Deno.test("Library treats an expired extraction as stopped and retryable", () => {
+  const status = workflowStatus("extraction-loop");
+  const html = renderLibraryRoute({
+    ...baseModel(),
+    workflowStatuses: [{
+      ...status,
+      run: {
+        ...status.run,
+        extractionStartedAt: "2026-08-13T00:00:00.000Z",
+        extractionDeadlineAt: "2026-08-13T00:30:00.000Z",
+        elapsedMs: 1_800_001,
+        remainingMs: 0,
+      },
+      reasonCode: "retryable-failure",
+      message: "Automatic extraction stopped after its processing deadline elapsed. Retry processing to try again.",
+    }],
+  });
+  assert(!html.includes('data-library-processing-status'), "An expired extraction must not keep the processing spinner visible.");
+  assert(html.includes("processing deadline elapsed"), "The expired run must explain why processing stopped.");
+  assert(html.includes("Retry processing"), "The expired run must remain retryable.");
 });
 
 Deno.test("Library exposes bounded robots evidence and explicit robots-file absence", () => {

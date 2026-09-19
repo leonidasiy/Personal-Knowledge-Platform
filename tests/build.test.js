@@ -194,8 +194,16 @@ Deno.test("artifact budgets accept exact boundaries", () => {
   );
   assertEquals(javascript.ok, true);
   assertEquals(stylesheet.ok, true);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 210_000);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 67_000);
+  assertEquals(ARTIFACT_BUDGETS.stylesheet.rawBytes, 30_000);
+  assertEquals(ARTIFACT_BUDGETS.stylesheet.gzipBytes, 7_000);
+  const oversizedStylesheet = validateArtifactBudget(
+    { path: "src/styles.css", rawBytes: 30_001, gzipBytes: 1 },
+    ARTIFACT_BUDGETS.stylesheet,
+  );
+  assertEquals(oversizedStylesheet.ok, false);
+  if (!oversizedStylesheet.ok) assertEquals(oversizedStylesheet.error.kind, "ArtifactRawBudgetExceeded");
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 220_000);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 72_000);
 });
 
 Deno.test("service-worker cache identity follows the complete build graph", async () => {

@@ -1,7 +1,9 @@
 // @ts-check
 
+import { parseClassification } from "../knowledge-subjects/public.js";
+
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
-/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly questionId: string, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly media: { readonly assetId: string, readonly kind: string, readonly url: string, readonly attribution: string } | null, readonly questionLocked: boolean }} LearningKnowledgeCard */
+/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly questionId: string, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly media: { readonly assetId: string, readonly kind: string, readonly url: string, readonly attribution: string } | null, readonly questionLocked: boolean, readonly classification?: import("../knowledge-subjects/public.js").Classification | null, readonly classificationRevision?: number }} LearningKnowledgeCard */
 /** @typedef {{ readonly batchId: string, readonly learningDay: string, readonly status: "open" | "completed", readonly itemIds: readonly string[], readonly revision: number, readonly createdAt: string, readonly completedAt: string | null }} LearningBatchProjection */
 /** @typedef {{ readonly batch: LearningBatchProjection | null, readonly items: readonly LearningKnowledgeCard[] }} FeedBatchProjection */
 /** @typedef {{ readonly questionId: string, readonly knowledgeId: string, readonly title: string, readonly prompt: string, readonly kind: string, readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly blanks: readonly { readonly id: string }[] | null, readonly sourceAnchorIds: readonly string[], readonly revision: number }} LearningReviewQuestion */
@@ -30,9 +32,13 @@ function parseBatch(value) {
 /** @param {unknown} value @returns {LearningKnowledgeCard | null} */
 function parseCard(value) {
   if (!record(value) || !text(value.knowledgeId) || !text(value.sourceId) || !text(value.questionId) || !text(value.title) || !text(value.summary) || !text(value.sourceUrl) || !URL.canParse(value.sourceUrl) || !Array.isArray(value.evidenceAnchorIds) || value.evidenceAnchorIds.length === 0 || !value.evidenceAnchorIds.every(text) || typeof value.questionLocked !== "boolean") return null;
+  const classification = value.classification === undefined || value.classification === null ? null : parseClassification(value.classification);
+  if (classification !== null && !classification.ok) return null;
+  const classificationRevision = value.classificationRevision === undefined ? 0 : value.classificationRevision;
+  if (typeof classificationRevision !== "number" || !Number.isSafeInteger(classificationRevision) || classificationRevision < 0) return null;
   const sourceUrl = /** @type {string} */ (value.sourceUrl);
   const media = value.media === null ? null : record(value.media) && text(value.media.assetId) && text(value.media.kind) && text(value.media.url) && text(value.media.attribution) ? freeze({ assetId: value.media.assetId, kind: value.media.kind, url: value.media.url, attribution: value.media.attribution }) : undefined;
-  return media === undefined ? null : freeze({ knowledgeId: value.knowledgeId, sourceId: value.sourceId, questionId: value.questionId, title: value.title, summary: value.summary, sourceUrl, evidenceAnchorIds: freeze([...value.evidenceAnchorIds]), media, questionLocked: value.questionLocked });
+  return media === undefined ? null : freeze({ knowledgeId: value.knowledgeId, sourceId: value.sourceId, questionId: value.questionId, title: value.title, summary: value.summary, sourceUrl, evidenceAnchorIds: freeze([...value.evidenceAnchorIds]), media, questionLocked: value.questionLocked, classification: classification === null ? null : classification.value, classificationRevision });
 }
 
 /** @param {unknown} value @returns {LearningReviewQuestion | null} */
@@ -144,6 +150,17 @@ export class LearningBatchGatewayClient {
   async setPreference(knowledgeId, choice, idempotencyKey) { return this.#command("api/learning-generation/knowledge-preference", { knowledgeId, choice, idempotencyKey }); }
   /** @param {string} knowledgeId @param {string} idempotencyKey @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */
   async removeKnowledge(knowledgeId, idempotencyKey) { return this.#command("api/learning-generation/knowledge-remove", { knowledgeId, idempotencyKey }); }
+
+  /** @param {string} knowledgeId @param {number} expectedRevision @param {unknown} classification @returns {Promise<Result<true, LearningBatchGatewayFailure>>} */
+  async correctClassification(knowledgeId, expectedRevision, classification) {
+    const parsed = parseClassification(classification);
+    if (!text(knowledgeId) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || !parsed.ok) return invalid("classification");
+    const response = await this.#request("api/learning-generation/classification", "POST", { knowledgeId, expectedRevision, classification: parsed.value });
+    if (!response.ok) return response;
+    const value = resultValue(response.value);
+    if (!record(value) || value.classificationRevision !== expectedRevision + 1 || !parseClassification(value.classification).ok) return bad();
+    return { ok: true, value: true };
+  }
 
   /** @param {string} path @param {Record<string, unknown>} body @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */
   async #command(path, body) {

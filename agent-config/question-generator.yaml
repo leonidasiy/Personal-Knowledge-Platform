@@ -4,7 +4,7 @@ model:
   provider: openrouter
   name: z-ai/glm-5.3-flash
 procedureVersion: question-procedure-v1
-promptVersion: question-prompt-v2
+promptVersion: question-prompt-v3
 inputSchema: knowledge-point-handoff-v1
 outputSchema: quiz-draft-v2
 allowedTools:

@@ -29,9 +29,9 @@ Deno.test({
     );
     assert(
       document.includes(
-        '<link rel="icon" href="./assets/fallback-media/Headphones%20Music%20Image.jpg" type="image/jpeg" />',
+        '<link rel="icon" href="./assets/app-icon-192.png" type="image/png" />',
       ),
-      "The shell must declare an active fallback-media icon instead of relying on /favicon.ico.",
+      "The shell must declare its subject-neutral app icon.",
     );
   },
 });
@@ -137,10 +137,16 @@ Deno.test({
       "./",
       "./index.html",
       "./manifest.webmanifest",
+      "./assets/app-icon-192.png",
+      "./assets/app-icon-512.png",
       "./service-worker.js",
       "./asset-manifest.json",
       "./src/app.js",
       "./src/styles.css",
+      "./assets/fonts/fraunces-latin.woff2",
+      "./assets/fonts/manrope-latin.woff2",
+      "./assets/fonts/syne-latin.woff2",
+      "./assets/fonts/LICENSE.txt",
       "./assets/catalog-fixtures.json",
       "./assets/fallback-media/Heungsoon%20Sheet%20Music.jpg",
       "./assets/fallback-media/Headphones%20Music%20Image.jpg",
@@ -415,6 +421,11 @@ Deno.test({
     for (const icon of manifest.icons) {
       const stat = await Deno.stat(new URL(icon.src, root));
       assert(stat.isFile, `${icon.src} must exist.`);
+      const png = await Deno.readFile(new URL(icon.src, root));
+      assertEquals(icon.type, "image/png");
+      assertEquals([...png.slice(0, 8)].join(","), "137,80,78,71,13,10,26,10");
+      const header = new DataView(png.buffer, png.byteOffset, png.byteLength);
+      assertEquals(`${header.getUint32(16)}x${header.getUint32(20)}`, icon.sizes);
     }
   },
 });

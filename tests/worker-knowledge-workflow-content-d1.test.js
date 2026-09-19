@@ -65,6 +65,10 @@ Deno.test("D1 content repository writes scratchpads, knowledge, quiz attempts, r
   assertEquals(fixture.preparedQueries.some((query) => query.includes("DELETE FROM learning_generation_tasks")), true);
   assertEquals(fixture.preparedQueries.some((query) => query.includes("DELETE FROM learning_generation_units")), true);
   assertEquals(fixture.preparedQueries.some((query) => query.includes("DELETE FROM learning_generation_jobs")), true);
+  await quiz.restrict({ ownerId: "owner-a", runId: "run-a", knowledgeId: "knowledge-a", restrictedUntil: "2026-12-12T00:00:00.000Z", reason: "three-failed-submissions" });
+  const discarded = await quiz.discard({ ownerId: "owner-a", runId: "run-a", knowledgeId: "knowledge-a", reason: "no-meaningful-quiz" });
+  assertEquals(discarded.ok, true);
+  assertEquals(fixture.preparedQueries.some((query) => query.includes("DELETE FROM knowledge_workflow_restrictions WHERE owner_id = ? AND run_id = ? AND knowledge_id = ?")), true);
 });
 
 Deno.test("D1 quiz repository detects a duplicate draft for the same source revision", async () => {

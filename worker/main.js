@@ -67,6 +67,7 @@ import { D1KnowledgeWorkflowMaterialRepository } from "./knowledge-workflow-mate
 import { createKnowledgeWorkflowBackfill, createKnowledgeWorkflowReplay } from "../src/features/knowledge-workflows/backfill.js";
 import { D1KnowledgeWorkflowBackfillRepository } from "./knowledge-workflow-backfill-d1.js";
 import { createLearningBatchService } from "./learning-batches-d1.js";
+import { createReminderRuntime } from "./reminders/runtime.js";
 
 /** @import { Result, WorkerFailure } from "./contracts.js" */
 
@@ -117,6 +118,10 @@ import { createLearningBatchService } from "./learning-batches-d1.js";
  *   readonly KNOWLEDGE_WORKFLOW?: unknown,
  *   readonly KNOWLEDGE_WORKFLOW_ENABLED?: unknown,
  *   readonly KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS?: unknown,
+ *   readonly VAPID_PUBLIC_KEY?: unknown,
+ *   readonly VAPID_PRIVATE_KEY?: unknown,
+ *   readonly VAPID_SUBJECT?: unknown,
+ *   readonly REMINDER_PUSH_ORIGINS?: unknown,
  * }} DiscoveryWorkerEnvironment
  */
 
@@ -993,6 +998,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         : { run: (command) => knowledgeWorkflowReplay.run(isRecord(command) ? Object.freeze({ ...command, configDigests: knowledgeWorkflowConfigDigests }) : command) },
       learningMedia: learningMedia === null ? null : { serve: (command) => learningMedia.serve(command) },
       learningBatches,
+      reminders: learningDatabase === null ? null : createReminderRuntime({environment,database:learningDatabase,now:platform.now,fetch:platform.fetch,logger:(entry)=>console.info(JSON.stringify(entry))}),
       now: () => platform.now().toISOString(),
       requestLogger: discoveryRequestLogger,
       waitUntil: platform.waitUntil,

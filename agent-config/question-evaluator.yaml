@@ -4,7 +4,7 @@ model:
   provider: openrouter
   name: z-ai/glm-5.3-flash
 procedureVersion: evaluator-procedure-v1
-promptVersion: evaluator-prompt-v2
+promptVersion: evaluator-prompt-v3
 inputSchema: quiz-evaluation-handoff-v1
 outputSchema: quiz-evaluation-v1
 allowedTools:

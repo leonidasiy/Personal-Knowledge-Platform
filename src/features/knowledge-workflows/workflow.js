@@ -211,13 +211,13 @@ function cloneRun(run) {
 /** @param {KnowledgeWorkflowRun} run @param {WorkflowControlCommand["action"]} action @param {boolean} deadlineReached @returns {boolean} */
 function isAllowedControl(run, action, deadlineReached) {
   if (action === "stop") return run.state === "extraction-loop" && !deadlineReached;
-  if (action === "resume") return run.state === "paused" || run.state === "retryable-failure";
+  if (action === "resume") return run.state === "paused" || run.state === "retryable-failure" || (run.state === "extraction-loop" && deadlineReached);
   if (action === "generate") return run.state === "paused" || run.state === "awaiting-time-limit-decision" || (run.state === "extraction-loop" && deadlineReached);
   return run.state !== "completed" && run.state !== "abandoned";
 }
 
-/** @param {KnowledgeWorkflowRun} run @param {WorkflowControlCommand["action"]} action @param {string} now @returns {KnowledgeWorkflowRun} */
-function nextForControl(run, action, now) {
+/** @param {KnowledgeWorkflowRun} run @param {WorkflowControlCommand["action"]} action @param {string} now @param {boolean} deadlineReached @param {number} envelopeMs @returns {KnowledgeWorkflowRun} */
+function nextForControl(run, action, now, deadlineReached, envelopeMs) {
   const state = action === "stop"
     ? "paused"
     : action === "resume"
@@ -230,6 +230,8 @@ function nextForControl(run, action, now) {
     state,
     revision: run.revision + 1,
     decisionRequired: null,
+    extractionStartedAt: action === "resume" && deadlineReached ? now : run.extractionStartedAt,
+    extractionDeadlineAt: action === "resume" && deadlineReached ? new Date(Date.parse(now) + envelopeMs).toISOString() : run.extractionDeadlineAt,
     updatedAt: now,
     ...(action === "abandon" ? { failureKind: "WorkflowAbandoned" } : action === "resume" ? { failureKind: null } : {}),
   });
@@ -372,7 +374,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         dependencies.logger({ event: "knowledge-workflow.control-success", ownerId: command.ownerId, runId: command.runId, action: command.action });
         return { ok: true, value: cloneRun(run) };
       }
-      const next = nextForControl(run, command.action, now);
+      const next = nextForControl(run, command.action, now, deadlineReached, envelopeMs);
       const updated = await repository.update({ ownerId: command.ownerId, runId: command.runId, expectedRevision: command.expectedRevision, next });
       if (!updated.ok) return updated;
       if (command.action === "abandon" && dependencies.cleanup !== undefined) {

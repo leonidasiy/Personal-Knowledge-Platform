@@ -2,7 +2,17 @@
 
 Resonance is a private learning platform for turning permitted sources into
 source-linked knowledge cards and retrieval-practice quizzes. Music is its first
-subject; the workflow can support other knowledge areas.
+subject; extraction now uses a fixed 22-subject taxonomy with source-specific
+subcategories. Fieldnotes is the light theme and Observatory the dark theme.
+
+## Use it on your computer or phone
+
+Open the [private live site](https://resonance-discovery.lirenleonidas.workers.dev)
+and sign in with your authorized email. No development tools are needed.
+You can use the browser or install its desktop/home-screen web app.
+Follow [desktop, Android and iPhone/iPad setup](documentations/SETUP.md#use-the-live-app).
+Settings controls appearance, motion, sound and optional daily reminders.
+Push delivery is not activated; installation alone does not enable notifications.
 
 ## Try it locally
 
@@ -10,7 +20,7 @@ Install Deno 2, Node.js/npm, and Python 3.
 From a fresh clone:
 
 ```sh
-git clone --branch feat/milestone-5-knowledge-workflows https://github.com/leonidasiy/Personal-Knowledge-Platform.git
+git clone --branch main https://github.com/leonidasiy/Personal-Knowledge-Platform.git
 cd Personal-Knowledge-Platform
 npm ci
 deno task build
@@ -61,6 +71,11 @@ controls, and private storage are part of the hosted path; local fixture study
 and hosted processing are separate modes.
 
 ## Project map
+
+Library offers subject shelves and source/knowledge search. Feed cards reveal
+as you scroll; missing associated imagery leaves no placeholder box. Progress
+shows retrieval, spacing, activity and subject summaries without confidence
+metrics. Historical unclassified records are preserved without backfills.
 
 - [Documentation index](documentations/README.md)
 - [Current specification](documentations/spec.md)

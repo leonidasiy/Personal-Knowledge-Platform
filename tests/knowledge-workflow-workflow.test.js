@@ -243,6 +243,25 @@ Deno.test("the exact extraction deadline permits only generate or abandon", asyn
   if (generate.ok) assertEquals(generate.value.state, "per-point-quiz-loop");
 });
 
+Deno.test("an expired extraction can be retried with a fresh bounded window", async () => {
+  const fixture = setup();
+  const run = (await createRun(fixture.service)).run;
+  await fixture.service.rightsApproved({ ownerId: "owner-a", sourceId: "source-a", sourceRevision: 1 });
+  const extracting = await fixture.service.advance({ ownerId: "owner-a", runId: run.runId, expectedRevision: 2, nextState: "extraction-loop" });
+  if (!extracting.ok) throw new Error(extracting.error.kind);
+  fixture.setNow("2026-08-13T00:30:00.000Z");
+  const retried = await fixture.service.control({ ownerId: "owner-a", runId: run.runId, expectedRevision: extracting.value.revision, action: "resume", idempotencyKey: "resume-expired" });
+  assertEquals(retried.ok, true);
+  if (!retried.ok) return;
+  assertEquals(retried.value.state, "extraction-loop");
+  assertEquals(retried.value.extractionStartedAt, "2026-08-13T00:30:00.000Z");
+  assertEquals(retried.value.extractionDeadlineAt, "2026-08-13T01:00:00.000Z");
+  assertEquals(retried.value.failureKind, null);
+  const stale = await fixture.service.control({ ownerId: "owner-a", runId: run.runId, expectedRevision: extracting.value.revision, action: "resume", idempotencyKey: "resume-expired-stale" });
+  assertEquals(stale.ok, false);
+  if (!stale.ok) assertEquals(stale.error.kind, "WorkflowControlStale");
+});
+
 Deno.test("rights approval advances the matching owner-scoped run exactly once", async () => {
   const fixture = setup();
   const run = (await createRun(fixture.service)).run;

@@ -16,15 +16,15 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   }),
   aggregateJavascript: Object.freeze({
     label: "Aggregate JavaScript",
-    // Milestone 5 adds the authenticated Review queue controls and the
-    // published-source quiz Feed projection. Entry and lazy-chunk budgets
-    // remain unchanged; this aggregate allowance covers their shared graph.
-    rawBytes: 210_000,
-    gzipBytes: 67_000,
+    // Settings/reminders aggregate allowance approved 2026-09-19.
+    // Initial and lazy-chunk limits remain unchanged.
+    rawBytes: 220_000,
+    gzipBytes: 72_000,
   }),
   stylesheet: Object.freeze({
     label: "CSS",
-    rawBytes: 24_000,
+    // Full structural showcase revamp approved 2026-09-19; gzip unchanged.
+    rawBytes: 30_000,
     gzipBytes: 7_000,
   }),
   pdfRenderer: Object.freeze({
@@ -272,6 +272,12 @@ export async function buildProject(configuration, dependencies) {
     const staticCopies = [
       ["index.html", "index.html"],
       ["manifest.webmanifest", "manifest.webmanifest"],
+      ["assets/app-icon-192.png", "assets/app-icon-192.png"],
+      ["assets/app-icon-512.png", "assets/app-icon-512.png"],
+      ["assets/fonts/fraunces-latin.woff2", "assets/fonts/fraunces-latin.woff2"],
+      ["assets/fonts/manrope-latin.woff2", "assets/fonts/manrope-latin.woff2"],
+      ["assets/fonts/syne-latin.woff2", "assets/fonts/syne-latin.woff2"],
+      ["assets/fonts/LICENSE.txt", "assets/fonts/LICENSE.txt"],
       ["service-worker.js", "service-worker.js"],
       ["assets/catalog-fixtures.json", "assets/catalog-fixtures.json"],
       ["assets/discovery-starters.json", "assets/discovery-starters.json"],
@@ -324,6 +330,7 @@ export async function buildProject(configuration, dependencies) {
       outputFile: stylesheetOutput,
       arguments: [
         "--bundle",
+        "--external:*.woff2",
         "--minify",
         "--target=es2022",
         "--legal-comments=none",

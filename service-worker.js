@@ -14,9 +14,15 @@ const SHELL_URLS = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
+  "./assets/app-icon-192.png",
+  "./assets/app-icon-512.png",
   "./service-worker.js",
   "./src/app.js",
   "./src/styles.css",
+  "./assets/fonts/fraunces-latin.woff2",
+  "./assets/fonts/manrope-latin.woff2",
+  "./assets/fonts/syne-latin.woff2",
+  "./assets/fonts/LICENSE.txt",
   "./assets/catalog-fixtures.json",
   "./assets/discovery-starters.json",
   "./assets/fallback-media/Heungsoon%20Sheet%20Music.jpg",
@@ -38,6 +44,60 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(upgradeShell());
 });
+
+self.addEventListener("push", (event) => {
+  event.waitUntil(showReminder(event));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  if (event.notification.tag.startsWith("resonance-reminder:")) {
+    event.waitUntil(openReminder());
+  }
+});
+
+async function showReminder(event) {
+  let payload;
+  try {
+    payload = event.data?.json();
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    throw new Error("ReminderPushInvalid");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+      payload.type !== "daily-reminder" ||
+      typeof payload.id !== "string" || !/^[a-zA-Z0-9:_-]{1,128}$/.test(payload.id) ||
+      typeof payload.expiresAt !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.expiresAt) ||
+      !Number.isFinite(Date.parse(payload.expiresAt)) || new Date(payload.expiresAt).toISOString() !== payload.expiresAt ||
+      (payload.test !== undefined && typeof payload.test !== "boolean")) {
+    throw new Error("ReminderPushInvalid");
+  }
+  // Expired messages must not become a backlog after the phone reconnects.
+  if (Date.parse(payload.expiresAt) <= Date.now()) return;
+  if (Date.parse(payload.expiresAt) > Date.now() + 65 * 60_000) throw new Error("ReminderPushInvalid");
+  await self.registration.showNotification("Resonance", {
+    body: payload.test ? "Your test reminder is ready." : "A little time to revisit what you’ve learned?",
+    icon: new URL("assets/app-icon-192.png", self.registration.scope).href,
+    tag: `resonance-reminder:${payload.id}`,
+    renotify: false,
+  });
+}
+
+async function openReminder() {
+  const scope = new URL(self.registration.scope);
+  const target = new URL("?view=review", scope).href;
+  const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const existing = clients.find((client) => {
+    const url = new URL(client.url);
+    return url.origin === scope.origin && url.pathname.startsWith(scope.pathname);
+  });
+  if (existing) {
+    existing.postMessage({ type: "resonance-reminder-open" });
+    await existing.focus();
+  } else {
+    await self.clients.openWindow(target);
+  }
+}
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;

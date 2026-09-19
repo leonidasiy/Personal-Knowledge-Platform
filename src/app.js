@@ -3,9 +3,11 @@
 import { CatalogRepository } from "./features/catalog/repository.js";
 import { ExposureRepository } from "./features/exposure/repository.js";
 import { ExposureService } from "./features/exposure/service.js";
+import { subjectPresentation } from "./features/knowledge-subjects/presentation.js";
 import { FeedbackAudioService } from "./features/experience/audio.js";
 import { applyPresentationUpdate, resolveTheme } from "./features/experience/presentation.js";
 import { SettingsRepository } from "./features/experience/settings.js";
+import { revealCards } from "./features/experience/reveal.js";
 import { PreferenceRepository } from "./features/preference/repository.js";
 import { PreferenceService } from "./features/preference/service.js";
 import { RecallRepository } from "./features/recall/repository.js";
@@ -15,6 +17,8 @@ import { IndexedDbPersistence } from "./persistence/indexeddb.js";
 import { RECORD_KINDS } from "./persistence/contracts.js";
 
 const freeze = Object.freeze;
+const revealedCards = new Set();
+/** @type {IntersectionObserver|null} */ let cardObserver = null;
 const {
   installNotificationController,
   renderNotification,
@@ -76,7 +80,8 @@ if (!(rootQuery instanceof HTMLElement)) {
 const root = /** @type {HTMLElement} */ (rootQuery);
 root.addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest("button")) {
-    void playInteractionCue();
+    const subject = event.target.closest("[data-subject]")?.getAttribute("data-subject");
+    if (subject) void playInteractionCue(subject); else void playInteractionCue();
   }
 });
 const systemThemeQuery = matchMedia("(prefers-color-scheme: dark)");
@@ -231,6 +236,14 @@ let feedService = null;
 let feedPage = null;
 /** @type {ReturnType<import("./features/learning-generation/learner.js").createLearnerController> | null} */
 let learnerController = null;
+/** @type {ReturnType<import("./features/progress/page.js").createProgressPage>|null} */
+let progressPage = null;
+/** @type {ReturnType<import("./features/reminders/page.js").createSettingsPage>|null} */
+let settingsPage = null;
+/** @type {string|null} */
+let settingsRouteIssue = null;
+/** @type {"ProgressRouteUnavailable"|null} */
+let progressRouteIssue = null;
 /** @type {RankedFeedItem[]} */
 let visibleItems = [];
 let revealedStudyItems = 1;
@@ -274,7 +287,6 @@ let feedRecovery = null;
 let experienceSettings = DEFAULT_SETTINGS;
 /** @type {SettingsFailure | null} */
 let settingsIssue = null;
-let settingsOpen = false;
 let sessionStartPending = false;
 /** @type {Set<string>} */
 const pendingWrites = new Set();
@@ -320,6 +332,7 @@ async function initialize() {
   await loadActiveRoute();
   render();
   registerOfflineSupport();
+  void syncReminderTimeZone();
 }
 
 /** @returns {Promise<boolean>} */
@@ -571,6 +584,27 @@ async function loadActiveRoute() {
   if (activeView === "library") {
     await loadLibraryRoute();
   }
+  if (activeView === "progress") {
+    try {
+      if (progressPage === null) {
+        const module = await import("./features/progress/page.js");
+        progressPage = module.createProgressPage({ fetch, baseUrl: new URL("./", location.href).href, escapeHtml, onChange: () => render() });
+      }
+      progressRouteIssue = null;
+      await progressPage.load();
+    } catch (error) { if (!(error instanceof Error)) throw error; progressRouteIssue = "ProgressRouteUnavailable"; }
+  }
+  if (activeView === "settings") {
+    if (settingsPage === null) {
+      try {
+        const [{ createSettingsPage }, { createReminderClient }] = await Promise.all([
+          import("./features/reminders/page.js"), import("./features/reminders/client.js"),
+        ]);
+        settingsPage = createSettingsPage({ client: createReminderClient({ ownerId: LOCAL_OWNER_ID, fetch, storage: localStorage, navigator }), renderPreferences: renderSettingsPreferences, onChange: () => render() });
+        await settingsPage.load(); settingsRouteIssue = null;
+      } catch (error) { if (!(error instanceof Error)) throw error; settingsRouteIssue = "Reminders are unavailable right now."; }
+    }
+  }
   if (activeView === "discover") {
     if (discoveryPage === null) {
       /** @type {unknown} */ let starterInventory = null;
@@ -631,7 +665,11 @@ async function loadLearnerController() {
     escapeHtml,
     now: () => new Date().toISOString(),
     createId: () => crypto.randomUUID(),
-    onChange: () => render(),
+    onChange: (message) => {
+      notice = message ?? null;
+      if (message === undefined) render();
+      else { errorMessage = null; renderMessagesOnly(); }
+    },
   });
   await Promise.all([learnerController.loadFeed(), learnerController.loadReview()]);
 }
@@ -646,6 +684,7 @@ async function loadLibraryRoute() {
     (module) => {
       libraryPageController = module.createLibraryPage({
         fetch,
+        storage: localStorage,
         gatewayBaseUrl: new URL("./", location.href).href,
         escapeHtml,
           formatDate,
@@ -769,30 +808,169 @@ function renderLoading() {
   root.innerHTML = APP_COPY.openingApp;
 }
 
+/** @param {HTMLFormElement} form @returns {string | null} */
+function transientFormKey(form) {
+  if (form.matches("[data-reminder-form]")) return `reminder:${form.dataset.reminderVersion}`;
+  if (form.dataset.classification) return `classification:${form.dataset.classification}`;
+  if (form.dataset.learnerReviewQuestion) return `review:${form.dataset.learnerReviewBatch}:${form.dataset.learnerReviewQuestion}`;
+  if (form.matches("[data-library-search]")) return "library-search";
+  if (form.matches("[data-discovery-search-form]")) return "discovery-search";
+  const sourceId = form.getAttribute("data-library-upload");
+  return sourceId === null ? null : `library-upload:${sourceId}`;
+}
+
+/** @param {HTMLFormElement} form @returns {(HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement)[]} */
+function transientFormControls(form) {
+  return Array.from(form.elements).filter((element) =>
+    element instanceof HTMLInputElement ||
+    element instanceof HTMLSelectElement ||
+    element instanceof HTMLTextAreaElement
+  );
+}
+
+/** @param {string} formKey @param {HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement} control @param {number} index @returns {string} */
+function transientControlKey(formKey, control, index) {
+  const type = control instanceof HTMLInputElement
+    ? control.type
+    : control.tagName.toLowerCase();
+  return `${formKey}:${index}:${type}:${control.name}`;
+}
+
+/**
+ * Capture only user-editable Library/Discover state. These routes are rebuilt
+ * by background refreshes, while their draft state is not yet persisted.
+ * @returns {{ readonly forms: readonly { readonly key: string, readonly controls: readonly { readonly key: string, readonly value: string, readonly checked: boolean | null, readonly files: readonly File[], readonly selectionStart: number | null, readonly selectionEnd: number | null }[] }[], readonly details: readonly { readonly key: string, readonly open: boolean }[], readonly focus: { readonly key: string, readonly selectionStart: number | null, readonly selectionEnd: number | null } | null } | null}
+ */
+function captureTransientViewState() {
+  const forms = Array.from(root.querySelectorAll("form")).flatMap((form) => {
+    if (!(form instanceof HTMLFormElement)) return [];
+    const key = transientFormKey(form);
+    if (key === null) return [];
+    const controls = transientFormControls(form).map((control, index) => {
+      const isCheckable = control instanceof HTMLInputElement &&
+        (control.type === "checkbox" || control.type === "radio");
+      const isTextControl = control instanceof HTMLInputElement ||
+        control instanceof HTMLTextAreaElement;
+      return {
+        key: transientControlKey(key, control, index),
+        value: control.value,
+        checked: isCheckable ? control.checked : null,
+        files: control instanceof HTMLInputElement && control.type === "file"
+          ? Array.from(control.files ?? [])
+          : [],
+        selectionStart: isTextControl ? control.selectionStart : null,
+        selectionEnd: isTextControl ? control.selectionEnd : null,
+      };
+    });
+    return [{ key, controls }];
+  });
+  const details = Array.from(root.querySelectorAll("details")).flatMap((detail, index) => {
+    const form = detail.closest("form");
+    const formKey = form instanceof HTMLFormElement
+      ? transientFormKey(form)
+      : null;
+    const explicitKey = detail.getAttribute("data-library-details-key");
+    if (explicitKey === null && formKey === null) return [];
+    return [{ key: explicitKey ?? `${formKey}:details:${index}`, open: detail.open }];
+  });
+  const active = document.activeElement;
+  let focus = null;
+  if (active instanceof HTMLInputElement || active instanceof HTMLSelectElement || active instanceof HTMLTextAreaElement) {
+    const form = active.form;
+    const formKey = form === null ? null : transientFormKey(form);
+    if (form !== null && formKey !== null) {
+      const index = transientFormControls(form).indexOf(active);
+      const isTextControl = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+      focus = {
+        key: transientControlKey(formKey, active, index),
+        selectionStart: isTextControl ? active.selectionStart : null,
+        selectionEnd: isTextControl ? active.selectionEnd : null,
+      };
+    }
+  }
+  return forms.length === 0 && details.length === 0 && focus === null
+    ? null
+    : { forms, details, focus };
+}
+
+/** @param {ReturnType<typeof captureTransientViewState>} state */
+function restoreTransientViewState(state) {
+  if (state === null) return;
+  const forms = Array.from(root.querySelectorAll("form")).flatMap((form) => {
+    if (!(form instanceof HTMLFormElement)) return [];
+    const key = transientFormKey(form);
+    return key === null ? [] : [{ key, form }];
+  });
+  for (const savedForm of state.forms) {
+    const current = forms.find((form) => form.key === savedForm.key)?.form;
+    if (current === undefined) continue;
+    const controls = transientFormControls(current);
+    for (const savedControl of savedForm.controls) {
+      const match = controls.find((control, index) => transientControlKey(savedForm.key, control, index) === savedControl.key);
+      if (match === undefined) continue;
+      if (match instanceof HTMLInputElement && match.type === "file") {
+        if (savedControl.files.length > 0 && typeof DataTransfer === "function") {
+          const transfer = new DataTransfer();
+          for (const file of savedControl.files) transfer.items.add(file);
+          match.files = transfer.files;
+        }
+        continue;
+      }
+      match.value = savedControl.value;
+      if (savedControl.checked !== null && match instanceof HTMLInputElement) match.checked = savedControl.checked;
+    }
+  }
+  const details = Array.from(root.querySelectorAll("details")).flatMap((detail, index) => {
+    const form = detail.closest("form");
+    const formKey = form instanceof HTMLFormElement ? transientFormKey(form) : null;
+    const explicitKey = detail.getAttribute("data-library-details-key");
+    return explicitKey === null && formKey === null
+      ? []
+      : [{ key: explicitKey ?? `${formKey}:details:${index}`, detail }];
+  });
+  for (const savedDetail of state.details) {
+    const current = details.find((detail) => detail.key === savedDetail.key)?.detail;
+    if (current !== undefined) current.open = savedDetail.open;
+  }
+  if (state.focus !== null) {
+    const focused = forms.flatMap(({ key, form }) => transientFormControls(form).map((control, index) => ({ key: transientControlKey(key, control, index), control }))).find((entry) => entry.key === state.focus?.key)?.control;
+    if (focused instanceof HTMLElement) {
+      focused.focus({ preventScroll: true });
+      if ((focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) && state.focus.selectionStart !== null && state.focus.selectionEnd !== null) {
+        focused.setSelectionRange(state.focus.selectionStart, state.focus.selectionEnd);
+      }
+    }
+  }
+}
+
 /**
  * @param {string | null} [preferredFocusKey]
  * @param {string | null} [fallbackHeadingId]
  */
 function render(preferredFocusKey = null, fallbackHeadingId = null) {
+  cardObserver?.disconnect();
+  const transientState = captureTransientViewState();
   const activeElement = document.activeElement;
   const previousFocusKey = activeElement instanceof HTMLElement
     ? activeElement.dataset.focusKey ?? null
     : null;
   synchronizeNotification(notifications, notice, errorMessage);
   root.innerHTML =
-    `<div class="app-shell">${renderHeader()}<main class="workspace" id="main-content" tabindex="-1" data-layout="${experienceSettings.layoutMode}">${
+    `<div class="app-shell">${renderHeader()}<div class="app-layout">${renderNavigation()}<main class="workspace" id="main-content" tabindex="-1">${
       startupRestoreIssue !== null
         ? renderStartupRecovery()
         : `${activeView === "feed" ? renderFeed() : ""}${
           activeView === "review" ? renderReviewView() : ""
         }${activeView === "library" ? renderLibraryView() : ""}${
-          activeView === "discover" ? renderDiscoverView() : ""
+          activeView === "discover" ? renderDiscoverView() : ""}${activeView === "progress" ? renderProgressView() : ""}${activeView === "settings" ? renderSettingsView() : ""
         }`
-    }</main><div class="toast-region" aria-atomic="true">${
+    }<footer class="app-footer"><span>Made for a curious mind.<br>A place for what stays.</span><span>Learn. Connect. Return.</span></footer></main></div><div class="toast-region" aria-atomic="true">${
       renderNotification(notifications.current(), escapeHtml)
     }</div></div>`;
   bindInteractions();
   restoreFocus(preferredFocusKey ?? previousFocusKey, fallbackHeadingId);
+  restoreTransientViewState(transientState);
+  cardObserver = revealCards(root, revealedCards, typeof IntersectionObserver === "undefined" ? null : IntersectionObserver);
 }
 
 function renderStartupRecovery() {
@@ -810,13 +988,26 @@ function renderStartupRecovery() {
 }
 
 function renderHeader() {
-  return `<header class="topbar"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><span class="brand-mark" aria-hidden="true">R</span><span>Resonance</span></button><nav class="primary-nav" aria-label="Primary">${
+  return `<header class="topbar"><div class="brand-group"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><svg class="brand-symbol" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M6 28V8h11a7 7 0 0 1 0 14H6m11 0 11 7" stroke="currentColor" stroke-width="3"/><circle cx="29" cy="8" r="3" fill="currentColor"/></svg><span>resonance</span></button><span class="brand-caption">A place for<br>what stays.</span></div><div class="topbar-actions"><span class="local-badge">${
+    navigator.onLine ? "Personal space" : "Offline"
+  }</span><button class="button quiet" type="button" data-view="settings" data-focus-key="settings-button"${activeView === "settings" ? ' aria-current="page"' : ""}>Settings</button></div></header>`;
+}
+
+function renderNavigation() {
+  return `<nav class="primary-nav" aria-label="Primary">${
     navButton("feed", "Feed")
   }${navButton("discover", "Discover")}${navButton("review", "Review", learnerController?.hasDueReview() ?? false)}${
-    navButton("library", "Library")
-  }</nav><div class="topbar-actions"><span class="local-badge">${
-    navigator.onLine ? "Local mode" : "Offline"
-  }</span>${renderSettings()}</div></header>`;
+    navButton("library", "Library")}${navButton("progress", "Progress")
+  }<span class="nav-caption">A little curiosity,<br>every day.</span></nav>`;
+}
+
+function renderSettingsView() {
+  return settingsPage?.render() ?? `<section class="wide-view settings-page" aria-labelledby="settings-title"><div class="section-heading"><h1 id="settings-title">Settings</h1></div><section class="settings-preferences" aria-label="Workspace preferences">${renderSettingsPreferences()}</section><section class="settings-reminders" role="alert"><h2>Daily reminder</h2><p>${escapeHtml(settingsRouteIssue ?? "Loading reminders…")}</p></section></section>`;
+}
+
+function renderProgressView() {
+  if (progressRouteIssue !== null) return '<section class="wide-view state-panel" role="alert"><h1>Progress could not open</h1><p>Reload the page to try again. Your learning records have not changed.</p></section>';
+  return progressPage?.render() ?? '<section class="wide-view state-panel" role="status"><h1>Opening progress</h1></section>';
 }
 
 function renderDiscoverView() {
@@ -829,34 +1020,14 @@ function renderDiscoverView() {
   });
 }
 
-function renderSettings() {
-  return `<details class="settings-menu" ${
-    settingsOpen ? "open" : ""
-  }><summary class="button quiet" data-focus-key="settings-summary">Settings</summary><div class="settings-panel"><fieldset class="settings-group"><legend>Visual theme</legend><div class="segmented-control">${
-    VISUAL_THEMES.map((preset) =>
-      presetOption(
-        "visual-theme",
-        preset.id,
-        preset.label,
-        experienceSettings.visualTheme,
-      )
-    ).join("")
-  }</div></fieldset><fieldset class="settings-group"><legend>Workspace layout</legend><div class="segmented-control">${
-    LAYOUTS.map((preset) =>
-      presetOption(
-        "layout",
-        preset.id,
-        preset.label,
-        experienceSettings.layoutMode,
-      )
-    ).join("")
-  }</div></fieldset><fieldset class="settings-group"><legend>Appearance</legend><div class="segmented-control">${
+function renderSettingsPreferences() {
+  return `<fieldset class="settings-group"><legend>Appearance</legend><p class="settings-form-note">An open notebook by day. An observatory by night. Each has its own layout.</p><div class="segmented-control">${
     themeOption("system", "System")
-  }${themeOption("light", "Light")}${
-    themeOption("dark", "Dark")
+  }${themeOption("light", "Fieldnotes")}${
+    themeOption("dark", "Observatory")
   }</div></fieldset><label class="switch-control"><span><strong>Interface sounds</strong><small>Interaction and quiz cues</small></span><input type="checkbox" data-setting="sound" data-focus-key="setting-sound" ${
     experienceSettings.soundEnabled ? "checked" : ""
-  }></label><form class="daily-settings-form" data-daily-settings-form><fieldset class="settings-group"><legend>Daily learning</legend><label for="daily-study-target">Daily study target</label><input id="daily-study-target" name="daily-study-target" type="number" min="1" max="50" step="1" value="${
+  }></label><label class="switch-control"><span><strong>Interface motion</strong><small>Device reduced-motion settings take priority</small></span><input type="checkbox" data-setting="motion" data-focus-key="setting-motion" ${experienceSettings.motionEnabled === false ? "" : "checked"}></label><form class="daily-settings-form" data-daily-settings-form><fieldset class="settings-group"><legend>Daily learning</legend><label for="daily-study-target">Daily study target</label><input id="daily-study-target" name="daily-study-target" type="number" min="1" max="50" step="1" value="${
     dailySettings?.dailyStudyTarget ?? 5
   }"><label for="daily-recall-limit">Daily recall limit</label><input id="daily-recall-limit" name="daily-recall-limit" type="number" min="0" max="49" step="1" value="${
     dailySettings?.dailyRecallLimit ?? 3
@@ -865,26 +1036,14 @@ function renderSettings() {
             <p>${escapeHtml(friendlySettingsFailure(settingsIssue.kind))}</p>
             <button class="button secondary" type="button" data-action="reset-settings" data-focus-key="reset-settings">Reset display settings</button>
           </div>`
-  }</div></details>`;
-}
-
-/**
- * @param {"visual-theme" | "layout"} setting
- * @param {string} value
- * @param {string} label
- * @param {string} selected
- */
-function presetOption(setting, value, label, selected) {
-  return `<label><input type="radio" name="${setting}" value="${value}" data-setting="${setting}" data-focus-key="${setting}-${value}" ${
-    selected === value ? "checked" : ""
-  }><span>${label}</span></label>`;
+  }`;
 }
 
 /** @param {"system" | "light" | "dark"} mode @param {string} label */
 function themeOption(mode, label) {
   return `<label><input type="radio" name="theme-mode" value="${mode}" data-setting="theme" data-focus-key="theme-${mode}" ${
     experienceSettings.themeMode === mode ? "checked" : ""
-  }><span>${label}</span></label>`;
+  }><span>${label}<small>${mode === "system" ? "Use device" : mode === "light" ? "Light" : "Dark"}</small></span></label>`;
 }
 
 function renderFeed() {
@@ -920,7 +1079,7 @@ function bindInteractions() {
       const view = element.getAttribute("data-view");
       if (
         view === "feed" || view === "discover" || view === "review" ||
-        view === "library"
+        view === "library" || view === "progress" || view === "settings"
       ) {
         activeView = view;
         discoveryItemId = null;
@@ -928,6 +1087,8 @@ function bindInteractions() {
       }
     });
   });
+  if (activeView === "progress") progressPage?.bind(root);
+  if (activeView === "settings") settingsPage?.bind(root);
   if (activeView === "discover") discoveryPage?.bind(root);
   if (activeView === "library") libraryPageController?.bind(root);
   if (learnerController !== null && (activeView === "feed" || activeView === "review")) learnerController.bind(root);
@@ -970,24 +1131,7 @@ function bindInteractions() {
         ),
     );
   });
-  root.querySelectorAll("[data-setting='visual-theme']").forEach((element) => {
-    element.addEventListener(
-      "change",
-      () =>
-        void loadExperienceActions().then((actions) =>
-          actions.updatePreset(element, "visualTheme")
-        ),
-    );
-  });
-  root.querySelectorAll("[data-setting='layout']").forEach((element) => {
-    element.addEventListener(
-      "change",
-      () =>
-        void loadExperienceActions().then((actions) =>
-          actions.updatePreset(element, "layoutMode")
-        ),
-    );
-  });
+  root.querySelector("[data-setting='motion']")?.addEventListener("change", event => { void loadExperienceActions().then(actions => actions.updateMotion(event)); });
   root.querySelector("[data-setting='sound']")?.addEventListener(
     "change",
     (event) =>
@@ -1003,21 +1147,6 @@ function bindInteractions() {
     "submit",
     (event) => void saveDailySettings(event),
   );
-  const settingsMenu = root.querySelector(".settings-menu");
-  settingsMenu?.addEventListener("toggle", () => {
-    if (settingsMenu instanceof HTMLDetailsElement) {
-      settingsOpen = settingsMenu.open;
-    }
-  });
-  settingsMenu?.addEventListener("keydown", (event) => {
-    if (event instanceof KeyboardEvent && event.key === "Escape") {
-      const details = event.currentTarget;
-      if (details instanceof HTMLDetailsElement) {
-        details.open = false;
-        details.querySelector("summary")?.focus();
-      }
-    }
-  });
 }
 
 async function loadMore(restoreAppendedFocus = true) {
@@ -1180,8 +1309,8 @@ function applyExperiencePresentation() {
     systemThemeQuery.matches,
   );
   document.documentElement.dataset.theme = resolved;
-  document.documentElement.dataset.visualTheme = experienceSettings.visualTheme;
-  document.documentElement.dataset.layout = experienceSettings.layoutMode;
+  document.documentElement.dataset.motion = experienceSettings.motionEnabled === false ? "off" : "on";
+  // Legacy presets remain readable/exportable, but only appearance owns composition.
   document.documentElement.style.colorScheme = resolved;
   const themeMeta = document.querySelector("meta[name='theme-color']");
   if (themeMeta instanceof HTMLMetaElement) {
@@ -1205,7 +1334,7 @@ async function loadExperienceActions() {
     layouts: LAYOUTS,
     applyPresentation: applyExperiencePresentation,
     transitions,
-    reducedMotion: () => reducedMotionQuery.matches,
+    reducedMotion: () => reducedMotionQuery.matches || experienceSettings.motionEnabled === false,
     render,
     playInteractionCue: () => void playInteractionCue(),
   });
@@ -1249,14 +1378,16 @@ async function playAnswerCue(correct) {
   await playFeedbackCue(service);
 }
 
-async function playInteractionCue() {
-  await playFeedbackCue(interactionAudio);
+/** @param {string|null} [subject] */
+async function playInteractionCue(subject = null) {
+  await playFeedbackCue(interactionAudio, subjectPresentation(subject)?.cue);
 }
 
-/** @param {FeedbackAudioService} service */
-async function playFeedbackCue(service) {
+/** @param {FeedbackAudioService} service @param {import("./features/experience/contracts.js").AudioCue} [cue] */
+async function playFeedbackCue(service, cue) {
   const played = await service.playCue({
     enabled: experienceSettings.soundEnabled,
+    ...(cue === undefined ? {} : { cue }),
     explicitActivation: true,
   });
   if (played.ok || played.error.kind === "AudioActivationRequired") return;
@@ -1284,7 +1415,7 @@ async function renderWithTransition(focusKey, fallbackHeadingId) {
   await applyPresentationUpdate({
     update: () => render(focusKey, fallbackHeadingId),
     transitions,
-    reducedMotion: reducedMotionQuery.matches,
+    reducedMotion: reducedMotionQuery.matches || experienceSettings.motionEnabled === false,
   });
 }
 
@@ -1322,12 +1453,13 @@ function registerOfflineSupport() {
         applyExperiencePresentation();
       },
       transitions,
-      reducedMotion: reducedMotionQuery.matches,
+      reducedMotion: reducedMotionQuery.matches || experienceSettings.motionEnabled === false,
     });
   });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       void refreshPromptAvailability().then(() => render());
+      if (settingsPage !== null) void settingsPage.syncTimeZone(); else void syncReminderTimeZone();
     }
   });
   addEventListener("hashchange", () => {
@@ -1343,6 +1475,12 @@ function registerOfflineSupport() {
   });
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "resonance-reminder-open") {
+        activeView = "review";
+        discoveryItemId = null;
+        location.hash = "review";
+        return;
+      }
       if (!isOfflineFailureMessage(event.data)) return;
       showOfflineFailure(event.data.kind);
     });
@@ -1350,6 +1488,16 @@ function registerOfflineSupport() {
       .then(watchServiceWorkerInstall)
       .catch(() => showOfflineFailure("OfflineRegistrationFailed"));
   }
+}
+
+async function syncReminderTimeZone() {
+  try {
+    if (localStorage.getItem(`resonance:reminder:${LOCAL_OWNER_ID}:enrolled`) !== "true") return;
+    const { createReminderClient } = await import("./features/reminders/client.js");
+    const client = createReminderClient({ ownerId: LOCAL_OWNER_ID, fetch, storage: localStorage, navigator });
+    const result = await client.syncTimeZone();
+    if (result.message) settingsRouteIssue = result.message;
+  } catch (error) { if (!(error instanceof Error)) throw error; settingsRouteIssue = "Reminder settings could not refresh. Open Settings to retry."; }
 }
 
 /** @param {ServiceWorkerRegistration} registration */
@@ -1585,6 +1733,9 @@ function studyKey(candidateId, contentVersion) {
 
 /** @param {string} hash */
 function parseRoute(hash) {
+  if (!hash && new URLSearchParams(location.search).get("view") === "review") {
+    return { view: /** @type {const} */ ("review"), discoveryItemId: null };
+  }
   const [view, section, rawPromptId] = hash.replace(/^#/, "").split("/");
   let discoveryItemId = null;
   if (view === "discover" && section === "item" && rawPromptId) {
@@ -1596,21 +1747,28 @@ function parseRoute(hash) {
     }
   }
   return {
-    view: view === "discover" || view === "review" || view === "library"
+    view: view === "discover" || view === "review" || view === "library" || view === "progress" || view === "settings"
       ? view
       : "feed",
     discoveryItemId,
   };
 }
 
-/** @param {"feed" | "discover" | "review" | "library"} view @param {string} label @param {boolean} [hasNotification] */
+/** @param {"feed" | "discover" | "review" | "library" | "progress"} view @param {string} label @param {boolean} [hasNotification] */
 function navButton(view, label, hasNotification = false) {
   const active = activeView === view;
+  const icon = {
+    feed: "m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z",
+    discover: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-6-3-2 4-4 2 2-4Z",
+    review: "M4 9a8 8 0 1 1 0 7M4 3v6h6m2-2v5l3 2",
+    library: "M3 4h7v16H3Zm11 0h7v16h-7ZM3 8h7m4 0h7",
+    progress: "M3 3v18h18M6 15l4-5 4 3 6-8",
+  }[view];
   return `
     <button type="button" data-view="${view}" data-focus-key="nav-${view}" class="${
     active ? "active" : ""
   }" ${active ? 'aria-current="page"' : ""}>
-      ${label}${hasNotification ? '<span class="nav-notification-dot" aria-label="Review due"></span>' : ""}
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${icon}"/></svg>${label}${hasNotification ? '<span class="nav-notification-dot" aria-label="Review due"></span>' : ""}
     </button>
   `;
 }

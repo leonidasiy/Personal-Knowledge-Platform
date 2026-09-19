@@ -3,6 +3,7 @@ import { createCloudflareDiscoveryWorker } from "./main.js";
 import { D1QuizRepository } from "./knowledge-workflow-content-d1.js";
 import { createKnowledgeWorkflowRestrictionReaper } from "./knowledge-workflow-reaper.js";
 import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
+import { createReminderRuntime } from "./reminders/runtime.js";
 import { createUnifiedWorkerRouter } from "./static-router.js";
 import { routeWithWorkerVersion } from "./versioned-router.js";
 
@@ -36,8 +37,24 @@ export default {
       environment.CF_VERSION_METADATA,
     );
   },
-  async scheduled(_event, environment) {
+  async scheduled(event, environment) {
     if (!environment?.SOURCE_LIBRARY_DB || typeof environment.SOURCE_LIBRARY_DB.prepare !== "function") throw new Error("Knowledge workflow restriction reaper requires SOURCE_LIBRARY_DB.");
+    if (event.cron === "* * * * *") {
+      const logger = (record) => console.info(JSON.stringify(record));
+      if ([environment.VAPID_PUBLIC_KEY,environment.VAPID_PRIVATE_KEY,environment.VAPID_SUBJECT].every(value=>value===undefined)) {
+        logger({event:"reminder-schedule-unconfigured"});
+        return;
+      }
+      const reminders = createReminderRuntime({environment,database:environment.SOURCE_LIBRARY_DB,now:()=>new Date(),fetch:globalThis.fetch,logger});
+      const result = await reminders.run();
+      if (!result.ok && result.error.kind === "ReminderConfigurationMissing") {
+        logger({event:"reminder-schedule-disabled",failure:result.error.kind});
+        return;
+      }
+      if (!result.ok) throw new Error(result.error.kind);
+      return;
+    }
+    if (event.cron !== "*/15 * * * *") throw new Error("ScheduledTriggerUnsupported");
     const now = () => new Date().toISOString();
     const logger = createKnowledgeWorkflowLogger({ sink: (record) => console.info(JSON.stringify(record)), now });
     const quizRepository = new D1QuizRepository({ database: environment.SOURCE_LIBRARY_DB, bucket: environment.SOURCE_CONTENT_BUCKET, now, logger });

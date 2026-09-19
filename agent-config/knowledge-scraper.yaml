@@ -4,7 +4,7 @@ model:
   provider: openrouter
   name: z-ai/glm-5.3-flash
 procedureVersion: scraper-procedure-v4
-promptVersion: scraper-prompt-v6
+promptVersion: scraper-prompt-v7
 inputSchema: extraction-handoff-v1
 outputSchema: extraction-plan-and-observation-v3
 allowedTools:

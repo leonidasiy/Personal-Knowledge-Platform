@@ -1,5 +1,8 @@
 // @ts-check
 
+import { SUBJECTS, parseClassification } from "../knowledge-subjects/public.js";
+import { subjectPresentation } from "../knowledge-subjects/presentation.js";
+
 import { LearningBatchGatewayClient } from "./batches-gateway.js";
 
 /** @import { FeedBatchProjection, LearningBatchGatewayFailure, LearningKnowledgeCard, LearningReviewQuestion, ReviewBatchProjection } from "./batches-gateway.js" */
@@ -12,7 +15,7 @@ import { LearningBatchGatewayClient } from "./batches-gateway.js";
  *   readonly escapeHtml: (value: string) => string,
  *   readonly now: () => string,
  *   readonly createId: () => string,
- *   readonly onChange: () => void
+ *   readonly onChange: (notice?: string) => void
  * }} LearnerControllerDependencies
  */
 
@@ -26,6 +29,8 @@ export function createLearnerController(dependencies) {
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: FeedBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let feed = { state: "idle", value: null, error: null };
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: ReviewBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let review = { state: "idle", value: null, error: null };
   /** @type {Map<string, { readonly correct: boolean, readonly score: number, readonly explanation: string, readonly correctAnswer: string, readonly components: readonly { readonly id: string, readonly correct: boolean, readonly correctAnswer: string }[] }> } */ const answers = new Map();
+
+  let classificationMessage = "";
 
   function day() { return now().slice(0, 10); }
 
@@ -118,6 +123,8 @@ export function createLearnerController(dependencies) {
     if (!result.ok) {
       feed = { state: "error", value: feed.value, error: result.error };
       onChange();
+    } else {
+      onChange("Preference saved.");
     }
   }
 
@@ -147,18 +154,52 @@ export function createLearnerController(dependencies) {
   }
 
   function renderFeed() {
-    if (feed.state === "loading" && feed.value === null) return `<section class="wide-view state-panel" role="status" aria-busy="true"><p class="eyebrow">Feed</p><h1>Preparing today's five knowledge cards</h1><p>Matching paired source knowledge and media.</p></section>`;
-    if (feed.state === "error" && feed.value === null) return statePanel("Feed", friendly(feed.error), "retry-learner-feed");
+    return `<section class="daily-page" aria-label="Your daily selection"><div class="daily-hero"><div class="hero-copy"><h1>Make room for a new thought.</h1><p>Five ideas to explore at your own pace. Read, connect, then try bringing them back.</p></div><div class="idea-art" aria-hidden="true"><svg class="field-art" viewBox="0 0 520 355" fill="none"><rect x="40" y="24" width="426" height="292" rx="3" fill="var(--surface-subtle)" transform="rotate(-5 253 170)"/><rect x="58" y="20" width="420" height="294" rx="3" fill="var(--surface)" stroke="var(--border)" transform="rotate(4 268 167)"/><path d="M100 90h320M100 130h320M100 170h320M100 210h320M100 250h320M140 60v215M200 60v215M260 60v215M320 60v215M380 60v215" stroke="var(--border)" opacity=".4"/><g stroke="var(--action)" stroke-width="1.6" transform="translate(268 160) rotate(-22)"><ellipse rx="156" ry="55"/><ellipse rx="145" ry="68"/><ellipse rx="128" ry="82"/><ellipse rx="106" ry="99"/><ellipse rx="81" ry="118"/><ellipse rx="53" ry="129"/><ellipse rx="25" ry="137"/></g><circle cx="400" cy="143" r="8" fill="var(--action)"/></svg><svg class="observatory-art" viewBox="0 0 470 350" fill="none"><g stroke="var(--border)"><ellipse cx="238" cy="169" rx="162" ry="110" transform="rotate(-18 238 169)" stroke-dasharray="3 8"/><circle cx="238" cy="169" r="135" opacity=".4"/><path d="m85 220 63-129 90 78 136-49-30 145-106-96-153 51m63-129 196 174"/></g><g fill="var(--surface)" stroke="var(--action)" stroke-width="1.5"><circle cx="238" cy="169" r="43"/><circle cx="148" cy="91" r="24"/><circle cx="374" cy="120" r="21"/><circle cx="344" cy="265" r="29"/><circle cx="85" cy="220" r="18"/></g><g fill="var(--action)"><circle cx="238" cy="169" r="9"/><circle cx="148" cy="91" r="5"/><circle cx="374" cy="120" r="4"/><circle cx="344" cy="265" r="6"/><circle cx="85" cy="220" r="4"/></g><g fill="var(--text-muted)" font-size="11"><text x="205" y="231">Your curiosity</text><text x="109" y="47">Patterns</text><text x="351" y="83">Rhythm</text><text x="318" y="315">Nature</text><text x="40" y="260">Motion</text></g></svg></div></div>${renderFeedHeading()}<div class="daily-grid">${renderFeedBody()}</div></section>`;
+  }
+
+  function renderFeedHeading() {
     const value = feed.value;
-    if (value === null || value.batch === null || value.items.length === 0) return `<section class="wide-view state-panel" aria-labelledby="feed-title"><p class="eyebrow">Feed</p><h1 id="feed-title">No complete learning batch yet</h1><p>Five paired knowledge cards are required before Feed can open a batch.</p><button class="button primary" type="button" data-action="retry-learner-feed">Refresh</button></section>`;
+    if (value === null || value.batch === null || value.items.length === 0) return "";
     const complete = value.batch.status === "completed";
-    return `<section class="feed-column learner-feed" aria-labelledby="feed-title"><div class="section-heading"><div><p class="eyebrow">Daily batch · ${value.items.length} of 5</p><h1 id="feed-title">Learning feed</h1></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-feed">Refresh batch</button>` : `<p class="batch-lock-status">Reach the bottom to study all five</p>`}</div><div class="feed-stack">${value.items.map(renderCard).join("")}</div><div class="learner-feed-sentinel" data-learner-feed-sentinel role="status">${complete ? `<p>Batch studied. Paired questions are unlocked in Review.</p>` : `<p>Bottom reached: mark all five cards studied.</p><button class="button primary" type="button" data-action="complete-learner-feed">Mark batch studied</button>`}</div>${feed.state === "error" ? `<p class="state-inline" role="alert">${escapeHtml(friendly(feed.error))}</p>` : ""}</section>`;
+    return `<div class="section-heading"><div><h2 id="feed-title">Your five ideas</h2><p>${value.items.length} cards in this batch</p></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-feed">Refresh batch</button>` : `<p class="batch-lock-status">Read all five, then mark this batch studied</p>`}</div>`;
+  }
+
+  function renderFeedBody() {
+    if (feed.state === "loading" && feed.value === null) return `<section class="wide-view state-panel" role="status" aria-busy="true"><p class="eyebrow">Feed</p><h2>Preparing today's five knowledge cards</h2><p>Matching paired source knowledge and media.</p></section>`;
+    if (feed.state === "error" && feed.value === null) return statePanel("Feed", friendly(feed.error), "retry-learner-feed", "h2");
+    const value = feed.value;
+    if (value === null || value.batch === null || value.items.length === 0) return `<section class="wide-view state-panel" aria-labelledby="feed-title"><p class="eyebrow">Feed</p><h2 id="feed-title">No complete learning batch yet</h2><p>Five paired knowledge cards are required before Feed can open a batch.</p><button class="button primary" type="button" data-action="retry-learner-feed">Refresh</button></section>`;
+    const complete = value.batch.status === "completed";
+    return `<section class="feed-column learner-feed" aria-labelledby="feed-title">${classificationMessage === "" ? "" : `<p role="status">${escapeHtml(classificationMessage)}</p>`}<div class="feed-stack">${value.items.map(renderCard).join("")}</div><div class="learner-feed-sentinel" data-learner-feed-sentinel><div><h2>${complete ? "Ready to bring it back?" : "A natural place to pause."}</h2><p role="status">${complete ? "Batch studied. Paired questions are unlocked in Review." : "When you’ve studied all five ideas, mark this batch studied to unlock its questions."}</p></div><div class="hero-actions">${complete ? `<button class="button primary" type="button" data-view="review">Open Review</button>` : `<button class="button primary" type="button" data-action="complete-learner-feed">Mark batch studied</button>`}<button class="button quiet" type="button" data-view="progress">Explore your progress</button></div></div>${feed.state === "error" ? `<p class="state-inline" role="alert">${escapeHtml(friendly(feed.error))}</p>` : ""}</section>`;
   }
 
   /** @param {LearningKnowledgeCard} card */
   function renderCard(card) {
-    const media = card.media === null || card.media.url.startsWith("/assets/fallback-media/") ? "" : `<div class="card-media"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true" data-fallback-src="/assets/fallback-media/Christmas%20Music%20Image.png"><span class="media-attribution">${escapeHtml(card.media.attribution)}</span></div>`;
-    return `<article class="learning-card" data-knowledge-id="${escapeHtml(card.knowledgeId)}">${media}<div class="card-body"><p class="selection-reason">From ${escapeHtml(card.title)}</p><h2>${escapeHtml(card.title)}</h2><p>${escapeHtml(card.summary)}</p><details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details><p class="paired-question-status">${card.questionLocked ? "Question locked until this batch is studied." : "Paired question unlocked in Review."}</p><div class="preference-controls"><button class="button preference-more" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}">More like this</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Less like this</button><button class="button quiet" type="button" data-action="remove-learner-knowledge" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Remove</button></div></div></article>`;
+    const classification = card.classification ?? null;
+    const presentation = subjectPresentation(classification?.primarySubject ?? null);
+    const subject = presentation === null ? "" : ` data-subject="${escapeHtml(classification?.primarySubject ?? "")}" style="--subject-hue:${presentation.hue};--subject-turn:${presentation.turn}"`;
+    const mark = presentation === null ? "" : `<svg class="subject-mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="${presentation.path}"/></svg>`;
+    const media = card.media === null || card.media.url.startsWith("/assets/fallback-media/") ? "" : `<figure class="card-media"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true"><figcaption class="media-attribution">${escapeHtml(card.media.attribution)}</figcaption></figure>`;
+    return `<article class="learning-card"${subject} data-reveal="knowledge:${escapeHtml(card.knowledgeId)}" data-knowledge-id="${escapeHtml(card.knowledgeId)}"><div class="card-body"><p class="card-knowledge">${escapeHtml(card.summary)}</p>${media}<h3 class="card-source"><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">${escapeHtml(card.title)}</a></h3><p class="card-subject">${mark}${escapeHtml(presentation?.label ?? "Unclassified")}</p><div class="card-context">${classificationEditor(card)}<details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details></div><div class="preference-controls"><button class="button preference-more" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}">More like this</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Less like this</button><button class="button quiet" type="button" data-action="remove-learner-knowledge" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Remove</button></div></div></article>`;
+  }
+
+  /** @param {LearningKnowledgeCard} card */
+  function classificationEditor(card) {
+    const classification = card.classification;
+    /** @param {string} name @param {string} label @param {string|null|undefined} selected */
+    const select = (name, label, selected) => `<label>${label}<select name="${name}"><option value="">None / unclassified</option>${SUBJECTS.map(subject => `<option value="${subject.id}" ${subject.id === selected ? "selected" : ""}>${escapeHtml(subject.label)}</option>`).join("")}</select></label>`;
+    return `<details data-library-details-key="classification-${escapeHtml(card.knowledgeId)}"><summary>${escapeHtml(classification?.subcategory ?? "Subject details")} · Edit classification</summary><form class="classification-form" data-classification="${escapeHtml(card.knowledgeId)}" data-revision="${card.classificationRevision ?? 0}">${select("primary", "Main subject", classification?.primarySubject)}${select("secondary1", "Secondary subject", classification?.secondarySubjects[0])}${select("secondary2", "Second secondary subject", classification?.secondarySubjects[1])}<label>Subcategory<input name="subcategory" maxlength="80" value="${escapeHtml(classification?.subcategory ?? "")}"></label><button class="button secondary" type="submit">Save classification</button></form></details>`;
+  }
+
+  /** @param {HTMLFormElement} form */
+  async function correctClassification(form) {
+    const values = new FormData(form);
+    const classification = { version: 1, primarySubject: values.get("primary") || null, secondarySubjects: [values.get("secondary1"), values.get("secondary2")].filter(value => value !== ""), subcategory: String(values.get("subcategory") ?? "").trim() || null };
+    const parsed = parseClassification(classification);
+    if (!parsed.ok) { classificationMessage = "Choose distinct subjects and a short plain-text subcategory. Unclassified items must have no subcategory or secondary subjects."; onChange(); return; }
+    const result = await gateway.correctClassification(form.dataset.classification ?? "", Number(form.dataset.revision), parsed.value);
+    classificationMessage = result.ok ? "Classification saved." : result.error.kind === "LearningBatchGatewayRejected" && result.error.failureKind === "ClassificationConflict" ? "This classification changed elsewhere. Reload the page before editing again." : "Classification could not be saved. Your changes have not been applied.";
+    if (result.ok) await loadFeed(); else onChange();
   }
 
   function renderReview() {
@@ -167,7 +208,7 @@ export function createLearnerController(dependencies) {
     const value = review.value;
     if (value === null || value.questions.length === 0) return `<section class="wide-view state-panel" aria-labelledby="review-title"><p class="eyebrow">Review</p><h1 id="review-title">No questions are due</h1><p>Questions unlock after a Feed batch is studied and return according to their review interval.</p><button class="button secondary" type="button" data-action="refresh-learner-review">Refresh questions</button></section>`;
     const complete = value.batch?.status === "completed" || [...answers.keys()].filter((id) => value.questions.some((question) => question.questionId === id)).length === value.questions.length;
-    return `<section class="review-route wide-view" aria-labelledby="review-title"><div class="section-heading"><div><p class="eyebrow">Due batch · ${value.questions.length} question${value.questions.length === 1 ? "" : "s"}</p><h1 id="review-title">Review</h1></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-review">Refresh questions</button>` : `<p class="batch-lock-status">Answer every question before refreshing</p>`}</div>${review.error === null ? "" : `<p class="state-inline" role="alert">${escapeHtml(friendly(review.error))}</p>`}<div class="review-question-list">${value.questions.map(renderQuestion).join("")}</div></section>`;
+    return `<section class="review-route wide-view" aria-labelledby="review-title"><div class="section-heading"><div><p class="eyebrow">Due batch · ${value.questions.length} question${value.questions.length === 1 ? "" : "s"}</p><h1 id="review-title">Meet an idea again.</h1><p>Bring it back before you look. Then let the feedback guide your next attempt.</p></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-review">Refresh questions</button>` : `<p class="batch-lock-status">Answer every question before refreshing</p>`}</div>${review.error === null ? "" : `<p class="state-inline" role="alert">${escapeHtml(friendly(review.error))}</p>`}<div class="review-question-list">${value.questions.map(renderQuestion).join("")}</div></section>`;
   }
 
   /** @param {LearningReviewQuestion} question */
@@ -186,11 +227,12 @@ export function createLearnerController(dependencies) {
     return `<article class="review-card" data-review-question="${escapeHtml(question.questionId)}"><p class="review-question-meta">Paired with ${escapeHtml(question.title)}</p><h2>${escapeHtml(question.prompt)}</h2>${body}${feedback}</article>`;
   }
 
-  /** @param {string} title @param {string} message @param {string} action */
-  function statePanel(title, message, action) { return `<section class="wide-view state-panel" role="alert"><p class="eyebrow">${escapeHtml(title)}</p><h1>${escapeHtml(message)}</h1><button class="button primary" type="button" data-action="${action}">Try again</button></section>`; }
+  /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */
+  function statePanel(title, message, action, heading = "h1") { return `<section class="wide-view state-panel" role="alert"><p class="eyebrow">${escapeHtml(title)}</p><${heading}>${escapeHtml(message)}</${heading}><button class="button primary" type="button" data-action="${action}">Try again</button></section>`; }
 
   /** @param {HTMLElement} root */
   function bind(root) {
+    root.querySelectorAll("form[data-classification]").forEach(form => form.addEventListener("submit", event => { event.preventDefault(); if (form instanceof HTMLFormElement) void correctClassification(form); }));
     root.querySelector("[data-action='retry-learner-feed']")?.addEventListener("click", () => void loadFeed());
     root.querySelector("[data-action='retry-learner-review']")?.addEventListener("click", () => void loadReview());
     root.querySelector("[data-action='refresh-learner-feed']")?.addEventListener("click", () => void refreshFeed());
@@ -198,7 +240,7 @@ export function createLearnerController(dependencies) {
     root.querySelector("[data-action='refresh-learner-review']")?.addEventListener("click", () => void refreshReview());
     root.querySelectorAll("[data-action='learner-preference']").forEach((element) => element.addEventListener("click", () => { if (element instanceof HTMLElement) void preference(element); }));
     root.querySelectorAll("[data-action='remove-learner-knowledge']").forEach((element) => element.addEventListener("click", () => { if (element instanceof HTMLElement) void removeKnowledge(element); }));
-    root.querySelectorAll("img[data-associated-media]").forEach((element) => element.addEventListener("error", () => { if (!(element instanceof HTMLImageElement) || element.dataset.fallbackUsed === "true") return; const fallback = element.dataset.fallbackSrc; if (fallback === undefined || fallback === "") return; element.dataset.fallbackUsed = "true"; element.src = fallback; }));
+    root.querySelectorAll("img[data-associated-media]").forEach((element) => element.addEventListener("error", () => { element.closest(".card-media")?.remove(); }));
     root.querySelectorAll("[data-learner-review]").forEach((element) => element.addEventListener("submit", (event) => { event.preventDefault(); if (event.currentTarget instanceof HTMLFormElement) void answerReview(event.currentTarget); }));
   }
 

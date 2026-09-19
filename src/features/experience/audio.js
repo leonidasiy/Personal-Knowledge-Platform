@@ -38,7 +38,8 @@ export class FeedbackAudioService {
       typeof command !== "object" ||
       command === null ||
       typeof command.enabled !== "boolean" ||
-      typeof command.explicitActivation !== "boolean"
+      typeof command.explicitActivation !== "boolean" ||
+      (command.cue !== undefined && !isValidCue(command.cue))
     ) {
       throw new TypeError(
         "playCue requires enabled and explicitActivation booleans.",
@@ -77,13 +78,14 @@ export class FeedbackAudioService {
     }
 
     try {
+      const cue = command.cue ?? this.#cue;
       const startedAt = this.#context.currentTime;
-      const stoppedAt = startedAt + this.#cue.durationSeconds;
+      const stoppedAt = startedAt + cue.durationSeconds;
       const oscillator = this.#context.createOscillator();
       const gain = this.#context.createGain();
-      oscillator.type = this.#cue.oscillatorType;
-      oscillator.frequency.setValueAtTime(this.#cue.frequencyHz, startedAt);
-      gain.gain.setValueAtTime(this.#cue.peakGain, startedAt);
+      oscillator.type = cue.oscillatorType;
+      oscillator.frequency.setValueAtTime(cue.frequencyHz, startedAt);
+      gain.gain.setValueAtTime(cue.peakGain, startedAt);
       gain.gain.exponentialRampToValueAtTime(0.0001, stoppedAt);
       oscillator.connect(gain);
       gain.connect(this.#context.destination);

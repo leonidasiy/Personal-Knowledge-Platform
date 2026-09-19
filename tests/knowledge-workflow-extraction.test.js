@@ -28,7 +28,7 @@ function setup() {
       /** @param {{ readonly url: string }} command */
       async fetchPage(command) {
         const page = command.url.endsWith("/a")
-          ? { url: command.url, title: "A", byteCount: 100, redirects: 0, links: ["https://example.test/b"], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Core concept", normalizedHash: "hash-a", evidenceAnchors: [{ url: command.url, selector: "#a", quoteDigest: "sha256:evidence-a" }], coverageGoalIds: ["goal-a"], mediaCandidates: [] }] }
+          ? { url: command.url, title: "A", byteCount: 100, redirects: 0, links: ["https://example.test/b"], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Core concept", normalizedHash: "hash-a", evidenceAnchors: [{ url: command.url, selector: "#a", quoteDigest: "sha256:evidence-a" }], coverageGoalIds: ["goal-a"], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] }
           : command.url.endsWith("/b")
           ? { url: command.url, title: "B", byteCount: 100, redirects: 0, links: ["https://example.test/c"], observedAt: "2026-08-13T00:00:00.000Z", candidates: [] }
           : { url: command.url, title: "C", byteCount: 100, redirects: 0, links: [], observedAt: "2026-08-13T00:00:00.000Z", candidates: [] };
@@ -77,7 +77,7 @@ Deno.test("five-page extraction batches checkpoint before consumption and resume
       key: "material-and-config-digest",
       async fetchBatch({ urls: batchUrls }) {
         calls.push([...batchUrls]);
-        return { ok: true, value: batchUrls.map((url) => ({ url, title: url, byteCount: 10, redirects: 0, links: [], observedAt: fixture.dependencies.now(), notes: "Brief progress, no raw text.", candidates: url.endsWith("/0") ? [{ summary: "A supported relationship.", normalizedHash: "batch-point", evidenceAnchors: [{ url, selector: "page:1" }], coverageGoalIds: [], mediaCandidates: [] }] : [] })) };
+        return { ok: true, value: batchUrls.map((url) => ({ url, title: url, byteCount: 10, redirects: 0, links: [], observedAt: fixture.dependencies.now(), notes: "Brief progress, no raw text.", candidates: url.endsWith("/0") ? [{ summary: "A supported relationship.", normalizedHash: "batch-point", evidenceAnchors: [{ url, selector: "page:1" }], coverageGoalIds: [], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] : [] })) };
       },
     },
   };
@@ -133,6 +133,7 @@ Deno.test("extraction replans, commits cited knowledge, and preserves the agent-
   assertEquals(result.value.state, "completed");
   assertEquals(fixture.points.length, 1);
   assertEquals(fixture.points[0].evidenceAnchors[0].selector, "#a");
+  assertEquals(JSON.stringify(fixture.points[0].classification), JSON.stringify({ version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" }));
   assertEquals(result.value.scratchpad.consecutiveNoveltyZero, 2);
   assertEquals(result.value.scratchpad.processedUrls.join(","), "https://example.test/a,https://example.test/b,https://example.test/c");
   assertEquals(result.value.scratchpad.discoveredUrls?.join(","), "https://example.test/a,https://example.test/b,https://example.test/c");
@@ -178,7 +179,7 @@ Deno.test("extraction preserves every discovered branch when a replan declares c
       async fetchPage(command) {
         const links = pages.get(command.url);
         if (links === undefined) return { ok: false, error: { kind: "UnexpectedPage" } };
-        return { ok: true, value: { url: command.url, title: command.url, byteCount: 100, redirects: 0, links, observedAt: "2026-08-13T00:00:00.000Z", candidates: command.url.endsWith("/a") ? [{ summary: "Core concept", normalizedHash: "hash-a", evidenceAnchors: [{ url: command.url, selector: "main" }], coverageGoalIds: ["goal-a"], mediaCandidates: [] }] : [] } };
+        return { ok: true, value: { url: command.url, title: command.url, byteCount: 100, redirects: 0, links, observedAt: "2026-08-13T00:00:00.000Z", candidates: command.url.endsWith("/a") ? [{ summary: "Core concept", normalizedHash: "hash-a", evidenceAnchors: [{ url: command.url, selector: "main" }], coverageGoalIds: ["goal-a"], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] : [] } };
       },
     },
   });
@@ -194,7 +195,7 @@ Deno.test("extraction completes when a covered frontier is exhausted", async () 
   const runner = createExtractionRunner({ ...fixture.dependencies, planner: {
     async plan() { return { ok: true, value: { revision: 1, frontier: ["https://example.test/a"], coverageGoals: [{ id: "goal-a", priority: "high", description: "core concept" }], unresolvedGaps: [], stopDecision: { decision: "continue", rationale: "Observe the planned root page.", evidenceUrls: ["https://example.test/a"], unresolvedGapIds: [] } } }; },
     async replan() { return { ok: true, value: { revision: 2, frontier: [], coverageGoals: [{ id: "goal-a", priority: "high", description: "core concept" }], unresolvedGaps: [], stopDecision: { decision: "complete", rationale: "The only relevant page has been observed and the goal is covered.", evidenceUrls: ["https://example.test/a"], unresolvedGapIds: [] } } }; },
-  }, acquirer: { async fetchPage(command) { return { ok: true, value: { url: command.url, title: "A", byteCount: 100, redirects: 0, links: [], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Core concept", normalizedHash: "hash-a", evidenceAnchors: [{ url: command.url, selector: "#a" }], coverageGoalIds: ["goal-a"], mediaCandidates: [] }] } }; } } });
+  }, acquirer: { async fetchPage(command) { return { ok: true, value: { url: command.url, title: "A", byteCount: 100, redirects: 0, links: [], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Core concept", normalizedHash: "hash-a", evidenceAnchors: [{ url: command.url, selector: "#a" }], coverageGoalIds: ["goal-a"], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] } }; } } });
   const result = await runner.run({ ownerId: "owner-a", runId: "run-a", sourceId: "source-a", sourceRevision: 1, rootUrl: "https://example.test", startedAtMs: 0, deadlineAtMs: 1_800_000 });
   assertEquals(result.ok, true);
   if (!result.ok) return;
@@ -295,7 +296,7 @@ Deno.test("extraction traverses a twelve-page content chain across bounded chunk
         async fetchPage(command) {
           const index = pages.indexOf(command.url);
           const next = pages[index + 1];
-          return { ok: true, value: { url: command.url, title: `Page ${index + 1}`, byteCount: 100, redirects: 0, links: next === undefined ? [] : [next], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: `Section ${index + 1}`, normalizedHash: `hash-${index + 1}`, evidenceAnchors: [{ url: command.url, selector: "main" }], coverageGoalIds: ["goal-a"], mediaCandidates: [] }] } };
+          return { ok: true, value: { url: command.url, title: `Page ${index + 1}`, byteCount: 100, redirects: 0, links: next === undefined ? [] : [next], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: `Section ${index + 1}`, normalizedHash: `hash-${index + 1}`, evidenceAnchors: [{ url: command.url, selector: "main" }], coverageGoalIds: ["goal-a"], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] } };
         },
       },
       policy: { ...fixture.dependencies.policy, maximumFrontier: 20, maximumPages: 20, maximumPagesPerExecution },
@@ -390,7 +391,7 @@ Deno.test("extraction rejects duplicate and ambiguous near-duplicate points", as
   const runner = createExtractionRunner({
     rights: { status: "allowed", sourceId: "source-a", sourceRevision: 1 }, robots: { status: "allowed" },
     planner: { async plan() { return { ok: true, value: { revision: 1, frontier: ["https://example.test/a"], coverageGoals: [], unresolvedGaps: [], stopDecision: { decision: "continue", rationale: "Observe the candidate page.", evidenceUrls: ["https://example.test/a"], unresolvedGapIds: [] } } }; }, async replan() { return { ok: true, value: { revision: 2, frontier: [], coverageGoals: [], unresolvedGaps: [], stopDecision: { decision: "complete", rationale: "No remaining relevant pages are known.", evidenceUrls: ["https://example.test/a"], unresolvedGapIds: [] } } }; } },
-    acquirer: { async fetchPage() { return { ok: true, value: { url: "https://example.test/a", title: "A", byteCount: 10, redirects: 0, links: [], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Same", normalizedHash: "same", evidenceAnchors: [{ url: "https://example.test/a", selector: "#a" }], coverageGoalIds: [], mediaCandidates: [] }, { summary: "Near", normalizedHash: "near", evidenceAnchors: [{ url: "https://example.test/a", selector: "#b" }], coverageGoalIds: [], mediaCandidates: [], similarity: { comparedLocalHash: "same", score: 0.99, decision: "ambiguous" } }] } }; } },
+    acquirer: { async fetchPage() { return { ok: true, value: { url: "https://example.test/a", title: "A", byteCount: 10, redirects: 0, links: [], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Same", normalizedHash: "same", evidenceAnchors: [{ url: "https://example.test/a", selector: "#a" }], coverageGoalIds: [], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }, { summary: "Near", normalizedHash: "near", evidenceAnchors: [{ url: "https://example.test/a", selector: "#b" }], coverageGoalIds: [], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" }, similarity: { comparedLocalHash: "same", score: 0.99, decision: "ambiguous" } }] } }; } },
     scratchpad: { async load() { return { ok: true, value: { ownerId: "owner-a", runId: "run-a", sourceId: "source-a", sourceRevision: 1, processedUrls: [], acceptedHashes: ["same"], similarityEvidence: [], coverage: [], unresolvedGaps: [], consecutiveNoveltyZero: 0, revision: 1 } }; }, async save() { return { ok: true, value: null }; } },
     knowledge: { async append() { return { ok: true, value: null }; } }, now: () => "2026-08-13T00:00:00.000Z", nowMs: () => 0, logger: () => {}, policy: { maximumFrontier: 10, maximumPageBytes: 100, maximumRedirects: 2, maximumPages: 10, maximumDurationMs: 1_800_000 },
   });
@@ -403,7 +404,7 @@ Deno.test("extraction rejects candidate evidence and coverage not grounded on th
   const fixture = setup();
   const runner = createExtractionRunner({
     ...fixture.dependencies,
-    acquirer: { async fetchPage(command) { return { ok: true, value: { url: command.url, title: "A", byteCount: 10, redirects: 0, links: ["https://example.test/b"], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Unsupported", normalizedHash: "unsupported", evidenceAnchors: [{ url: "https://example.test/b", selector: "main" }], coverageGoalIds: ["invented-goal"], mediaCandidates: [] }] } }; } },
+    acquirer: { async fetchPage(command) { return { ok: true, value: { url: command.url, title: "A", byteCount: 10, redirects: 0, links: ["https://example.test/b"], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Unsupported", normalizedHash: "unsupported", evidenceAnchors: [{ url: "https://example.test/b", selector: "main" }], coverageGoalIds: ["invented-goal"], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] } }; } },
   });
   const result = await runner.run({ ownerId: "owner-a", runId: "run-a", sourceId: "source-a", sourceRevision: 1, rootUrl: "https://example.test", startedAtMs: 0, deadlineAtMs: 1_800_000 });
   assertEquals(result.ok, false);
@@ -418,7 +419,7 @@ Deno.test("extraction rejects candidate coverage absent from the active plan", a
   const fixture = setup();
   const runner = createExtractionRunner({
     ...fixture.dependencies,
-    acquirer: { async fetchPage(command) { return { ok: true, value: { url: command.url, title: "A", byteCount: 10, redirects: 0, links: [], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Unsupported", normalizedHash: "unsupported", evidenceAnchors: [{ url: command.url, selector: "main" }], coverageGoalIds: ["invented-goal"], mediaCandidates: [] }] } }; } },
+    acquirer: { async fetchPage(command) { return { ok: true, value: { url: command.url, title: "A", byteCount: 10, redirects: 0, links: [], observedAt: "2026-08-13T00:00:00.000Z", candidates: [{ summary: "Unsupported", normalizedHash: "unsupported", evidenceAnchors: [{ url: command.url, selector: "main" }], coverageGoalIds: ["invented-goal"], mediaCandidates: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] } }; } },
   });
   const result = await runner.run({ ownerId: "owner-a", runId: "run-a", sourceId: "source-a", sourceRevision: 1, rootUrl: "https://example.test", startedAtMs: 0, deadlineAtMs: 1_800_000 });
   assertEquals(result.ok, false);

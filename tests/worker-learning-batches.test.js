@@ -28,6 +28,7 @@ class Statement {
 }
 
 class Database {
+  /** @type {readonly Statement[]} */ written = [];
   /** @type {string[]} */ queries = [];
   /** @type {unknown[]} */ rows;
   /** @type {unknown | null} */ reviewRow = null;
@@ -50,6 +51,7 @@ class Database {
   }
   /** @param {readonly Statement[]} statements */
   async batch(statements) {
+    this.written = statements;
     for (const statement of statements) if (statement.query.startsWith("INSERT INTO learner_batch_commands")) this.commandResults.set(String(statement.bindings[1]), String(statement.bindings[2]));
     return statements.map(() => ({ success: true, meta: { changes: 1 } }));
   }
@@ -153,7 +155,10 @@ Deno.test("learner D1 answer returns the stored explanation and correct choice o
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
   database.answerCount = 1;
   const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
-  const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: ["choice-1"], answerText: null, blankAnswers: null, idempotencyKey: "answer-1" });
+  const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: ["choice-1"], answerText: null, blankAnswers: null, confidence: 80, idempotencyKey: "answer-1" });
+  const persisted = database.written.find(s => s.query.startsWith("INSERT INTO learner_review_answers"));
+  assertEquals(persisted?.query.includes("confidence"), false);
+  assertEquals(JSON.stringify(persisted?.bindings.slice(7)), JSON.stringify(["knowledge-0", 1, null]));
   assertEquals(result.ok, true);
   if (!result.ok) return;
   const answer = /** @type {{ readonly feedback: { readonly explanation: string, readonly correctAnswer: string } }} */ (result.value);

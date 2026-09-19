@@ -110,6 +110,17 @@ Deno.test("settings remain missing until composition supplies defaults", () => {
   if (!result.ok) assertEquals(result.error.kind, "SettingsMissing");
 });
 
+Deno.test("motion preference is optional for legacy records, validated and persisted", () => {
+  const repository = createSettingsRepository(new FakeStorage());
+  assertEquals(repository.save(defaultSettings).ok, true);
+  const legacy = repository.load();
+  assertEquals(legacy.ok && legacy.value.motionEnabled === undefined, true);
+  assertEquals(repository.save({ ...defaultSettings, motionEnabled: false }).ok, true);
+  const saved = repository.load();
+  assertEquals(saved.ok && saved.value.motionEnabled === false, true);
+  assertEquals(repository.save(/** @type {import("../src/features/experience/contracts.js").ExperienceSettings} */ (/** @type {unknown} */ ({ ...defaultSettings, motionEnabled: "yes" }))).ok, false);
+});
+
 Deno.test("settings save, reload, repeat, and erase within one owner", () => {
   const storage = new FakeStorage();
   const repository = createSettingsRepository(storage);

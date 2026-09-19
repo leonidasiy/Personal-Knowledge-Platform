@@ -14,11 +14,12 @@
 coverage/
 dist/
 !/vendor/yaml/dist/
-dist 2/
+/dist [0-9]*/
 dist.tmp-*/
 logs/
 node_modules/
 playwright-report/
 test-results/
 /.playwright-cli/
+/output/
 /skills-lock.json

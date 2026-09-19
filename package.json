@@ -2,9 +2,11 @@
   "name": "resonance-learning",
   "private": true,
   "dependencies": {
+    "web-push": "3.6.7",
     "unpdf": "1.8.1"
   },
   "devDependencies": {
+    "@types/web-push": "3.6.4",
     "@cloudflare/puppeteer": "1.1.0",
     "@types/node": "22.20.1",
     "playwright-core": "1.61.1"

@@ -183,6 +183,7 @@ function renderResults(model) {
       selected: selected ? 'aria-current="true"' : "",
       source: remoteText(model, item.sourceLabel),
       title: remoteText(model, item.title),
+      description: remoteText(model, item.candidate.description),
       observed: remoteText(model, item.observedAtLabel),
       evidence: evidenceLabel(item.evidenceStatus),
     });

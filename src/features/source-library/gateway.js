@@ -42,7 +42,7 @@ export function countProcessingWorkflowStatuses(statuses) {
         (!isRecord(status.run) || !isNonEmptyText(status.run.state)))
     ) throw new TypeError("Workflow status is invalid.");
     const state = status.run === null ? null : /** @type {string} */ (status.run.state);
-    if (state !== null && WORKFLOW_PROCESSING_STATES.has(state)) {
+    if (state !== null && WORKFLOW_PROCESSING_STATES.has(state) && !(state === "extraction-loop" && status.run?.remainingMs === 0)) {
       sourceIds.add(status.sourceId);
     }
   }

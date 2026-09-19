@@ -1,6 +1,6 @@
 // @ts-check
 
-import { SourceLibraryGatewayClient } from "../src/features/source-library/gateway.js";
+import { countProcessingWorkflowStatuses, SourceLibraryGatewayClient } from "../src/features/source-library/gateway.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) {
@@ -30,6 +30,28 @@ const source = Object.freeze({
   approvedAt: "2026-07-22T08:00:00.000Z",
   updatedAt: "2026-07-22T08:00:00.000Z",
   revision: 1,
+});
+
+Deno.test("source gateway excludes expired extraction runs but keeps work before the deadline", () => {
+  /** @param {number} remainingMs */
+  const run = (remainingMs) => ({
+    runId: `run-${remainingMs}`,
+    state: "extraction-loop",
+    revision: 1,
+    counts: { pages: 0, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0 },
+    extractionStartedAt: "2026-08-13T00:00:00.000Z",
+    extractionDeadlineAt: "2026-08-13T00:30:00.000Z",
+    elapsedMs: 1_800_000 - remainingMs,
+    remainingMs,
+    decisionRequired: null,
+    failureKind: null,
+    robotsEvidence: null,
+  });
+  assertEquals(countProcessingWorkflowStatuses([
+    { sourceId: "source-expired", run: run(0), reasonCode: null, message: null },
+    { sourceId: "source-boundary", run: run(1), reasonCode: null, message: null },
+    { sourceId: "source-quizzes", run: { ...run(0), state: "per-point-quiz-loop" }, reasonCode: null, message: null },
+  ]), 2);
 });
 
 /** @param {(request: Request) => Promise<Response>} respond */

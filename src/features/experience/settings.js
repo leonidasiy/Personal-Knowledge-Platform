@@ -272,7 +272,7 @@ function validateSettings(value, themeIds, layoutIds) {
     return malformed("document");
   }
   const settings =
-    /** @type {{ schemaVersion?: unknown, themeMode?: unknown, visualTheme?: unknown, layoutMode?: unknown, soundEnabled?: unknown }} */ (
+    /** @type {{ schemaVersion?: unknown, themeMode?: unknown, visualTheme?: unknown, layoutMode?: unknown, soundEnabled?: unknown, motionEnabled?: unknown }} */ (
       value
     );
   if (settings.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
@@ -313,6 +313,7 @@ function validateSettings(value, themeIds, layoutIds) {
   if (typeof settings.soundEnabled !== "boolean") {
     return malformed("soundEnabled");
   }
+  if (settings.motionEnabled !== undefined && typeof settings.motionEnabled !== "boolean") return malformed("motionEnabled");
   return {
     ok: true,
     value: freeze({
@@ -321,6 +322,7 @@ function validateSettings(value, themeIds, layoutIds) {
       visualTheme: /** @type {VisualTheme} */ (settings.visualTheme),
       layoutMode: /** @type {LayoutMode} */ (settings.layoutMode),
       soundEnabled: settings.soundEnabled,
+      ...(settings.motionEnabled === undefined ? {} : { motionEnabled: settings.motionEnabled }),
     }),
   };
 }

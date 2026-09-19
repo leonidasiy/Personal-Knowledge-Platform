@@ -44,17 +44,31 @@ Deno.test("Feed is text-only without associated media and hides legacy fallback 
     await controller.loadFeed();
     const html = controller.renderFeed();
     assert(html.includes("A useful relationship."), "Text must remain visible.");
-    assert(!html.includes("<img") && !html.includes("card-media") && !html.includes("source-icon-fallback"), "Unassociated fallback must not render.");
+    const card = html.slice(html.indexOf('<article class="learning-card"'));
+    assert(card.indexOf('card-knowledge') < card.indexOf('card-source') && card.indexOf('card-source') < card.indexOf('card-subject'), "Reading order must be knowledge, source, then subject.");
+    assert(!html.includes('session-panel') && !html.includes('progress-bridge'), "Completion must not repeat competing panels.");
+    assert(html.includes('Mark batch studied') && !html.includes('data-view="review"'), "Open batch must retain explicit completion before the Review continuation.");
+    assert(!html.includes("<img") && !html.includes("card-media") && !html.includes("source-icon-fallback") && !html.includes("card-visual"), "Unassociated fallback must not render.");
   }
 });
 
-Deno.test("Feed renders an associated source image with an error-only fallback hook", async () => {
+Deno.test("Feed renders an associated source image without an unrelated fallback", async () => {
   const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:image", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", questionId: "question-1", title: "Source", summary: "A diagram-backed relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: { assetId: "media-1", kind: "image", url: "/api/knowledge-workflows/media/media-1?variant=feed", attribution: "Source page diagram" }, questionLocked: true }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
   await controller.loadFeed();
   const html = controller.renderFeed();
   assert(html.includes("data-associated-media=\"true\""), "Associated source media must render.");
-  assert(html.includes("data-fallback-src=\"/assets/fallback-media/Christmas%20Music%20Image.png\""), "Fallback must be declared only as an error hook.");
+  assert(!html.includes("data-fallback-src"), "Unrelated fallback must never be declared.");
   assert(html.includes("Source page diagram"), "Media attribution must remain visible.");
+  assert(html.indexOf('card-knowledge') < html.indexOf('card-media') && html.indexOf('card-media') < html.indexOf('card-source'), "Associated media must support the knowledge before its source, not lead the page.");
+});
+
+Deno.test("completed Feed replaces study action with one Review continuation", async () => {
+  const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:done", status: "completed", completedAt: "2026-09-01T12:00:00.000Z", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: false }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
+  await controller.loadFeed();
+  const html = controller.renderFeed();
+  assert(!html.includes('data-action="complete-learner-feed"'), "Completed batch must not offer another study write.");
+  assert(html.split('data-view="review"').length === 2, "Exactly one closing Review continuation must be available.");
+  assert(html.includes('data-action="refresh-learner-feed"'), "Completed batch retains refresh.");
 });
 
 Deno.test("Review renders the paired quiz prompt, not the knowledge-card summary", async () => {
@@ -77,6 +91,7 @@ Deno.test("Review renders the paired quiz prompt, not the knowledge-card summary
   assert(!html.includes(knowledgeSummary), "Review must not render the knowledge-card summary.");
   assert(!html.includes("The source defines the interval class"), "Review must not render an explanation before an answer.");
   assert(html.includes("data-review-question=\"question-1\""), "Review must render the paired question container.");
+  assert(!html.includes('name="confidence"'), "Review must not collect confidence.");
 });
 
 Deno.test("Review renders ordered blank inputs without revealing answers", async () => {

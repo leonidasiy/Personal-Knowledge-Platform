@@ -77,6 +77,7 @@
  *   readonly appendAttempt: (attempt: QuizAttempt) => Promise<Result<null, unknown>>,
  *   readonly publish: (command: { readonly ownerId: string, readonly runId: string, readonly knowledge: KnowledgePoint, readonly draft: QuestionDraft, readonly score: number, readonly attempt: number, readonly status: "published" | "pending-review" }) => Promise<Result<null, unknown>>,
  *   readonly restrict: (command: { readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly restrictedUntil: string, readonly reason: string }) => Promise<Result<null, unknown>>,
+ *   readonly discard: (command: { readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly reason: "no-meaningful-quiz" }) => Promise<Result<null, unknown>>,
  *   readonly purge: (command: { readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly before: string }) => Promise<Result<null, unknown>>
  * }} QuizRepository
  */
@@ -139,7 +140,7 @@ function fail(failure, dependencies, runId, knowledgeId) { dependencies.logger({
 /** @param {QuizDependencies} dependencies */
 export function createQuizActorCritic(dependencies) {
   const policy = dependencies?.publicationPolicy ?? { samplingVersion: "factual-sampling-v1", factualSamplingRatePercent: 30 };
-  if (!dependencies || typeof dependencies.generator?.generate !== "function" || typeof dependencies.evaluator?.evaluate !== "function" || typeof dependencies.repository?.appendAttempt !== "function" || typeof dependencies.repository.publish !== "function" || typeof dependencies.repository.restrict !== "function" || typeof dependencies.repository.purge !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || dependencies.maxAttempts !== 3 || !text(policy.samplingVersion) || !Number.isInteger(policy.factualSamplingRatePercent) || policy.factualSamplingRatePercent < 0 || policy.factualSamplingRatePercent > 100) throw new TypeError("Quiz actor-critic dependencies are invalid.");
+  if (!dependencies || typeof dependencies.generator?.generate !== "function" || typeof dependencies.evaluator?.evaluate !== "function" || typeof dependencies.repository?.appendAttempt !== "function" || typeof dependencies.repository.publish !== "function" || typeof dependencies.repository.discard !== "function" || typeof dependencies.repository.purge !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || dependencies.maxAttempts !== 3 || !text(policy.samplingVersion) || !Number.isInteger(policy.factualSamplingRatePercent) || policy.factualSamplingRatePercent < 0 || policy.factualSamplingRatePercent > 100) throw new TypeError("Quiz actor-critic dependencies are invalid.");
   return Object.freeze({
     /** @param {unknown} command @returns {Promise<Result<QuizRunResult, QuizFailure>>} */
     async run(command) {
@@ -228,16 +229,11 @@ export function createQuizActorCritic(dependencies) {
           dispositions.push(freeze({ knowledgeId: knowledge.id, status: "accepted", publicationStatus: acceptedPublicationStatus, attempts, failureKind: null, restrictedUntil: null }));
           continue;
         }
-        let restrictedUntil = null;
-        if (attempts === dependencies.maxAttempts && lastFailure !== null) {
-          restrictedUntil = new Date(Date.parse(dependencies.now()) + 30 * 24 * 60 * 60 * 1_000).toISOString();
-          try {
-            const restricted = await dependencies.repository.restrict({ ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, restrictedUntil, reason: "three-failed-submissions" });
-            if (!restricted.ok) return fail({ kind: "QuizRestrictionPersistenceFailed" }, dependencies, command.runId, knowledge.id);
-          } catch (error) { return fail({ kind: "QuizRestrictionPersistenceFailed" }, dependencies, command.runId, knowledge.id); }
-          lastFailure = "QuizAttemptLimitReached";
-        }
-        dispositions.push(freeze({ knowledgeId: knowledge.id, status: "abandoned", publicationStatus: null, attempts, failureKind: lastFailure, restrictedUntil }));
+        try {
+          const discarded = await dependencies.repository.discard({ ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, reason: "no-meaningful-quiz" });
+          if (!discarded.ok) return fail({ kind: "QuizPurgeFailed" }, dependencies, command.runId, knowledge.id);
+        } catch (error) { return fail({ kind: "QuizPurgeFailed" }, dependencies, command.runId, knowledge.id); }
+        dispositions.push(freeze({ knowledgeId: knowledge.id, status: "abandoned", publicationStatus: null, attempts, failureKind: lastFailure, restrictedUntil: null }));
       }
       dependencies.logger({ event: "quiz-actor-critic-success", runId: command.runId });
       return { ok: true, value: freeze({ dispositions: freeze(dispositions) }) };

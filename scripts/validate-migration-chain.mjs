@@ -30,8 +30,8 @@ async function discoverMigrations(directory) {
       return match ? [{ number: Number(match[1]), name: entry.name, path: migrationPath(directory, entry.name) }] : [];
     }).sort((left, right) => left.number - right.number);
 
-    if (migrations.length === 0 || migrations.some((migration, index) => migration.number !== index + 1) || migrations.at(-1)?.name !== "0014_review_component_scores.sql") {
-      return failure("MigrationDiscoveryFailed", "Migration files must be contiguous from 0001 through 0014_review_component_scores.sql.");
+    if (migrations.length === 0 || migrations.some((migration, index) => migration.number !== index + 1) || migrations.at(-1)?.name !== "0016_daily_reminders.sql") {
+      return failure("MigrationDiscoveryFailed", "Migration files must be contiguous from 0001 through 0016_daily_reminders.sql.");
     }
     return migrations;
   } catch (error) {

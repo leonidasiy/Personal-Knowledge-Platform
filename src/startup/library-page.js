@@ -5,7 +5,8 @@ import {
   SourceLibraryGatewayClient,
 } from "../features/source-library/gateway.js";
 import { LearningBatchGatewayClient } from "../features/learning-generation/batches-gateway.js";
-import { renderLibraryRoute } from "../routes/library.js";
+import { renderLibraryRoute, librarySourceSubjects } from "../routes/library.js";
+import { isSubjectId } from "../features/knowledge-subjects/public.js";
 import { BUNDLE_TYPE, packImageBundle } from "../features/knowledge-workflows/image-upload.js";
 import { renderPdfPageImages } from "./pdf-image-pages.js";
 
@@ -17,12 +18,13 @@ const WORKFLOW_STATUS_REFRESH_MS = 5_000;
 
 /** @typedef {{ readonly observe: (element: Element) => void, readonly disconnect: () => void }} PageObserver */
 /** @typedef {{ readonly batchId: string, readonly learningDay: string, readonly status: "open" | "completed", readonly itemIds: readonly string[], readonly revision: number, readonly createdAt: string, readonly completedAt: string | null }} LibraryBatchModel */
-/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly summary: string, readonly questionLocked: boolean }} LibraryKnowledgeCard */
+/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly summary: string, readonly questionLocked: boolean, readonly primarySubject: string|null }} LibraryKnowledgeCard */
 /** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly sourceTitle: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly questionLocked: boolean, readonly score: number, readonly matchedBy: "exact" | "semantic" | "combined" }} LibraryKnowledgeSearchCard */
 
 /**
  * @param {{
  *   readonly fetch: typeof fetch,
+ *   readonly storage?: Pick<Storage, "getItem"|"setItem">,
  *   readonly gatewayBaseUrl: string,
  *   readonly escapeHtml: (value: string) => string,
  *   readonly formatDate: (value: string) => string,
@@ -81,6 +83,15 @@ export function createLibraryPage(dependencies) {
   /** @type {SourceInterestArea[]} */ let interestAreas = [];
   /** @type {string | null} */ let nextCursor = null;
   /** @type {string} */ let query = "";
+  /** @type {string|null} */ let subject = null;
+  try {
+    const stored = dependencies.storage?.getItem("resonance-library-subject");
+    if (stored === "unclassified" || isSubjectId(stored)) subject = stored;
+    else if (stored !== null && stored !== undefined) onError("Your saved Library subject is no longer available. Choose another shelf.");
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    onError("Your Library subject preference could not be restored. You can still choose a shelf.");
+  }
   /** @type {SourceSearchScope} */ let searchScope = "sources";
   /** @type {string | null} */ let message = null;
   /** @type {string | null} */ let pendingSourceId = null;
@@ -103,6 +114,7 @@ export function createLibraryPage(dependencies) {
       interestAreas: freeze([...interestAreas]),
       nextCursor,
       query,
+      subject,
       searchScope,
       pendingSourceId,
       message,
@@ -111,6 +123,7 @@ export function createLibraryPage(dependencies) {
         sourceId: card.sourceId,
         summary: card.summary,
         questionLocked: card.questionLocked,
+        primarySubject: card.primarySubject,
       }))),
     });
 
@@ -237,7 +250,10 @@ export function createLibraryPage(dependencies) {
         sourceId: card.sourceId,
         summary: card.summary,
         questionLocked: card.questionLocked,
+        primarySubject: card.classification?.primarySubject ?? null,
       }));
+      const newest = [...items].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt) || b.id.localeCompare(a.id))[0];
+      if (subject === null && newest) subject = librarySourceSubjects(newest.id, knowledge)[0];
     })().finally(() => {
       knowledgeRead = null;
       rerender();
@@ -594,6 +610,16 @@ export function createLibraryPage(dependencies) {
   function bind(root) {
     observer?.disconnect();
     observer = null;
+    root.querySelector("[data-library-subject]")?.addEventListener("change", event => {
+      const select = event.currentTarget;
+      if (!(select instanceof HTMLSelectElement) || !(select.value === "unclassified" || isSubjectId(select.value))) return;
+      subject = select.value;
+      try { dependencies.storage?.setItem("resonance-library-subject", subject); }
+      catch (error) { if (!(error instanceof Error)) throw error; onError("This shelf is selected, but the preference could not be saved for next time."); }
+      rerender();
+      const restored = root.querySelector("[data-library-subject]");
+      if (restored instanceof HTMLElement) restored.focus();
+    });
     root.querySelector("[data-library-search]")?.addEventListener(
       "submit",
       (event) => {

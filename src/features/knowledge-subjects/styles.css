@@ -1,0 +1,11 @@
+.learning-card[data-subject] { --subject-accent: hsl(var(--subject-hue) 45% 32%); --subject-radius: calc(12px + var(--subject-turn) * 1px); border-color: color-mix(in srgb, var(--subject-accent) 35%, var(--border)); border-radius: var(--subject-radius) 20px 20px var(--subject-radius); background: color-mix(in srgb, var(--subject-accent) 3%, var(--surface)); }
+:root[data-theme="dark"] .learning-card[data-subject] { --subject-accent: hsl(var(--subject-hue) 50% 72%); }
+.subject-mark { float: right; width: 44px; height: 44px; color: var(--subject-accent); transition: transform var(--motion-standard); }
+.learning-card:hover .subject-mark { transform: rotate(calc(var(--subject-turn) * 1deg)) scale(1.12); }
+.learning-card[data-subject] .preference-controls .button { border-radius: var(--subject-radius); border-color: color-mix(in srgb, var(--subject-accent) 35%, var(--border)); }
+.learning-card[data-subject] .preference-more { color: var(--subject-accent); background: color-mix(in srgb, var(--subject-accent) 9%, var(--surface)); }
+.learning-card[data-subject] .preference-more:hover { background: color-mix(in srgb, var(--subject-accent) 18%, var(--surface)); }
+.classification-form { display: grid; gap: 8px; }
+.classification-form :is(select,input) { width: 100%; min-height: 44px; color: var(--text); background: var(--surface); }
+:root[data-motion="off"] .subject-mark { transform: none; }
+@media (prefers-reduced-motion: reduce) { .subject-mark { transform: none !important; } }

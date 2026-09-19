@@ -23,6 +23,7 @@ function worker(overrides = {}) {
     sourceIngestion: overrides.sourceIngestion ?? null,
     waitUntil: overrides.waitUntil,
     learningGeneration: overrides.learningGeneration ?? null,
+    learningBatches: overrides.learningBatches ?? null,
     knowledgeWorkflowBackfill: overrides.knowledgeWorkflowBackfill ?? null,
     knowledgeWorkflowReplay: overrides.knowledgeWorkflowReplay ?? null,
   });
@@ -36,6 +37,36 @@ function approvedSource(capabilities) {
     adapter: { id: "adapter-a", version: "1", granularity: "root", capabilities },
   };
 }
+
+Deno.test("progress and classification routes enforce authentication, owner injection, methods and failures", async () => {
+  /** @type {unknown[]} */ const seen = [];
+  /** @returns {Promise<{ok:false,error:{kind:string}}>} */
+  const unavailable = async () => ({ ok: false, error: { kind: "SyntheticUnavailable" } });
+  /** @type {NonNullable<Parameters<typeof createDiscoveryWorker>[1]["learningBatches"]>} */
+  const batches = {
+    loadFeed: unavailable, loadReview: unavailable, completeFeed: unavailable, answerReview: unavailable, setPreference: unavailable, removeKnowledge: unavailable,
+    loadProgress: async (/** @type {string} */ owner, /** @type {number} */ days, /** @type {string|null} */ subject) => { seen.push([owner, days, subject]); return { ok: true, value: {} }; },
+    correctClassification: async (/** @type {unknown} */ command) => { seen.push(command); return { ok: false, error: { kind: "ClassificationConflict" } }; },
+  };
+  const app = worker({ learningBatches: batches });
+  assertEquals((await app.fetch(request("/api/learning-generation/progress?days=7&subject=music", { method: "GET" }))).status, 200);
+  assertEquals(JSON.stringify(seen[0]), JSON.stringify(["owner-a", 7, "music"]));
+  assertEquals((await app.fetch(request("/api/learning-generation/progress?days=8", { method: "GET" }))).status, 400);
+  assertEquals((await app.fetch(request("/api/learning-generation/progress", { body: {} }))).status, 405);
+  assertEquals((await app.fetch(request("/api/learning-generation/classification", { body: { ownerId: "other" } }))).status, 400);
+  assertEquals(seen.length, 1);
+  for (const method of ["GET", "PUT", "DELETE"]) {
+    const response = await app.fetch(request("/api/learning-generation/classification", { method, ...(method === "GET" ? {} : { body: {} }) }));
+    assertEquals(response.status, 405);
+    assertEquals(response.headers.get("allow"), "POST");
+  }
+  assertEquals(seen.length, 1);
+  assertEquals((await app.fetch(request("/api/learning-generation/classification", { body: { knowledgeId: "k1", expectedRevision: 0, classification: {} } }))).status, 409);
+  assertEquals(/** @type {Record<string,unknown>} */ (seen[1]).ownerId, "owner-a");
+  const denied = worker({ learningBatches: batches, authenticate: async () => ({ ok: false, error: { kind: "DiscoveryAccessTokenMissing" } }) });
+  assertEquals((await denied.fetch(request("/api/learning-generation/progress", { method: "GET" }))).status, 401);
+  assertEquals(seen.length, 2);
+});
 
 /** @param {import("../src/features/source-library/contracts.js").LibrarySource} source @returns {Promise<import("../src/features/source-library/contracts.js").Result<{ readonly source: import("../src/features/source-library/contracts.js").LibrarySource, readonly job: import("../src/features/source-library/contracts.js").SourceIngestionJob, readonly reused: boolean }, import("../src/features/source-library/contracts.js").SourceLibraryFailure>>} */
 async function sourceApprovalResult(source) {
