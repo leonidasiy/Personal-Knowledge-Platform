@@ -188,9 +188,9 @@ function renderSource(model, source) {
     capabilities === "" ? "" : ` · ${escapeHtml(capabilities)}`
   }</p><p>Added ${
     formatDate(source.approvedAt)
-  } · Processing is automatic</p>${workflowNotice}${workflowRetry}${robotsNotice}${upload}<a href="${
+  } · Processing is automatic</p>${workflowNotice}${robotsNotice}${upload}<div class="state-actions">${workflowRetry}<a class="button quiet" href="${
     escapeHtml(source.canonicalUrl)
-  }" target="_blank" rel="noopener noreferrer">Open original source</a>${related}</div><button class="button danger" type="button" data-library-disable="${
+  }" target="_blank" rel="noopener noreferrer">Open original source</a></div>${related}</div><button class="button danger" type="button" data-library-disable="${
     sourceId
   }" data-source-revision="${source.revision}" ${pending ? "disabled" : ""}>${
     pending ? "Removing..." : "Remove"

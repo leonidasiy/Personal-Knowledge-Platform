@@ -19,6 +19,14 @@ Deno.test("progress page safely reports malformed responses", async () => {
   const malformed = createProgressPage({ fetch: /** @type {typeof fetch} */(async () => new Response("{}")), baseUrl: "https://example.test/", escapeHtml, onChange: () => {} });
   await malformed.load(); assert(malformed.render().includes("Progress data could not be read"), "malformed response safe");
 });
+Deno.test("empty progress replaces unused plots with guidance and keeps real activity", async () => {
+  const result = buildProgress(input({ attempts: [] })); if (!result.ok) throw new Error("fixture invalid");
+  const page = createProgressPage({ fetch: async () => new Response(JSON.stringify({ result: result.value })), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
+  await page.load(); const html = page.render();
+  assert(html.includes('href="#review">Start reviewing'), "Review action");
+  assert(!html.includes('aria-label="Daily accuracy chart"') && html.includes('aria-label="Activity calendar chart"'), "no blank accuracy canvas; activity remains");
+  assert(html.includes("0/0 attempts") && html.includes("Unavailable") && html.includes("Daily accuracy data table"), "honest empty metrics and accessible table");
+});
 Deno.test("progress page ignores stale out-of-order responses", async () => {
   const first = Promise.withResolvers(), second = Promise.withResolvers(); let call = 0;
   const one = buildProgress(input({ attempts: [attempt] })), none = buildProgress(input({ attempts: [] })); if (!one.ok || !none.ok) throw new Error("fixtures invalid");

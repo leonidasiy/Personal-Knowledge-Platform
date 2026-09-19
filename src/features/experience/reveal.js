@@ -11,14 +11,18 @@ export function revealCards(root, seen, Observer) {
       if (!entry.isIntersecting || !(entry.target instanceof HTMLElement)) continue;
       const key = entry.target.dataset.reveal;
       if (key && !seen.has(key)) {
-        seen.add(key);
+        entry.target.addEventListener("animationend", () => seen.add(key), { once: true });
+        entry.target.classList.remove("reveal-pending");
         entry.target.classList.add("reveal-enter");
       }
       observer.unobserve(entry.target);
     }
-  }, { threshold: 0, rootMargin: "0px 0px -24px 0px" });
+  }, { threshold: 0, rootMargin: "0px 0px -96px 0px" });
   for (const element of root.querySelectorAll("[data-reveal]")) {
-    if (element instanceof HTMLElement && !seen.has(element.dataset.reveal ?? "")) observer.observe(element);
+    if (element instanceof HTMLElement && !seen.has(element.dataset.reveal ?? "")) {
+      element.classList.add("reveal-pending");
+      observer.observe(element);
+    }
   }
   return observer;
 }

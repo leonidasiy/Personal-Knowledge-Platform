@@ -100,10 +100,9 @@ export function createYouTubeConnectionController(dependencies) {
 
 /** @param {YouTubeConnection} connection @param {boolean} offline @param {YouTubeConnectionMarkup} markup */
 export function renderYouTubeConnection(connection, offline, markup) {
+  if (connection.status === "accepted") return "";
   const disabled = offline ? " disabled" : "";
-  const template = connection.status === "accepted"
-    ? markup.youtubeConnected
-    : connection.status === "pending"
+  const template = connection.status === "pending"
     ? markup.youtubeDisconnected
     : markup.youtubeUnavailable;
   return template.replaceAll("{{disabled}}", disabled);

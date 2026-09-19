@@ -389,10 +389,8 @@ Deno.test("Discover renders versioned YouTube API policy states", () => {
     DISCOVERY_MARKUP,
   );
   assert(
-    accepted.includes("YouTube search enabled") &&
-      accepted.includes("YouTube Terms of Service") &&
-      !accepted.includes("Connect YouTube"),
-    "Accepted policy must enable search without claiming account connection.",
+    accepted === "",
+    "Accepted policy has no Discover banner; information lives in Settings.",
   );
   const pending = renderYouTubeConnection(
     { status: "pending" },

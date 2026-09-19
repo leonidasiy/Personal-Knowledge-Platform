@@ -19,6 +19,7 @@ import { RECORD_KINDS } from "./persistence/contracts.js";
 const freeze = Object.freeze;
 const revealedCards = new Set();
 /** @type {IntersectionObserver|null} */ let cardObserver = null;
+let revealView = "";
 const {
   installNotificationController,
   renderNotification,
@@ -949,6 +950,7 @@ function restoreTransientViewState(state) {
  */
 function render(preferredFocusKey = null, fallbackHeadingId = null) {
   cardObserver?.disconnect();
+  if (revealView !== activeView) { revealedCards.clear(); revealView = activeView; }
   const transientState = captureTransientViewState();
   const activeElement = document.activeElement;
   const previousFocusKey = activeElement instanceof HTMLElement
@@ -1036,7 +1038,7 @@ function renderSettingsPreferences() {
             <p>${escapeHtml(friendlySettingsFailure(settingsIssue.kind))}</p>
             <button class="button secondary" type="button" data-action="reset-settings" data-focus-key="reset-settings">Reset display settings</button>
           </div>`
-  }`;
+  }<details class="youtube-information"><summary>YouTube information</summary>${APP_COPY.discoverMarkup.youtubeConnected}</details>`;
 }
 
 /** @param {"system" | "light" | "dark"} mode @param {string} label */

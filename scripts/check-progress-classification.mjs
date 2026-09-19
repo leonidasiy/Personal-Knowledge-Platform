@@ -117,6 +117,20 @@ try {
     await nav("progress");
     await page.locator(state === "empty" ? ".progress-page" : "main [role=alert]").waitFor();
     assert.match(await page.locator("main").innerText(), state === "empty" ? /No .*attempt|Unavailable/i : /unavailable/i);
+    if (state === "empty") {
+      assert.equal(await page.locator('svg[aria-label="Daily accuracy chart"]').count(), 0);
+      for (const width of [320, 375, 1280]) {
+        await page.setViewportSize({ width, height: 900 });
+        // Grid stretches element boxes; text ranges measure actual wrapping.
+        assert.ok(await page.locator('.progress-summary strong').evaluateAll(nodes => nodes.every(node => { const range = document.createRange(); range.selectNodeContents(node); return range.getClientRects().length === 1; })), `Empty metric labels fit on one line at ${width}px`);
+      }
+      const charts = await page.locator('.progress-charts > div').evaluateAll(nodes => nodes.map(node => ({ top: node.getBoundingClientRect().top, width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })));
+      assert.ok(Math.abs(charts[2].top - charts[3].top) < 2 && Math.abs(charts[2].width - charts[3].width) < 2, 'Activity and subjects share a balanced row');
+      assert.ok(charts[3].height < charts[2].height, 'Empty subjects do not stretch to calendar height');
+      await page.screenshot({ path: fileURLToPath(new URL('empty-desktop.png', output)), fullPage: true });
+      await page.getByRole('link', { name: 'Start reviewing', exact: true }).click();
+      await page.locator('#review-title').waitFor();
+    }
     await nav("feed");
   }
   for (const blocked of [false, true]) {

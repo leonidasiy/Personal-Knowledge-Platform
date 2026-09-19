@@ -12,6 +12,8 @@ and sign in with your authorized email. No development tools are needed.
 You can use the browser or install its desktop/home-screen web app.
 Follow [desktop, Android and iPhone/iPad setup](documentations/SETUP.md#use-the-live-app).
 Settings controls appearance, motion, sound and optional daily reminders.
+YouTube information is tucked into a collapsed Settings disclosure. Card entrances
+respect both the motion toggle and your device's reduced-motion preference.
 Push delivery is not activated; installation alone does not enable notifications.
 
 ## Try it locally

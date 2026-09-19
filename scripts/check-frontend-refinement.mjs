@@ -18,6 +18,7 @@ try {
   const page = await context.newPage(), errors = [], remote = [], writes = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => {
+    localStorage.setItem('resonance.youtube-policy', JSON.stringify({ version: 'youtube-api-services-v1', acceptedAt: '2026-09-19T12:00:00.000Z' }));
     const set = Storage.prototype.setItem, get = Storage.prototype.getItem;
     Storage.prototype.setItem = function(key, value) {
       if (key === "resonance-library-subject" && window.denyShelfWrite) throw new DOMException("Synthetic denial", "SecurityError");
@@ -55,6 +56,12 @@ try {
   for (const theme of ["light", "dark"]) {
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     assert.equal(await page.getByText('Keep Resonance close', { exact: true }).count(), 0);
+    const info = page.locator('.youtube-information');
+    assert.equal(await info.evaluate(el => el.open), false, 'YouTube disclosure starts collapsed');
+    await info.locator('summary').focus(); await page.keyboard.press('Enter');
+    assert.equal(await info.evaluate(el => el.open), true, 'Disclosure is keyboard operable');
+    assert.equal(await info.locator('a').count(), 3, 'Required policy links remain available');
+    await page.keyboard.press('Enter');
     await page.locator(`[data-setting="theme"][value="${theme}"]`).check();
     await openLibrary();
     for (const width of [1280, 320]) {

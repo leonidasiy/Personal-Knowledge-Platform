@@ -66,19 +66,9 @@
   /* Component tokens */
   --card-border: var(--border);
   --card-surface: var(--surface);
-  --quiz-surface: var(--canvas);
-  --meter-track: var(--surface-subtle);
-  --meter-fill: var(--action);
   --panel-radius: 8px;
   --control-radius: 6px;
   --control-height: 44px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
   --motion-fast: 160ms;
   --motion-standard: 220ms;
 
@@ -247,7 +237,7 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .settings-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; }
 .settings-page > .section-heading { grid-column: 1 / -1; }
 .settings-page > section { align-self: start; }
-.settings-preferences { grid-column: 1; grid-row: 2 / span 2; }
+.settings-preferences { grid-column: 1; }
 .settings-reminders { grid-column: 2; }
 .settings-reminders, .settings-preferences { padding: 28px; border: 1px solid var(--border); border-radius: var(--panel-radius); background: var(--surface); }
 .settings-reminders h2 { font-size: 26px; }
@@ -273,7 +263,9 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .state-panel { margin: 24px 0; padding: 48px 32px; border: 1px dashed var(--border); border-radius: var(--panel-radius); background: var(--surface); }
 .state-panel h1, .state-panel h2 { max-width: 30ch; margin-bottom: 16px; font-size: clamp(28px, 3vw, 40px); }
 .state-panel p { max-width: 65ch; color: var(--text-muted); }
-.state-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.state-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.discover-notice:empty { display: none; }
+.youtube-information { margin-top: 24px; font-size: 12px; }
 .library-upload { margin-bottom: 24px; padding: 0 24px; border: 1px solid var(--border); border-radius: var(--panel-radius); background: var(--surface); }
 .library-upload summary { font-weight: 700; }
 .library-upload form { display: grid; gap: 16px; max-width: 680px; padding-bottom: 24px; }
@@ -303,7 +295,7 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .data-list p, .data-list span { color: var(--text-muted); font-size: 13px; }
 .library-knowledge { margin-top: 16px; padding: 16px; background: var(--surface-subtle); }
 .library-knowledge h4 { margin: 0; }
-.discover-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; margin-bottom: 24px; border-left: 3px solid var(--signal-three); background: var(--attention-soft); }
+.discover-notice { padding: 16px; margin-bottom: 24px; border-left: 3px solid var(--signal-three); background: var(--attention-soft); }
 .discover-notice.error { border-color: var(--danger); background: var(--danger-soft); }
 .discover-notice p { margin: 0; }
 .discover-controls { margin-bottom: 28px; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--panel-radius); }
@@ -367,8 +359,11 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 :root[data-theme="dark"] .data-list { grid-template-columns: minmax(0, 1fr); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: var(--motion-standard); }
 @keyframes answer-confirm { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-.reveal-enter { animation: card-enter 600ms cubic-bezier(.16,1,.3,1) both; }
-@keyframes card-enter { from { opacity: .12; transform: translateY(28px); } to { opacity: 1; transform: none; } }
+.reveal-enter { animation: card-enter 700ms cubic-bezier(.2,.7,.3,1) both; }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="off"]) .reveal-pending:not(:focus-within) { opacity: 0; transform: translateY(32px); }
+}
+@keyframes card-enter { from { opacity: 0; transform: translateY(32px); } to { opacity: 1; transform: none; } }
 @media (max-width: 800px) {
   .app-shell, :root[data-theme="dark"] .app-shell { padding-inline: 20px; }
   :root[data-theme="dark"] .app-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
