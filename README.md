@@ -10,42 +10,16 @@ subcategories. Fieldnotes is the light theme and Observatory the dark theme.
 Open the [private live site](https://resonance-discovery.lirenleonidas.workers.dev)
 and sign in with your authorized email. No development tools are needed.
 You can use the browser or install its desktop/home-screen web app.
-Follow [desktop, Android and iPhone/iPad setup](documentations/SETUP.md#use-the-live-app).
+Follow [desktop, Android and iPhone/iPad setup](SETUP.md#use-the-live-app).
 Settings controls appearance, motion, sound and optional daily reminders.
 YouTube information is tucked into a collapsed Settings disclosure. Card entrances
 respect both the motion toggle and your device's reduced-motion preference.
 Push delivery is not activated; installation alone does not enable notifications.
 
-## Try it locally
-
-Install Deno 2, Node.js/npm, and Python 3.
-From a fresh clone:
-
-```sh
-git clone --branch main https://github.com/leonidasiy/Personal-Knowledge-Platform.git
-cd Personal-Knowledge-Platform
-npm ci
-deno task build
-deno task serve
-```
-
-Open <http://localhost:4173>. This build uses local starter content and browser
-storage; it needs no API key or Cloudflare account. The local server does not
-run the hosted extraction and quiz APIs. Use **Library → Export** before
-clearing browser data if you want to keep local records.
-
-Run `deno task check` and `deno task test` to validate changes. The test suite
-reads the built asset manifest, so build first on a fresh clone. See
-[SETUP](documentations/SETUP.md) and [TESTING](documentations/TESTING.md) for
-more detail.
-
 ## Use the hosted knowledge workflow
 
 The [hosted site](https://resonance-discovery.lirenleonidas.workers.dev) is
-private. Sign in through Cloudflare Access with an authorized account. Hosted
-source processing needs the configured Worker, D1 database, private R2 bucket,
-and model secret; operators can follow [hosted setup](documentations/SETUP.md#hosted-worker-setup)
-and the [environment reference](documentations/ENV.md).
+private. Sign in through Cloudflare Access with an authorized account.
 
 1. In **Discover**, search for an educational source and choose **Add to
    Library** when its rights evidence permits processing. If acquisition is
@@ -79,8 +53,4 @@ as you scroll; missing associated imagery leaves no placeholder box. Progress
 shows retrieval, spacing, activity and subject summaries without confidence
 metrics. Historical unclassified records are preserved without backfills.
 
-- [Documentation index](documentations/README.md)
-- [Current specification](documentations/spec.md)
-- [Project status](documentations/PROJECT_STATUS.md)
-- [Recent changes](documentations/RECENT_CHANGES.md)
-- [Validation and known limits](documentations/TESTING.md)
+See [setup and everyday use](SETUP.md) for installation, reminders, data and offline limits.

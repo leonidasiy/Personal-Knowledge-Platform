@@ -23,3 +23,13 @@ test-results/
 /.playwright-cli/
 /output/
 /skills-lock.json
+
+# Internal documentation and its dedicated checks stay local.
+/AGENTS.md
+/PROCESS.md
+/SELF_IMPROVEMENT.md
+/docs/
+/documentations/
+/milestones/
+/tests/documentation-contract.test.js
+/scripts/check-frontend-showcase.mjs
