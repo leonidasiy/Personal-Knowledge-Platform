@@ -110,6 +110,21 @@ Deno.test("executor preserves the concrete robots failure kind", async () => {
   }
 });
 
+Deno.test("quiz-stage retry retains cumulative extraction counts after an earlier discard", async () => {
+  const current={...run("per-point-quiz-loop"),counts:{pages:2,knowledgePoints:2,acceptedQuizzes:0,pendingQuizzes:0}};
+  const point={id:"remaining",sourceId:"source-a",sourceRevision:1,summary:"Specific",normalizedHash:"hash-a",evidenceAnchors:[{url:"https://example.test/learn",selector:"#a"}],coverageGoalIds:[],mediaCandidates:[],attribution:{sourceUrl:"https://example.test/learn"},extractionVersion:"v1"};
+  const executor=createKnowledgeWorkflowExecutor({
+    transition:async({run:active,nextState,counts})=>{assert(counts!==undefined && counts.knowledgePoints>=active.counts.knowledgePoints,"Counts cannot decrease after discard");return {ok:true,value:{...active,state:nextState,counts:counts??active.counts}};},
+    robots:{check:async()=>{throw new Error("MustNotRecheckRobots");}},extraction:{run:async()=>{throw new Error("MustNotReextract");}},
+    knowledge:{list:async()=>({ok:true,value:[point]})},quiz:{run:async()=>({ok:true,value:{dispositions:[{knowledgeId:point.id,status:"accepted",publicationStatus:"published",attempts:1,failureKind:null,restrictedUntil:null}]}})},logger:()=>{},
+  });
+  const result=await executor.run({run:current,rootUrl:"https://example.test/learn"});
+  if (!result.ok) throw new Error(result.error.causeKind);
+  assertEquals(result.value.state,"completed");
+  assertEquals(result.value.run.counts.knowledgePoints,2);
+  assertEquals(result.value.run.counts.acceptedQuizzes,1);
+});
+
 Deno.test("executor treats a completed run replay as an idempotent no-op", async () => {
   let quizCalls = 0;
   const executor = createKnowledgeWorkflowExecutor({
@@ -212,7 +227,7 @@ Deno.test("7 composed authorized Browser extraction preserves identity and exact
   const quiz = createQuizActorCritic({
     generator: { generate: async ({ knowledge }) => ({ ok: true, value: { id: "quiz-a", knowledgeId: knowledge.id, knowledgeRevision: knowledge.sourceRevision, kind: "single-choice", prompt: "What closes a phrase?", options: ["A cadence", "A pickup"], answer: "A cadence", citedEvidenceUrls: knowledge.evidenceAnchors.map((anchor) => anchor.url) } }) },
     evaluator: { evaluate: async () => ({ ok: true, value: { score: 9, reasons: ["Exact concept and evidence."], feedback: "Keep the exact evidence.", groundingProblems: [] } }) },
-    repository: { appendAttempt: async (attempt) => { attempts.push(attempt); return { ok: true, value: null }; }, publish: async (command) => { publications.push(command); return { ok: true, value: null }; }, restrict: async () => ({ ok: true, value: null }), discard: async () => ({ ok: true, value: null }), purge: async () => ({ ok: true, value: null }) },
+    repository: { findPublished: async () => ({ ok: true, value: null }), appendAttempt: async (attempt) => { attempts.push(attempt); return { ok: true, value: null }; }, publish: async (command) => { publications.push(command); return { ok: true, value: null }; }, restrict: async () => ({ ok: true, value: null }), discard: async () => ({ ok: true, value: null }), purge: async () => ({ ok: true, value: null }) },
     now: () => "2026-08-13T00:00:00.000Z", logger: () => {}, maxAttempts: 3,
   });
   let current = run("robots-check");
@@ -282,7 +297,7 @@ Deno.test("9 unit 2 preserves fail-closed rights, deterministic quiz publication
   assertEquals(sideEffects, 0);
 
   const statuses = /** @type {string[]} */ ([]);
-  const actor = createQuizActorCritic({ generator: { generate: async ({ knowledge }) => ({ ok: true, value: { id: "stable", knowledgeId: knowledge.id, knowledgeRevision: knowledge.sourceRevision, kind: "fill-blank", prompt: "A cadence closes a ___.", options: [], answer: "phrase", citedEvidenceUrls: ["https://example.test/learn"] } }) }, evaluator: { evaluate: async () => ({ ok: true, value: { score: 8, reasons: ["Grounded"], feedback: "Keep", groundingProblems: [] } }) }, repository: { appendAttempt: async () => ({ ok: true, value: null }), publish: async ({ status }) => { statuses.push(status); return { ok: true, value: null }; }, restrict: async () => ({ ok: true, value: null }), discard: async () => ({ ok: true, value: null }), purge: async () => ({ ok: true, value: null }) }, now: () => "2026-08-13T00:00:00.000Z", logger: () => {}, maxAttempts: 3 });
+  const actor = createQuizActorCritic({ generator: { generate: async ({ knowledge }) => ({ ok: true, value: { id: "stable", knowledgeId: knowledge.id, knowledgeRevision: knowledge.sourceRevision, kind: "fill-blank", prompt: "A cadence closes a ___.", options: [], answer: "phrase", citedEvidenceUrls: ["https://example.test/learn"] } }) }, evaluator: { evaluate: async () => ({ ok: true, value: { score: 8, reasons: ["Grounded"], feedback: "Keep", groundingProblems: [] } }) }, repository: { findPublished: async () => ({ ok: true, value: null }), appendAttempt: async () => ({ ok: true, value: null }), publish: async ({ status }) => { statuses.push(status); return { ok: true, value: null }; }, restrict: async () => ({ ok: true, value: null }), discard: async () => ({ ok: true, value: null }), purge: async () => ({ ok: true, value: null }) }, now: () => "2026-08-13T00:00:00.000Z", logger: () => {}, maxAttempts: 3 });
   const quizPoint = { id: "knowledge-a", sourceId: "source-a", sourceRevision: 1, summary: "A cadence closes a phrase.", normalizedHash: "hash-a", evidenceAnchors: [{ url: "https://example.test/learn", selector: "main" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://example.test/learn" }, extractionVersion: "v1" };
   await actor.run({ ownerId: "owner-a", runId: "run-a", points: [quizPoint] });
   await actor.run({ ownerId: "owner-a", runId: "run-a", points: [quizPoint] });

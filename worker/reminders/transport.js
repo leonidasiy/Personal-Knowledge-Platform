@@ -31,14 +31,14 @@ export function createWebPushSender(configuration) {
     if (
       Object.keys(message).some((key) =>
         !["type", "id", "expiresAt", "test"].includes(key)
-      ) || message.type !== "daily-reminder" ||
+      ) || (message.type !== "daily-reminder" && message.type !== "source-ready" && message.type !== "source-attention") ||
       typeof message.id !== "string" ||
       !/^[a-zA-Z0-9:_-]{1,128}$/.test(message.id) ||
       typeof message.expiresAt !== "string" ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(
         message.expiresAt,
       ) || !Number.isFinite(Date.parse(message.expiresAt)) ||
-      (message.test !== undefined && typeof message.test !== "boolean")
+      (message.test !== undefined && (message.type !== "daily-reminder" || typeof message.test !== "boolean"))
     ) throw new TypeError("ReminderTransportInputInvalid");
     const request = webPush.generateRequestDetails(
       subscription,
@@ -52,11 +52,12 @@ export function createWebPushSender(configuration) {
         },
       },
     );
-    const response = await configuration.fetch(request.endpoint, {
+    const { fetch } = configuration;
+    const response = await fetch(request.endpoint, {
       method: request.method,
       headers: request.headers,
       body: request.body,
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
     // Provider response bodies can contain capability URLs; never buffer or log.

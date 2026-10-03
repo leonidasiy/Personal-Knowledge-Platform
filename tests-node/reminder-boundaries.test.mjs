@@ -102,7 +102,11 @@ test("transport accepts only configured push origins, encrypts a fixed payload, 
     privateKey: vapid.privateKey,
     subject: "mailto:test@example.com",
     allowedOrigins: ["https://fcm.googleapis.com"],
-    fetch: async (url, init) => {
+    fetch: async function (url, init) {
+      assert.ok(
+        this === undefined,
+        "native fetch must not receive the configuration as its receiver",
+      );
       requests.push({ url, init });
       return new Response(null, { status: 201 });
     },
@@ -117,11 +121,18 @@ test("transport accepts only configured push origins, encrypts a fixed payload, 
   );
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, subscription.endpoint);
-  assert.equal(requests[0].init.redirect, "error");
+  assert.equal(requests[0].init.redirect, "manual");
   assert.ok(
     requests[0].init.headers.Authorization ||
       requests[0].init.headers.authorization,
   );
+  for (const type of ["source-ready", "source-attention"]) {
+    assert.equal(await sender(subscription, {type,id:"source-event",expiresAt:"2026-01-01T00:00:00.000Z"}), true);
+  }
+  for (const payload of [
+    {type:"unknown",id:"x",expiresAt:"2026-01-01T00:00:00.000Z"},
+    {type:"source-ready",test:true,id:"x",expiresAt:"2026-01-01T00:00:00.000Z"},
+  ]) await assert.rejects(() => sender(subscription,payload), /ReminderTransportInputInvalid/);
   await assert.rejects(
     () =>
       sender({ ...subscription, endpoint: "https://evil.example/send/x" }, {
@@ -146,22 +157,24 @@ test("transport accepts only configured push origins, encrypts a fixed payload, 
     }),
     false,
   );
-  const rejected = createWebPushSender({
-    publicKey: vapid.publicKey,
-    privateKey: vapid.privateKey,
-    subject: "mailto:test@example.com",
-    allowedOrigins: ["https://fcm.googleapis.com"],
-    fetch: async () => new Response(null, { status: 500 }),
-  });
-  await assert.rejects(
-    () =>
-      rejected(subscription, {
-        type: "daily-reminder",
-        id: "x",
-        expiresAt: "2026-01-01T00:00:00.000Z",
-      }),
-    /ReminderPushRejected:500/,
-  );
+  for (const status of [302, 307, 500]) {
+    const rejected = createWebPushSender({
+      publicKey: vapid.publicKey,
+      privateKey: vapid.privateKey,
+      subject: "mailto:test@example.com",
+      allowedOrigins: ["https://fcm.googleapis.com"],
+      fetch: async () => new Response(null, { status }),
+    });
+    await assert.rejects(
+      () =>
+        rejected(subscription, {
+          type: "daily-reminder",
+          id: "x",
+          expiresAt: "2026-01-01T00:00:00.000Z",
+        }),
+      new RegExp(`ReminderPushRejected:${status}`),
+    );
+  }
 });
 
 test("runtime fails closed for absent, partial, or invalid push configuration", async () => {

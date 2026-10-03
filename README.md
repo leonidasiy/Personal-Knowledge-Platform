@@ -11,10 +11,10 @@ Open the [private live site](https://resonance-discovery.lirenleonidas.workers.d
 and sign in with your authorized email. No development tools are needed.
 You can use the browser or install its desktop/home-screen web app.
 Follow [desktop, Android and iPhone/iPad setup](SETUP.md#use-the-live-app).
-Settings controls appearance, motion, sound and optional daily reminders.
+Settings controls appearance, motion, sound and optional daily reminders and source-processing alerts.
 YouTube information is tucked into a collapsed Settings disclosure. Card entrances
 respect both the motion toggle and your device's reduced-motion preference.
-Push delivery is not activated; installation alone does not enable notifications.
+Reminders are available for Android Chrome; enable them in Settings on each device.
 
 ## Use the hosted knowledge workflow
 

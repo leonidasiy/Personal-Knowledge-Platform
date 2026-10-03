@@ -47,16 +47,28 @@ data, not a complete backup of your hosted account. Clearing browser data can er
 study/settings and notification enrollment. **Erase local data** does not erase
 server records; do not use it as an update troubleshooting shortcut.
 
-### Daily reminders
+### Notifications
 
-Push delivery is not activated. Installing the app does not schedule notifications.
-Once reminders are available, choose **Settings → Enable on this device**,
+Reminders are configured for Android Chrome. Installing the app does not schedule notifications.
+Choose **Settings → Enable on this device**,
 select a local time, allow notifications and save. **Skip today** suppresses one
-day; completed study/review can suppress a reminder too. A test send checks the
-send path; seeing it on the actual device is required to prove delivery.
+day; completed study/review can suppress a reminder too. Choose **Test notification**
+and check your notification tray, then tap the notification to open the app.
+To test delivery while closed, save a time a few minutes ahead and return to your
+home screen without force-stopping Chrome. If you already completed today's
+learning, the scheduled reminder is suppressed. Restore your preferred time after
+the check. No reinstall is needed; reopen the app online if Settings looks stale.
 Check site/browser and OS permissions if notifications stop. Revisit settings
 after a timezone change. Delivery is best-effort, not an exact alarm; physical
-Android/iOS notification delivery remains unverified.
+Android test-push delivery has been confirmed; scheduled and source-event delivery
+still need your device check. iOS delivery remains unverified.
+
+The same device opt-in also sends one alert when a source's knowledge and quizzes
+are ready, or when permission, an upload or a processing retry needs your action.
+There is no separate scraping-complete alert. Source alerts open Library and
+omit source titles from the lock screen. **Skip today** affects only daily
+reminders; disabling notifications turns off both kinds. Existing completed
+sources do not receive backfilled alerts.
 
 ### Updates and offline use
 

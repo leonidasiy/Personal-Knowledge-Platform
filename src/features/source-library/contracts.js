@@ -199,7 +199,8 @@
  * } | {
  *   readonly kind: "SourceEmbeddingDimensionMismatch"
  * } | {
- *   readonly kind: "SourceSemanticIndexUnavailable"
+ *   readonly kind: "SourceSemanticIndexUnavailable",
+ *   readonly reason?: "NotConfigured" | "InvalidCommand" | "InvalidResponse" | "ProviderRejected" | "TransportFailed" | "TimedOut"
  * } | {
  *   readonly kind: "SourceSemanticConsentRequired"
  * } | {

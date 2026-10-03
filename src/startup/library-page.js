@@ -134,6 +134,7 @@ export function createLibraryPage(dependencies) {
       if (reset) {
         state = "loading";
         items = [];
+        knowledge = [];
         nextCursor = null;
         searchScope = "sources";
         knowledgeSearchResults = [];
@@ -229,7 +230,7 @@ export function createLibraryPage(dependencies) {
         : items.length === 0
         ? "empty"
         : "success";
-      if (searchScope === "sources") await loadWorkflowStatuses();
+      if (searchScope === "sources") { knowledge = []; await Promise.all([loadKnowledge(), loadWorkflowStatuses()]); }
     })().finally(() => {
       read = null;
       rerender();
@@ -437,19 +438,20 @@ export function createLibraryPage(dependencies) {
   }
 
   let uploadMessage = "";
+  let uploadSucceeded = false;
   /** @param {string} message */
   function uploadFailure(message) {
     uploadMessage = message;
-    onError(message);
   }
 
-  /** @param {string} sourceId Empty creates a private document. @param {FormData} form */
-  async function uploadMaterial(sourceId, form) {
+  /** @param {string} sourceId Empty creates a private document. @param {FormData} form @param {import("../features/uploads/page.js").UploadContext|null} [context] */
+  async function uploadMaterial(sourceId, form, context = null) {
     if (pendingSourceId !== null) return;
     uploadMessage = "";
-    let source = items.find((candidate) => candidate.id === sourceId);
-    const run = workflowStatuses.find((status) => status.sourceId === sourceId)
-      ?.run;
+    uploadSucceeded = false;
+    if (context !== null && (context.source.id !== sourceId || !context.runId || context.source.state !== "active")) return uploadFailure(uploadCopy(0));
+    let source = context?.source ?? items.find((candidate) => candidate.id === sourceId);
+    const run = context === null ? workflowStatuses.find((status) => status.sourceId === sourceId)?.run : {runId:context.runId,state:"awaiting-upload"};
     if (
       !(form instanceof FormData) ||
       (sourceId !== "" &&
@@ -457,22 +459,22 @@ export function createLibraryPage(dependencies) {
       form.get("attested") !== "on"
     ) {
       uploadFailure(
-        "Select an awaiting source or a new private document and confirm processing permission.",
+        uploadCopy(1),
       );
       return;
     }
     const files = /** @type {File[]} */ (form.getAll("file").filter((item) => item instanceof File && item.size > 0));
     const file = files[0] ?? null;
     const mode = form.get("imageProcessing") === "on" ? "image" : "text";
-    if (files.length > 100 || files.reduce((total, item) => total + item.size, 0) > 104_857_600) return uploadFailure("The upload exceeds the 100 MiB limit.");
+    if (files.length > 100 || files.reduce((total, item) => total + item.size, 0) > 104_857_600) return uploadFailure(uploadCopy(2));
     const pasted = form.get("content");
     const content = typeof pasted === "string" ? pasted.trim() : "";
-    if (content.length > 1_000_000) return uploadFailure("Pasted text exceeds the one-million-character limit.");
+    if (content.length > 1_000_000) return uploadFailure(uploadCopy(3));
     if ((file === null) === (content === "")) {
-      uploadFailure("Provide either pasted text or one document.");
+      uploadFailure(uploadCopy(4));
       return;
     }
-    if (files.length > 1 && mode !== "image") return uploadFailure("Turn on image processing to upload several images together.");
+    if (files.length > 1 && mode !== "image") return uploadFailure(uploadCopy(5));
     const extension = file?.name.split(".").at(-1)?.toLowerCase();
     // Closed upload-format contract; content interpretation belongs to the model.
     const mediaType = file === null || extension === "txt"
@@ -493,22 +495,22 @@ export function createLibraryPage(dependencies) {
       ? "image/gif"
       : null;
     if (mediaType === null) {
-      uploadFailure("Choose a text, Markdown, PDF, PowerPoint, or raster image file.");
+      uploadFailure(uploadCopy(6));
       return;
     }
-    if (mode === "image" && (file === null || mediaType !== "application/pdf" && !mediaType.startsWith("image/") || files.length > 1 && files.some((item) => !/\.(?:png|jpe?g|webp|gif)$/iu.test(item.name)))) return uploadFailure("Image processing requires a PDF or raster images.");
-    if (mode === "image" && files.some((item) => item.size > 20 * 1024 * 1024 && mediaType !== "application/pdf")) return uploadFailure("Each image must be 20 MiB or less.");
-    if (mode === "text" && mediaType.startsWith("image/")) return uploadFailure("Select image mode for raster image files.");
+    if (mode === "image" && (file === null || mediaType !== "application/pdf" && !mediaType.startsWith("image/") || files.length > 1 && files.some((item) => !/\.(?:png|jpe?g|webp|gif)$/iu.test(item.name)))) return uploadFailure(uploadCopy(7));
+    if (mode === "image" && files.some((item) => item.size > 20 * 1024 * 1024 && mediaType !== "application/pdf")) return uploadFailure(uploadCopy(8));
+    if (mode === "text" && mediaType.startsWith("image/")) return uploadFailure(uploadCopy(9));
     const titleValue = form.get("title");
     const title = typeof titleValue === "string" && titleValue.trim() !== ""
       ? titleValue.trim()
       : file?.name;
     if (sourceId === "" && !title) {
-      return uploadFailure("Give pasted material a title.");
+      return uploadFailure(uploadCopy(10));
     }
     const fileName = file?.name ?? "paste.txt";
     const pageRange = form.get("pageRange") ?? "";
-    if (typeof pageRange !== "string" || pageRange.length > 300 || pageRange.trim() !== "" && (mode !== "image" || mediaType !== "application/pdf")) return uploadFailure("Page ranges apply only to PDF image processing.");
+    if (typeof pageRange !== "string" || pageRange.length > 300 || pageRange.trim() !== "" && (mode !== "image" || mediaType !== "application/pdf")) return uploadFailure(uploadCopy(11));
     pendingSourceId = sourceId;
     stopWorkflowStatusPolling();
     try {
@@ -598,9 +600,10 @@ export function createLibraryPage(dependencies) {
       }
       uploadMessage =
         "Content uploaded. Knowledge and question processing will continue.";
+      uploadSucceeded = true;
       onNotice(uploadMessage);
       pendingSourceId = null;
-      await loadWorkflowStatuses();
+      if (context === null) await loadWorkflowStatuses();
     } finally {
       pendingSourceId = null;
     }
@@ -662,25 +665,6 @@ export function createLibraryPage(dependencies) {
         }
       })
     );
-    root.querySelectorAll("[data-library-upload]").forEach((element) =>
-      element.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const form = event.currentTarget;
-        if (!(form instanceof HTMLFormElement)) return;
-        const button = form.querySelector("button[type='submit']");
-        if (button instanceof HTMLButtonElement) button.disabled = true;
-        try {
-          await uploadMaterial(
-            form.dataset.libraryUpload ?? "",
-            new FormData(form),
-          );
-        } finally {
-          if (button instanceof HTMLButtonElement) button.disabled = false;
-          const feedback = form.querySelector("[data-library-upload-message]");
-          if (feedback !== null) feedback.textContent = uploadMessage;
-        }
-      })
-    );
     const sentinel = root.querySelector("[data-library-sentinel]");
     if (sentinel !== null && nextCursor !== null && read === null) {
       observer = createObserver(() => void load(false));
@@ -715,7 +699,12 @@ export function createLibraryPage(dependencies) {
     message = friendly(failure);
   }
 
-  return freeze({ load, search, uploadMaterial, bind, render });
+  /** @param {string} sourceId @param {string} title */
+  function renamed(sourceId, title) {
+    items = items.map(source => source.id === sourceId ? freeze({...source,title}) : source);
+    knowledgeSearchResults = knowledgeSearchResults.map(point => point.sourceId === sourceId ? {...point,sourceTitle:title} : point);
+  }
+  return freeze({ load, search, uploadMaterial, bind, render, renamed, uploadResult: () => ({ok:uploadSucceeded,message:uploadMessage}) });
 }
 
 /** @param {import("../features/source-library/gateway.js").SourceGatewayFailure} failure */
@@ -775,3 +764,12 @@ function merge(current, next) {
 }
 
 export {};
+
+/** Static validation text shares the cached application shell. @param {number} index */
+function uploadCopy(index) {
+  const content = document.getElementById("app-copy")?.textContent;
+  if (!content) throw new TypeError("UploadCopyUnavailable");
+  const copy = JSON.parse(content).uploadValidation?.[index];
+  if (typeof copy !== "string") throw new TypeError("UploadCopyInvalid");
+  return copy;
+}

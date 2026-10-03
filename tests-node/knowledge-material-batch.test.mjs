@@ -73,7 +73,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
           assert(message[1].image_url.url.startsWith("data:image/png;base64,"));
         } else batchSizes.push(task.sections.length);
         assert.equal(body.max_tokens, task.mode === "image" ? 4096 : 16384);
-        assert(body.messages[0].content.includes("selection-v2"));
+        assert(body.messages[0].content.includes("selection-v3"));
         if (task.mode === "image") {
           assert.equal(body.response_format.type, "json_schema");
           assert.equal(body.response_format.json_schema.strict, true);
@@ -82,8 +82,8 @@ test("production upload runtime resumes text batches and processes selected PDF 
           assert.equal(body.reasoning.effort, "low");
         } else assert.equal(body.response_format.type, "json_object");
         output = task.mode === "image"
-          ? { notes: "Synthetic concise progress.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two cases are labeled in the figure.", normalizedHash: `fixture-image-${imageBatchSizes.length}`, coverageGoalIds: [] }] }
-          : { pages: task.sections.map((section) => ({ url: section.url, notes: "Synthetic concise progress.", candidates: section.text === "" ? [] : [{ summary: section.text, normalizedHash: section.id, evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [] }] })) };
+          ? { notes: "Synthetic concise progress.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two cases are labeled in the figure.", normalizedHash: `fixture-image-${imageBatchSizes.length}`, coverageGoalIds: [], classification: { version: 1, primarySubject: null, secondarySubjects: [], subcategory: null } }] }
+          : { pages: task.sections.map((section) => ({ url: section.url, notes: "Synthetic concise progress.", candidates: section.text === "" ? [] : [{ summary: section.text, normalizedHash: section.id, evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [], classification: { version: 1, primarySubject: null, secondarySubjects: [], subcategory: null } }] })) };
       } else if (task.draft) output = { score: 9, reasons: ["Synthetic fixture"], feedback: "Accepted fixture", groundingProblems: [] };
       else if (task.knowledge) output = { id: `quiz-${task.knowledge.normalizedHash}`, knowledgeId: task.knowledge.id, knowledgeRevision: 1, kind: "single-choice", prompt: `Which fixture belongs to ${task.knowledge.normalizedHash}?`, options: ["Fixture", "Other"], answer: "Fixture", explanation: "Synthetic explanation.", citedEvidenceUrls: task.knowledge.evidenceAnchors.map((anchor) => anchor.url) };
       else assert.fail("Unexpected synthetic model task");

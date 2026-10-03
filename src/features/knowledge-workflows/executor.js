@@ -168,7 +168,7 @@ export function createKnowledgeWorkflowExecutor(dependencies) {
         if (!quiz.ok) return fail(operationFailure("quiz", "WorkflowQuizFailed", quiz.error, "per-point-quiz-loop"), dependencies, current.runId);
         const acceptedQuizzes = quiz.value.dispositions.filter((disposition) => disposition.status === "accepted").length;
         const pendingQuizzes = quiz.value.dispositions.filter((disposition) => disposition.publicationStatus === "pending-review").length;
-        const completed = await transition(dependencies, { run: current, nextState: "completed", counts: { ...current.counts, knowledgePoints: points.value.length, acceptedQuizzes, pendingQuizzes } });
+        const completed = await transition(dependencies, { run: current, nextState: "completed", counts: { ...current.counts, knowledgePoints: Math.max(current.counts.knowledgePoints, points.value.length), acceptedQuizzes, pendingQuizzes } });
         if (!completed.ok) return fail(operationFailure("transition", "WorkflowTransitionFailed", completed.error, "per-point-quiz-loop"), dependencies, current.runId);
         dependencies.logger({ event: "knowledge-workflow-executor-success", runId: current.runId });
         const restricted = quiz.value.dispositions.filter((disposition) => disposition.restrictedUntil !== null);

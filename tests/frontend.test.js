@@ -37,7 +37,7 @@ Deno.test("learning shell is local, theme-aware, and keyboard reachable", async 
 });
 
 Deno.test("active learner owns Feed rendering while app retains local history contracts", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const learner = await Deno.readTextFile(
     new URL("src/features/learning-generation/learner.js", root),
   );
@@ -60,7 +60,7 @@ Deno.test("active learner owns Feed rendering while app retains local history co
 });
 
 Deno.test("appearance is owner-scoped, exported, and erased; retired layouts remain storage-compatible", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const localDataActions = await Deno.readTextFile(
     new URL("src/startup/local-data-actions.js", root),
   );
@@ -133,7 +133,7 @@ Deno.test("appearance is owner-scoped, exported, and erased; retired layouts rem
 });
 
 Deno.test("feed reveals immutable daily assignments and retains the 24-hour ranking policy", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   assert(
     source.includes("cursorLifetimeMs: 24 * 60 * 60_000"),
     "The local cursor lifetime must be exactly 24 hours.",
@@ -162,7 +162,7 @@ Deno.test("feed reveals immutable daily assignments and retains the 24-hour rank
 });
 
 Deno.test("active learner Feed completion has no legacy visibility tracker", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const learner = await Deno.readTextFile(
     new URL("src/features/learning-generation/learner.js", root),
   );
@@ -180,7 +180,7 @@ Deno.test("active learner Feed completion has no legacy visibility tracker", asy
 });
 
 Deno.test("theme changes preserve deliberate focus without legacy quiz handlers", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const experienceActions = await Deno.readTextFile(
     new URL("src/startup/experience-actions.js", root),
   );
@@ -207,7 +207,7 @@ Deno.test("theme changes preserve deliberate focus without legacy quiz handlers"
 });
 
 Deno.test("manual study remains single-flight until durable persistence completes", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const handler = source.slice(
     source.indexOf("async function recordManualStudy"),
     source.indexOf("async function recordPassiveExposure"),
@@ -431,13 +431,11 @@ Deno.test("all approved theme text tokens meet WCAG AA contrast", async () => {
 });
 
 Deno.test("Feed and Review keep study and quiz controls exclusive", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const learner = await Deno.readTextFile(
     new URL("src/features/learning-generation/learner.js", root),
   );
-  const libraryRoute = await Deno.readTextFile(
-    new URL("src/routes/library.js", root),
-  );
+  const libraryRoute = await readLibraryPresentation();
   assert(
     learner.includes("data-learner-feed-sentinel") &&
       learner.includes('data-action="complete-learner-feed"') &&
@@ -472,10 +470,8 @@ Deno.test("Feed and Review keep study and quiz controls exclusive", async () => 
 });
 
 Deno.test("Learner Review and Library terminate route failures independently", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
-  const libraryRoute = await Deno.readTextFile(
-    new URL("src/routes/library.js", root),
-  );
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
+  const libraryRoute = await readLibraryPresentation();
   const libraryPage = await Deno.readTextFile(
     new URL("src/startup/library-page.js", root),
   );
@@ -502,14 +498,14 @@ Deno.test("Learner Review and Library terminate route failures independently", a
     "Failed route loads and individual knowledge removal need explicit controls.",
   );
   assert(
-    libraryRoute.includes("Knowledge cards and paired questions appear in Feed and Review") &&
+    libraryRoute.includes("Browse saved sources, search extracted knowledge, and check processing status.") &&
       !libraryRoute.includes("Review queue needs attention"),
     "Library must distinguish source management from the top-level Review surface.",
   );
 });
 
 Deno.test("fatal local restore keeps export/reset recovery without legacy review replay", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   assert(
     source.includes(
       "startupRestoreIssue = restoreRecoveryFor(restored.error)",
@@ -540,10 +536,8 @@ Deno.test("fatal local restore keeps export/reset recovery without legacy review
 });
 
 Deno.test("Learner controls expose approved targets and batch ownership", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
-  const libraryRoute = await Deno.readTextFile(
-    new URL("src/routes/library.js", root),
-  );
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
+  const libraryRoute = await readLibraryPresentation();
   const learner = await Deno.readTextFile(
     new URL("src/features/learning-generation/learner.js", root),
   );
@@ -581,8 +575,8 @@ Deno.test("Learner controls expose approved targets and batch ownership", async 
   );
 });
 
-Deno.test("Discover is a lazy fourth destination with one bounded search command", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+Deno.test("Discover remains a lazy destination with one bounded search command", async () => {
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const discoveryPage = await Deno.readTextFile(
     new URL("src/startup/discovery-page.js", root),
   );
@@ -591,7 +585,7 @@ Deno.test("Discover is a lazy fourth destination with one bounded search command
       source.includes('view === "discover"') &&
       source.includes("location.hash = view") &&
       source.includes('section === "item"'),
-    "Discover must be a selected, deep-linkable fourth destination.",
+    "Discover must be a selected, deep-linkable destination.",
   );
   const navigationHandler = source.slice(
     source.indexOf('root.querySelectorAll("[data-view]")'),
@@ -655,7 +649,7 @@ Deno.test("Discover is a lazy fourth destination with one bounded search command
 });
 
 Deno.test("Discover route re-entry retries the hosted source capability probe", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const loadRoute = source.slice(
     source.indexOf("async function loadActiveRoute()"),
     source.indexOf("async function loadReviewRoute()"),
@@ -680,6 +674,8 @@ Deno.test("every project-owned CSS class is used or documented as dynamic", asyn
     await Deno.readTextFile(new URL("src/features/experience/reveal.js", root)),
     await Deno.readTextFile(new URL("src/features/reminders/page.js", root)),
     await Deno.readTextFile(new URL("src/app.js", root)),
+    await Deno.readTextFile(new URL("src/routes/navigation.js", root)),
+    await Deno.readTextFile(new URL("src/features/uploads/page.js", root)),
     await Deno.readTextFile(
       new URL("src/features/notifications/controller.js", root),
     ),
@@ -711,7 +707,7 @@ Deno.test("every project-owned CSS class is used or documented as dynamic", asyn
 });
 
 Deno.test("notifications are dismissible, pausable, and semantically announced", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const notificationSource = await Deno.readTextFile(
     new URL("src/features/notifications/controller.js", root),
   );
@@ -739,7 +735,7 @@ Deno.test("notifications are dismissible, pausable, and semantically announced",
 });
 
 Deno.test("app delegates Review answer feedback to the learner controller", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const learner = await Deno.readTextFile(
     new URL("src/features/learning-generation/learner.js", root),
   );
@@ -752,8 +748,8 @@ Deno.test("app delegates Review answer feedback to the learner controller", asyn
 });
 
 Deno.test("rerender paths preserve a deliberate focus target", async () => {
-  const source = await Deno.readTextFile(new URL("src/app.js", root));
-  const libraryRoute = await Deno.readTextFile(new URL("src/routes/library.js", root));
+  const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
+  const libraryRoute = await readLibraryPresentation();
   assert(
     source.includes("document.activeElement === preferred") &&
       source.includes("workspace instanceof HTMLElement"),
@@ -763,8 +759,8 @@ Deno.test("rerender paths preserve a deliberate focus target", async () => {
       source.includes("captureTransientViewState()") &&
       source.includes("restoreTransientViewState(transientState)") &&
       source.includes("DataTransfer") &&
-      libraryRoute.includes("data-library-details-key"),
-    "Background rerenders must retain Library drafts, selected files, and disclosure state.",
+      libraryRoute.includes('href="') && libraryRoute.includes('escapeHtml(`#upload?'),
+    "Background rerenders must preserve existing transient state and Library must hand off uploads to their dedicated route.",
   );
 });
 
@@ -812,4 +808,12 @@ function luminance(value) {
       : ((component + 0.055) / 1.055) ** 2.4;
   });
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** Read both parts of the Library presentation contract after shell extraction. */
+async function readLibraryPresentation() {
+  const html = await Deno.readTextFile(new URL("index.html", root));
+  const data = html.match(/<script id="library-markup" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
+  if (!data) throw new Error("Library shell markup missing");
+  return await Deno.readTextFile(new URL("src/routes/library.js", root)) + JSON.parse(data).flat().join("");
 }

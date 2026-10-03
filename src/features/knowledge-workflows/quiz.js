@@ -74,6 +74,7 @@
 /** @typedef {{ readonly evaluate: (command: { readonly draft: QuestionDraft, readonly knowledge: { readonly id: string, readonly summary: string, readonly evidenceAnchors: readonly { readonly url: string, readonly selector: string }[] }, readonly deterministicValidation: { readonly ok: true }, readonly attempt: number, readonly rubric: string }) => Promise<Result<unknown, unknown>> }} QuestionEvaluator */
 /**
  * @typedef {{
+ *   readonly findPublished: (scope: {readonly ownerId:string,readonly runId:string,readonly knowledgeId:string}) => Promise<Result<{readonly status:"published"|"pending-review",readonly attempt:number}|null,unknown>>,
  *   readonly appendAttempt: (attempt: QuizAttempt) => Promise<Result<null, unknown>>,
  *   readonly publish: (command: { readonly ownerId: string, readonly runId: string, readonly knowledge: KnowledgePoint, readonly draft: QuestionDraft, readonly score: number, readonly attempt: number, readonly status: "published" | "pending-review" }) => Promise<Result<null, unknown>>,
  *   readonly restrict: (command: { readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly restrictedUntil: string, readonly reason: string }) => Promise<Result<null, unknown>>,
@@ -140,7 +141,7 @@ function fail(failure, dependencies, runId, knowledgeId) { dependencies.logger({
 /** @param {QuizDependencies} dependencies */
 export function createQuizActorCritic(dependencies) {
   const policy = dependencies?.publicationPolicy ?? { samplingVersion: "factual-sampling-v1", factualSamplingRatePercent: 30 };
-  if (!dependencies || typeof dependencies.generator?.generate !== "function" || typeof dependencies.evaluator?.evaluate !== "function" || typeof dependencies.repository?.appendAttempt !== "function" || typeof dependencies.repository.publish !== "function" || typeof dependencies.repository.discard !== "function" || typeof dependencies.repository.purge !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || dependencies.maxAttempts !== 3 || !text(policy.samplingVersion) || !Number.isInteger(policy.factualSamplingRatePercent) || policy.factualSamplingRatePercent < 0 || policy.factualSamplingRatePercent > 100) throw new TypeError("Quiz actor-critic dependencies are invalid.");
+  if (!dependencies || typeof dependencies.generator?.generate !== "function" || typeof dependencies.evaluator?.evaluate !== "function" || typeof dependencies.repository?.findPublished !== "function" || typeof dependencies.repository.appendAttempt !== "function" || typeof dependencies.repository.publish !== "function" || typeof dependencies.repository.discard !== "function" || typeof dependencies.repository.purge !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || dependencies.maxAttempts !== 3 || !text(policy.samplingVersion) || !Number.isInteger(policy.factualSamplingRatePercent) || policy.factualSamplingRatePercent < 0 || policy.factualSamplingRatePercent > 100) throw new TypeError("Quiz actor-critic dependencies are invalid.");
   return Object.freeze({
     /** @param {unknown} command @returns {Promise<Result<QuizRunResult, QuizFailure>>} */
     async run(command) {
@@ -149,6 +150,16 @@ export function createQuizActorCritic(dependencies) {
       /** @type {QuizDisposition[]} */
       const dispositions = [];
       for (const knowledge of command.points) {
+        let existing;
+        try { existing = await dependencies.repository.findPublished({ownerId:command.ownerId,runId:command.runId,knowledgeId:knowledge.id}); }
+        catch (error) { if (!(error instanceof Error)) throw error; return fail({kind:"QuizPersistenceFailed"},dependencies,command.runId,knowledge.id); }
+        if (!existing.ok) return fail({kind:"QuizPersistenceFailed"},dependencies,command.runId,knowledge.id);
+        if (existing.value !== null) {
+          if ((existing.value.status !== "published" && existing.value.status !== "pending-review") || !Number.isSafeInteger(existing.value.attempt) || existing.value.attempt < 1 || existing.value.attempt > dependencies.maxAttempts) return fail({kind:"QuizPersistenceFailed"},dependencies,command.runId,knowledge.id);
+          dispositions.push(freeze({knowledgeId:knowledge.id,status:"accepted",publicationStatus:existing.value.status,attempts:existing.value.attempt,failureKind:null,restrictedUntil:null}));
+          dependencies.logger({event:"quiz-actor-critic-reused",runId:command.runId,knowledgeId:knowledge.id});
+          continue;
+        }
         let feedback = null;
         let lastFailure = /** @type {QuizFailure["kind"] | null} */ (null);
         let attempts = 0;
@@ -250,7 +261,7 @@ export function createQuizActorCritic(dependencies) {
 
 /** @param {QuizRepository} repository @param {Omit<QuizAttempt, "id">} attempt @param {QuizDependencies} dependencies @param {string} runId @param {string} knowledgeId @returns {Promise<Result<null, QuizFailure>>} */
 async function persistAttempt(repository, attempt, dependencies, runId, knowledgeId) {
-  try { const result = await repository.appendAttempt(Object.freeze({ id: `quiz-attempt:${attempt.runId}:${attempt.knowledgeId}:${attempt.attempt}`, ...attempt })); return result.ok ? result : fail({ kind: "QuizPersistenceFailed" }, dependencies, runId, knowledgeId); } catch (error) { return fail({ kind: "QuizPersistenceFailed" }, dependencies, runId, knowledgeId); }
+  try { const result = await repository.appendAttempt(Object.freeze({ id: `quiz-attempt:${crypto.randomUUID()}`, ...attempt })); return result.ok ? result : fail({ kind: "QuizPersistenceFailed" }, dependencies, runId, knowledgeId); } catch (error) { return fail({ kind: "QuizPersistenceFailed" }, dependencies, runId, knowledgeId); }
 }
 
 export {};

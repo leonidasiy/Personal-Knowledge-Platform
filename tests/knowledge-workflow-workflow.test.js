@@ -185,6 +185,26 @@ Deno.test("workflow persists a retryable planner failure and clears it when retr
   assertEquals(retried.value.failureKind, null);
 });
 
+Deno.test("workflow retries rights and quiz failures at the saved stage without changing accumulated content", async () => {
+  for (const state of /** @type {const} */ (["rights-assessment", "robots-check", "extraction-loop", "extraction-finalized", "per-point-quiz-loop"])) {
+    const fixture = setup();
+    const run = (await createRun(fixture.service)).run;
+    fixture.runs[0] = {...run,state,counts:{pages:3,knowledgePoints:4,acceptedQuizzes:2,pendingQuizzes:0}};
+    const failed = await fixture.service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState:"retryable-failure",failureKind:"WorkflowExecutionStopped"});
+    if (!failed.ok) throw new Error(`${state}: ${failed.error.kind}`);
+    assertEquals(failed.value.retryState,state);
+    const resumed = await fixture.service.control({ownerId:run.ownerId,runId:run.runId,expectedRevision:failed.value.revision,action:"resume",idempotencyKey:`retry-${state}`});
+    if (!resumed.ok) throw new Error(resumed.error.kind);
+    assertEquals(resumed.value.state,state);
+    assertEquals(resumed.value.counts.knowledgePoints,4);
+    assertEquals(resumed.value.counts.acceptedQuizzes,2);
+    assertEquals(resumed.value.failureKind,null);
+    const rolledBack=await fixture.service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:resumed.value.revision,nextState:"retryable-failure",failureKind:"WorkflowInstanceControlFailed"});
+    if (!rolledBack.ok) throw new Error(rolledBack.error.kind);
+    assertEquals(rolledBack.value.retryState,state);
+  }
+});
+
 Deno.test("workflow permits an automatic bounded extraction continuation before the deadline", async () => {
   const fixture = setup();
   const run = (await createRun(fixture.service)).run;

@@ -110,7 +110,7 @@ Deno.test("push shows generic content with stable tag; never trusts payload cont
   equal(h.shown[0].title, "Resonance");
   equal(
     h.shown[0].options.body,
-    "A little time to revisit what you’ve learned?",
+    "What do you remember? Tap to start your daily review.",
   );
   equal(h.shown[0].options.tag, `resonance-reminder:${h.payload.id}`);
   equal(h.shown[0].options.renotify, false);
@@ -118,7 +118,12 @@ Deno.test("push shows generic content with stable tag; never trusts payload cont
   await h.dispatch("push", {
     data: { json: () => ({ ...h.payload, test: true }) },
   });
-  equal(h.shown[1].options.body, "Your test reminder is ready.");
+  equal(h.shown[1].options.body, "Your reminder is working. Tap to try your daily retrieval quiz.");
+  for (const [type,body] of [["source-ready","Your knowledge and quizzes are ready. Tap to explore them in Library."],["source-attention","A source needs your attention. Tap to open Library and see the next step."]]) {
+    await h.dispatch("push",{data:{json:()=>({...h.payload,type,body:"PRIVATE",url:"https://evil.example"})}});
+    equal(h.shown.at(-1)?.options.body,body);
+    equal(h.shown.at(-1)?.options.tag,`resonance-source:${h.payload.id}`);
+  }
 });
 
 Deno.test("push drops expired messages and rejects malformed or unbounded lifetime messages", async () => {
@@ -145,6 +150,7 @@ Deno.test("push drops expired messages and rejects malformed or unbounded lifeti
         expiresAt: new Date(h.clock + 66 * 60_000).toISOString(),
       },
       { ...h.payload, test: "yes" },
+      { ...h.payload, type: "source-ready", test: true },
     ]
   ) {
     await rejects(
@@ -223,6 +229,9 @@ Deno.test("notification click focuses existing app without destroying drafts or 
   equal(focused, 1);
   equal(messages, [{ type: "resonance-reminder-open" }]);
   equal(h.opened, []);
+  await h.dispatch("notificationclick",{notification:{tag:"resonance-source:one",data:{url:"https://evil.example"},close(){}}});
+  equal(messages.at(-1),{type:"resonance-source-update-open"});
+  equal(focused,2);
   h.windows.length = 0;
   await h.dispatch("notificationclick", {
     notification: { tag: "resonance-reminder:one", close() {} },
@@ -232,4 +241,6 @@ Deno.test("notification click focuses existing app without destroying drafts or 
     notification: { tag: "other-app", close() {} },
   });
   equal(h.opened.length, 1);
+  await h.dispatch("notificationclick",{notification:{tag:"resonance-source:one",close(){}}});
+  equal(h.opened.at(-1),"https://app.example/?view=library");
 });

@@ -1,3 +1,4 @@
+import { parseAppRoute, renderNavigationButton } from "./routes/navigation.js";
 // @ts-check
 
 import { CatalogRepository } from "./features/catalog/repository.js";
@@ -254,6 +255,8 @@ let dailySettings = null;
 let promptEligibilityTimer = null;
 /** @type {ReturnType<typeof createLibraryPage> | null} */
 let libraryPageController = null;
+/** @type {ReturnType<import("./features/uploads/page.js").createUploadPage>|null} */
+let uploadPage = null;
 /** @type {Promise<void> | null} */
 let libraryRouteLoad = null;
 /** @type {string | null} */
@@ -583,7 +586,20 @@ async function loadActiveRoute() {
     await learnerController?.loadReview();
   }
   if (activeView === "library") {
+    const existing = libraryPageController !== null;
     await loadLibraryRoute();
+    if (existing) await libraryPageController?.load();
+  }
+  if (activeView === "upload") {
+    await loadLibraryRoute();
+    if (libraryPageController !== null) {
+      if (uploadPage === null) {
+        const { createUploadPage } = await import("./features/uploads/page.js");
+        const library = libraryPageController;
+        uploadPage = createUploadPage({ fetch, baseUrl:new URL("./",location.href).href,createId:()=>crypto.randomUUID(),onChange:()=>render(),onRenamed:(id,title)=>library.renamed(id,title),upload:async(id,form,context)=>{await library.uploadMaterial(id,form,context);return library.uploadResult();} });
+      }
+      await uploadPage.load(location.hash);
+    }
   }
   if (activeView === "progress") {
     try {
@@ -963,7 +979,7 @@ function render(preferredFocusKey = null, fallbackHeadingId = null) {
         ? renderStartupRecovery()
         : `${activeView === "feed" ? renderFeed() : ""}${
           activeView === "review" ? renderReviewView() : ""
-        }${activeView === "library" ? renderLibraryView() : ""}${
+        }${activeView === "library" ? renderLibraryView() : ""}${activeView === "upload" ? uploadPage?.render() ?? '<section class="wide-view state-panel"><h1>Upload unavailable</h1><p>Upload could not open. Try again from Library.</p><a href="#library">Back to Library</a></section>' : ""}${
           activeView === "discover" ? renderDiscoverView() : ""}${activeView === "progress" ? renderProgressView() : ""}${activeView === "settings" ? renderSettingsView() : ""
         }`
     }<footer class="app-footer"><span>Made for a curious mind.<br>A place for what stays.</span><span>Learn. Connect. Return.</span></footer></main></div><div class="toast-region" aria-atomic="true">${
@@ -999,7 +1015,7 @@ function renderNavigation() {
   return `<nav class="primary-nav" aria-label="Primary">${
     navButton("feed", "Feed")
   }${navButton("discover", "Discover")}${navButton("review", "Review", learnerController?.hasDueReview() ?? false)}${
-    navButton("library", "Library")}${navButton("progress", "Progress")
+    navButton("library", "Library")}${navButton("upload", "Upload")}${navButton("progress", "Progress")
   }<span class="nav-caption">A little curiosity,<br>every day.</span></nav>`;
 }
 
@@ -1081,7 +1097,7 @@ function bindInteractions() {
       const view = element.getAttribute("data-view");
       if (
         view === "feed" || view === "discover" || view === "review" ||
-        view === "library" || view === "progress" || view === "settings"
+        view === "library" || view === "progress" || view === "settings" || view === "upload"
       ) {
         activeView = view;
         discoveryItemId = null;
@@ -1093,6 +1109,7 @@ function bindInteractions() {
   if (activeView === "settings") settingsPage?.bind(root);
   if (activeView === "discover") discoveryPage?.bind(root);
   if (activeView === "library") libraryPageController?.bind(root);
+  if (activeView === "upload") uploadPage?.bind(root);
   if (learnerController !== null && (activeView === "feed" || activeView === "review")) learnerController.bind(root);
   root.querySelectorAll("[data-action='new-session']").forEach((element) => {
     element.addEventListener("click", () => void beginNewSession());
@@ -1477,10 +1494,17 @@ function registerOfflineSupport() {
   });
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", (event) => {
-      if (event.data?.type === "resonance-reminder-open") {
-        activeView = "review";
+      if (event.data?.type === "resonance-reminder-open" || event.data?.type === "resonance-source-update-open") {
+        activeView = event.data.type === "resonance-reminder-open" ? "review" : "library";
         discoveryItemId = null;
-        location.hash = "review";
+        if (location.hash === `#${activeView}`) {
+          const view = activeView;
+          void loadActiveRoute().then(() =>
+            renderWithTransition(`nav-${view}`, `${view}-title`)
+          );
+        } else {
+          location.hash = activeView;
+        }
         return;
       }
       if (!isOfflineFailureMessage(event.data)) return;
@@ -1734,46 +1758,9 @@ function studyKey(candidateId, contentVersion) {
 }
 
 /** @param {string} hash */
-function parseRoute(hash) {
-  if (!hash && new URLSearchParams(location.search).get("view") === "review") {
-    return { view: /** @type {const} */ ("review"), discoveryItemId: null };
-  }
-  const [view, section, rawPromptId] = hash.replace(/^#/, "").split("/");
-  let discoveryItemId = null;
-  if (view === "discover" && section === "item" && rawPromptId) {
-    try {
-      discoveryItemId = decodeURIComponent(rawPromptId);
-    } catch (error) {
-      if (!(error instanceof URIError)) throw error;
-      discoveryItemId = null;
-    }
-  }
-  return {
-    view: view === "discover" || view === "review" || view === "library" || view === "progress" || view === "settings"
-      ? view
-      : "feed",
-    discoveryItemId,
-  };
-}
-
-/** @param {"feed" | "discover" | "review" | "library" | "progress"} view @param {string} label @param {boolean} [hasNotification] */
-function navButton(view, label, hasNotification = false) {
-  const active = activeView === view;
-  const icon = {
-    feed: "m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z",
-    discover: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-6-3-2 4-4 2 2-4Z",
-    review: "M4 9a8 8 0 1 1 0 7M4 3v6h6m2-2v5l3 2",
-    library: "M3 4h7v16H3Zm11 0h7v16h-7ZM3 8h7m4 0h7",
-    progress: "M3 3v18h18M6 15l4-5 4 3 6-8",
-  }[view];
-  return `
-    <button type="button" data-view="${view}" data-focus-key="nav-${view}" class="${
-    active ? "active" : ""
-  }" ${active ? 'aria-current="page"' : ""}>
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${icon}"/></svg>${label}${hasNotification ? '<span class="nav-notification-dot" aria-label="Review due"></span>' : ""}
-    </button>
-  `;
-}
+function parseRoute(hash) { return parseAppRoute(hash, location.search); }
+/** @param {"feed"|"discover"|"review"|"library"|"upload"|"progress"} view @param {string} label @param {boolean} [hasNotification] */
+function navButton(view,label,hasNotification=false) { return renderNavigationButton(view,label,activeView,hasNotification); }
 
 /** @param {string} elementId @returns {unknown} */
 function readEmbeddedJson(elementId) {

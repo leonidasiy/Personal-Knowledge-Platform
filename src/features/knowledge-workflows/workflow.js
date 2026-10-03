@@ -7,6 +7,7 @@ import { validateSourceRightsProfile } from "../source-library/rights-profile.js
 
 /** @typedef {"source-added" | "rights-assessment" | "awaiting-rights-review" | "awaiting-upload" | "robots-check" | "extraction-loop" | "paused" | "awaiting-time-limit-decision" | "retryable-failure" | "extraction-finalized" | "per-point-quiz-loop" | "completed" | "abandoned"} WorkflowState */
 /** @typedef {"rights-review" | "upload-material" | "generate-or-abandon" | null} WorkflowDecision */
+/** @typedef {"rights-assessment" | "robots-check" | "extraction-loop" | "extraction-finalized" | "per-point-quiz-loop"} WorkflowRetryStage */
 
 /**
  * @typedef {{
@@ -49,6 +50,7 @@ import { validateSourceRightsProfile } from "../source-library/rights-profile.js
  *   readonly decisionRequired: WorkflowDecision,
  *   readonly counts: WorkflowCounts,
  *   readonly failureKind: string | null,
+ *   readonly retryState?: WorkflowRetryStage,
  *   readonly reused: boolean,
  *   readonly createdAt: string,
  *   readonly updatedAt: string
@@ -149,6 +151,11 @@ function isWorkflowState(value) {
     value === "per-point-quiz-loop" || value === "completed" || value === "abandoned";
 }
 
+/** @param {unknown} value @returns {value is WorkflowRetryStage} */
+export function isWorkflowRetryStage(value) {
+  return value === "rights-assessment" || value === "robots-check" || value === "extraction-loop" || value === "extraction-finalized" || value === "per-point-quiz-loop";
+}
+
 /** @param {unknown} value @returns {value is WorkflowCounts} */
 function isCounts(value) {
   return isRecord(value) && [value.pages, value.knowledgePoints, value.acceptedQuizzes, value.pendingQuizzes]
@@ -179,6 +186,7 @@ function isRun(value) {
     (value.robotsEvidence === undefined || value.robotsEvidence === null || isRobotsEvidence(value.robotsEvidence)) &&
     (value.decisionRequired === null || value.decisionRequired === "rights-review" || value.decisionRequired === "upload-material" || value.decisionRequired === "generate-or-abandon") &&
     isCounts(value.counts) && (value.failureKind === null || isNonEmptyText(value.failureKind)) &&
+    (value.retryState === undefined || isWorkflowRetryStage(value.retryState)) &&
     typeof value.reused === "boolean" && isNonEmptyText(value.createdAt) && isNonEmptyText(value.updatedAt);
 }
 
@@ -221,7 +229,7 @@ function nextForControl(run, action, now, deadlineReached, envelopeMs) {
   const state = action === "stop"
     ? "paused"
     : action === "resume"
-    ? "extraction-loop"
+    ? run.state === "retryable-failure" ? run.retryState ?? "extraction-loop" : "extraction-loop"
     : action === "generate"
     ? "per-point-quiz-loop"
     : "abandoned";
@@ -230,8 +238,8 @@ function nextForControl(run, action, now, deadlineReached, envelopeMs) {
     state,
     revision: run.revision + 1,
     decisionRequired: null,
-    extractionStartedAt: action === "resume" && deadlineReached ? now : run.extractionStartedAt,
-    extractionDeadlineAt: action === "resume" && deadlineReached ? new Date(Date.parse(now) + envelopeMs).toISOString() : run.extractionDeadlineAt,
+    extractionStartedAt: action === "resume" && state === "extraction-loop" && deadlineReached ? now : run.extractionStartedAt,
+    extractionDeadlineAt: action === "resume" && state === "extraction-loop" && deadlineReached ? new Date(Date.parse(now) + envelopeMs).toISOString() : run.extractionDeadlineAt,
     updatedAt: now,
     ...(action === "abandon" ? { failureKind: "WorkflowAbandoned" } : action === "resume" ? { failureKind: null } : {}),
   });
@@ -240,6 +248,7 @@ function nextForControl(run, action, now, deadlineReached, envelopeMs) {
 /** @param {WorkflowState} current @param {WorkflowState} next @returns {boolean} */
 function isAllowedTransition(current, next) {
   if (current === next) return false;
+  if (next === "retryable-failure") return isWorkflowRetryStage(current);
   const allowed = {
     "source-added": new Set(["rights-assessment", "awaiting-rights-review", "abandoned"]),
     "rights-assessment": new Set(["awaiting-upload", "awaiting-rights-review", "robots-check", "abandoned"]),
@@ -482,6 +491,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         robotsEvidence: command.robotsEvidence === undefined ? run.robotsEvidence ?? null : command.robotsEvidence,
         counts,
         failureKind: command.failureKind === undefined ? run.failureKind : command.failureKind,
+        ...(nextState === "retryable-failure" && isWorkflowRetryStage(run.state) ? {retryState:run.state} : {}),
         updatedAt: now,
       });
       const updated = await repository.update({ ownerId: command.ownerId, runId: command.runId, expectedRevision: command.expectedRevision, next });

@@ -324,7 +324,7 @@ try {
   });
   assert.deepEqual(notifications, [{
     title: "Resonance",
-    body: "Your test reminder is ready.",
+    body: "Your reminder is working. Tap to try your daily retrieval quiz.",
     tag: "resonance-reminder:local-browser-reminder",
   }]);
   await page.getByRole("button", { name: "Settings", exact: true }).click();

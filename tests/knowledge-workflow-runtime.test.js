@@ -394,6 +394,33 @@ Deno.test("image material batches reject extra source fields and unsupported goa
   }
 });
 
+Deno.test("text material batches reject candidates missing required classification", async () => {
+  const section = { id: "page-1", url: "https://example.test/source#section=page-1", title: "Page 1", locator: "page:1", text: "The source distinguishes two cases." };
+  const candidate = { summary: section.text, normalizedHash: "cases", evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [] };
+  const base = { taskId: "text-classification", input: { sections: [section], coverageGoals: [], fileName: "source.pdf", progress: {}, mode: /** @type {const} */ ("text") }, maxOutputTokens: 16_384, logger: () => {} };
+  let calls = 0;
+  const rejected = await requestMaterialBatch({ ...base, generate: async () => {
+    calls += 1;
+    return { ok: true, value: { pages: [{ url: section.url, notes: "One supported distinction.", candidates: [candidate] }] } };
+  } });
+  assertEquals(rejected.ok, false);
+  if (!rejected.ok) assertEquals(rejected.error.kind, "KnowledgeMaterialBatchInvalid");
+  assertEquals(calls, 2);
+
+  const classification = { version: 1, primarySubject: null, secondarySubjects: [], subcategory: null };
+  calls = 0;
+  const accepted = await requestMaterialBatch({ ...base, generate: async () => {
+    calls += 1;
+    return { ok: true, value: { pages: [{ url: section.url, notes: "One supported distinction.", candidates: [{ ...candidate, classification }] }] } };
+  } });
+  assertEquals(accepted.ok, true);
+  assertEquals(calls, 1);
+  if (accepted.ok) {
+    assertEquals(accepted.value[0].candidates.length, 1);
+    assertEquals(JSON.stringify(accepted.value[0].candidates[0].classification), JSON.stringify(classification));
+  }
+});
+
 Deno.test("image material batches fail closed on missing and unknown classifications", async () => {
   const section = { id: "image-1", url: "https://example.test/source#section=image-1", title: "Figure", locator: "image:1", text: "" };
   for (const classification of [undefined, { version: 1, primarySubject: "invented", secondarySubjects: [], subcategory: "figure" }]) {

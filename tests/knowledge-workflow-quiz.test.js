@@ -23,6 +23,7 @@ function setup() {
   let evaluatorCalls = 0;
   /** @type {import("../src/features/knowledge-workflows/quiz.js").QuizRepository} */
   const repository = {
+      async findPublished() { return {ok:true,value:null}; },
       async appendAttempt(value) { attempts.push(value); return { ok: true, value: null }; },
       async publish(value) { published.push(value); return { ok: true, value: null }; },
       async restrict(value) { restricted.push(value); return { ok: true, value: null }; },
@@ -50,6 +51,25 @@ function setup() {
   });
   return { actor, repository, attempts, published, restricted, purged, get generatorCalls() { return generatorCalls; }, get evaluatorCalls() { return evaluatorCalls; } };
 }
+
+Deno.test("quiz retries preserve published work and fail closed on publication reads", async () => {
+  const fixture=setup();
+  const scope=[];
+  const actor=createQuizActorCritic({generator:{generate:async()=>{throw new Error("MustNotRegenerate");}},evaluator:{evaluate:async()=>{throw new Error("MustNotReevaluate");}},repository:{...fixture.repository,findPublished:async(command)=>{scope.push(command);return {ok:true,value:{status:"published",attempt:2}};}},now:()=>"2026-10-02T00:00:00.000Z",logger:()=>{},maxAttempts:3});
+  const command={ownerId:"owner-a",runId:"run-a",points:points()};
+  const result=await actor.run(command);
+  if (!result.ok) throw new Error(result.error.kind);
+  assertEquals(result.value.dispositions.length,2);
+  assertEquals(scope.length,2);
+  assertEquals(fixture.published.length,0);
+  assertEquals(fixture.purged.length,0);
+  for (const throws of [false,true]) {
+    const failing=createQuizActorCritic({generator:{generate:async()=>{throw new Error("MustNotGenerate");}},evaluator:{evaluate:async()=>{throw new Error("MustNotEvaluate");}},repository:{...fixture.repository,findPublished:async()=>{if(throws)throw new Error("ReadUnavailable");return {ok:false,error:{kind:"ReadUnavailable"}};}},now:()=>"2026-10-02T00:00:00.000Z",logger:()=>{},maxAttempts:3});
+    const failed=await failing.run(command);
+    if (failed.ok) throw new Error("Expected read failure");
+    assertEquals(failed.error.kind,"QuizPersistenceFailed");
+  }
+});
 
 Deno.test("quiz actor-critic revises after feedback and continues sequentially", async () => {
   const fixture = setup();

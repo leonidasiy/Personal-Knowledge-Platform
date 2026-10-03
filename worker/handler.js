@@ -20,6 +20,7 @@ import { handleReminderRequest } from "./reminders/http.js";
  *     readonly capabilities: () => readonly { readonly id: string, readonly label: string, readonly resultKind: string, readonly priority: number, readonly enabled: boolean }[],
  *     readonly search: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>
  *   },
+ *   readonly sourceRename?: ReturnType<typeof import("../src/features/source-library/rename.js").createSourceRenameService> | null,
  *   readonly sourceLibrary?: null | {
  *     readonly approve: (command: unknown) => Promise<Result<{ readonly source: LibrarySource, readonly job: SourceIngestionJob | null, readonly reused: boolean }, SourceLibraryFailure>>,
  *     readonly createPrivateDocument?: (command: unknown) => Promise<Result<{ readonly source: LibrarySource, readonly job: SourceIngestionJob | null, readonly reused: boolean }, SourceLibraryFailure>>,
@@ -145,6 +146,8 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const centralSearchPath = url.pathname === "/api/discovery/search";
       const centralCapabilitiesPath =
         url.pathname === "/api/discovery/search/capabilities";
+      const sourceUploadContext = url.pathname === "/api/source-library/upload-context";
+      const sourceRename = url.pathname === "/api/source-library/rename";
       const sourceAction = sourceLibraryAction(url.pathname);
       const privateDocumentCreate = url.pathname === "/api/source-library/private-documents";
       const privateDocumentId = url.pathname.match(/^\/api\/private-documents\/([^/]+)$/)?.[1] ?? null;
@@ -183,7 +186,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const learningMedia = url.pathname === "/api/learning-media";
       if (
         !reminders && !rssPath && !centralSearchPath &&
-        !centralCapabilitiesPath && sourceAction === null && !privateDocumentCreate && privateDocumentId === null && !sourceRightsApproval && !sourceBrowse &&
+        !centralCapabilitiesPath && !sourceUploadContext && !sourceRename && sourceAction === null && !privateDocumentCreate && privateDocumentId === null && !sourceRightsApproval && !sourceBrowse &&
         !sourceSearch && !sourceSuppressionCheck && !sourceActiveCheck &&
         !sourceIngestion && !manualMaterial && !wikimediaTimedText &&
         !learningStatus && !learningReviewQueue && !learningPublished && !learningReview && !learningRevocation &&
@@ -197,6 +200,20 @@ export function createDiscoveryWorker(configuration, dependencies) {
         return failureResponse({ kind: "DiscoveryOriginRejected" });
       }
       if (reminders) return handleReminderRequest(request, authenticated.value.ownerId, dependencies.reminders ?? null);
+      if (sourceUploadContext) {
+        if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
+        if (dependencies.sourceRename == null) return sourceRenameFailureResponse({ kind: "SourceUploadContextReadFailed" });
+        const result = await dependencies.sourceRename.uploadContext({ ownerId: authenticated.value.ownerId, sourceId: url.searchParams.get("sourceId"), runId: url.searchParams.get("runId") });
+        if (!result.ok) return sourceRenameFailureResponse(result.error);
+        const { source, runId, failureKind } = result.value;
+        const resolved = workflowStatusReason(failureKind, "awaiting-upload", null);
+        const audioVideo = [source.adapter.granularity, ...source.adapter.capabilities].some(value => /audio|video|podcast|episode/u.test(value.toLowerCase()));
+        const reason = resolved?.reasonCode === "rights-not-verified" && audioVideo
+          ? "This source contains audio or video, but native audio/video transcription is not available yet. Upload an authorized transcript or text/document instead."
+          : resolved?.message;
+        if (reason === undefined) return sourceRenameFailureResponse({ kind: "SourceUploadContextReadFailed" });
+        return json({ result: { source, runId, reason } }, 200);
+      }
       if (learningMedia) {
         if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, { Allow: "GET" });
         if (dependencies.learningMedia == null) return mediaFailureResponse({ kind: "LearningMediaUnavailable" });
@@ -369,6 +386,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
             mode: url.searchParams.get("mode") ?? "combined",
             scope: searchScope,
             externalProcessingAllowed: externalProcessing === null ? undefined : externalProcessing === "true",
+            signal: AbortSignal.timeout(maximumBackendOperationMs),
           }),
           validate: sourceBrowse ? isSourceCatalogPage : searchScope === "knowledge" ? isKnowledgeSearchResults : isSourceSearchResults,
           itemCount: sourceBrowse ? sourceCatalogItemCount : sourceSearchItemCount,
@@ -427,6 +445,12 @@ export function createDiscoveryWorker(configuration, dependencies) {
           });
         }
         throw error;
+      }
+      if (sourceRename) {
+        if (dependencies.sourceRename == null) return sourceRenameFailureResponse({ kind: "SourceRenamePersistenceFailed" });
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return sourceRenameFailureResponse({ kind: "SourceRenameCommandInvalid" });
+        const result = await dependencies.sourceRename.rename({ ...document, ownerId: authenticated.value.ownerId });
+        return result.ok ? json({ result: result.value }, 200) : sourceRenameFailureResponse(result.error);
       }
       if (knowledgeWorkflowBackfill) {
         if (dependencies.knowledgeWorkflowBackfill == null) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
@@ -1271,4 +1295,10 @@ function isPositiveInteger(value) { return typeof value === "number" && Number.i
 function utcDay(value) {
   const parsed = typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value) : new Date();
   return parsed.toISOString().slice(0, 10);
+}
+
+/** @param {import("../src/features/source-library/rename.js").SourceRenameFailure} failure */
+function sourceRenameFailureResponse(failure) {
+  const status = failure.kind === "SourceRenameCommandInvalid" ? 400 : failure.kind === "SourceUploadContextUnavailable" ? 404 : failure.kind === "SourceRenameConflict" || failure.kind === "SourceRenameIdempotencyConflict" ? 409 : 503;
+  return json({ error: failure.kind }, status);
 }

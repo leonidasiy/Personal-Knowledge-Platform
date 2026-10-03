@@ -487,3 +487,9 @@ Deno.test("Discover rejects invalid and unbounded route models", () => {
     true,
   );
 });
+
+Deno.test("Discover describes the supported source search", () => {
+  const html = renderDiscoverRoute(model("never-run", []));
+  assert(html.includes('>Discover sources</h1>'), "Discover must identify the panel.");
+  assert(html.includes("Search educational websites, podcast feeds, and videos to add sources to your Library."), "Discover must explain available sources.");
+});

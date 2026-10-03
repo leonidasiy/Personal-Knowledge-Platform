@@ -214,6 +214,28 @@ export class SourceLibraryGatewayClient {
     return { ok: true, value: freeze({ source, runId: value.runId, reused: value.reused }) };
   }
 
+  /** @param {{sourceId:string,runId:string,expectedRevision:number,expectedTitle:string,title:string,idempotencyKey:string}} command @returns {Promise<Result<{readonly sourceId:string,readonly runId:string,readonly title:string,readonly revision:number,readonly reused:boolean},SourceGatewayFailure>>} */
+  async rename(command) {
+    if (!isRecord(command) || Object.hasOwn(command, "ownerId") || !isNonEmptyText(command.sourceId) || !isNonEmptyText(command.runId) || !Number.isSafeInteger(command.expectedRevision) || command.expectedRevision < 1 || !isNonEmptyText(command.expectedTitle) || !isNonEmptyText(command.title) || command.title.trim().length > 300 || !isNonEmptyText(command.idempotencyKey)) return invalid("rename");
+    const response = await this.#request("api/source-library/rename", "POST", command);
+    if (!response.ok) return response;
+    const value = isRecord(response.value) ? response.value.result : null;
+    if (!isRecord(value) || value.sourceId !== command.sourceId || value.runId !== command.runId || value.title !== command.title.trim() || value.revision !== command.expectedRevision || typeof value.reused !== "boolean") return bad();
+    return {ok:true,value:freeze({sourceId:command.sourceId,runId:command.runId,title:command.title.trim(),revision:command.expectedRevision,reused:value.reused})};
+  }
+
+  /** @param {{sourceId:string,runId:string}} command @returns {Promise<Result<{readonly source:LibrarySource,readonly runId:string,readonly reason:string},SourceGatewayFailure>>} */
+  async uploadContext(command) {
+    if (!isRecord(command) || !isNonEmptyText(command.sourceId) || !isNonEmptyText(command.runId)) return invalid("context");
+    const response = await this.#request(`api/source-library/upload-context?${new URLSearchParams(command)}`, "GET", null);
+    if (!response.ok) return response;
+    const value = isRecord(response.value) ? response.value.result : null;
+    if (!isRecord(value) || value.runId !== command.runId || !isNonEmptyText(value.reason)) return bad();
+    const source = parseSource(value.source);
+    if (source === null || source.id !== command.sourceId || source.state !== "active") return bad();
+    return { ok: true, value: freeze({source,runId:command.runId,reason:value.reason}) };
+  }
+
   /** @param {unknown} command @returns {Promise<Result<{ readonly materialId: string, readonly runId: string }, SourceGatewayFailure>>} */
   async uploadWorkflowMaterial(command) {
     if (!isRecord(command) || Object.hasOwn(command, "ownerId") || !isNonEmptyText(command.runId) || !isNonEmptyText(command.sourceId) || !Number.isSafeInteger(/** @type {number} */ (command.sourceRevision)) || /** @type {number} */ (command.sourceRevision) < 1 || !isPublicHttpsUrl(command.sourceUrl) || !isNonEmptyText(command.mediaType) || !isNonEmptyText(command.fileName) || !isNonEmptyText(command.idempotencyKey) || !isRecord(command.rightsAttestation) || (command.mode !== undefined && command.mode !== "text" && command.mode !== "image")) return invalid("command");

@@ -61,7 +61,7 @@ const freeze = Object.freeze;
  */
 
 /** @typedef {{ readonly ownerId: string, readonly limit: number, readonly cursor: string | null }} ValidatedBrowse */
-/** @typedef {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly scope: SourceSearchScope, readonly externalProcessingAllowed: boolean | undefined }} ValidatedSearch */
+/** @typedef {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly scope: SourceSearchScope, readonly externalProcessingAllowed: boolean | undefined, readonly signal?: AbortSignal }} ValidatedSearch */
 
 /**
  * @typedef {{
@@ -78,7 +78,7 @@ const freeze = Object.freeze;
  *     readonly decode: (value: string) => Promise<Result<SourceCursorValue, SourceLibraryFailure>>
  *   },
  *   readonly semanticRanker: {
- *     readonly rank: (query: { readonly query: string, readonly scope: SourceSearchScope, readonly limit: number, readonly candidates: readonly { readonly id: string, readonly sourceId: string, readonly sourceRevision: number, readonly title: string, readonly text: string }[] }) => Promise<Result<{ readonly matches: readonly { readonly id: string, readonly score: number }[] }, SourceLibraryFailure>>
+ *     readonly rank: (query: { readonly signal?: AbortSignal, readonly query: string, readonly scope: SourceSearchScope, readonly limit: number, readonly candidates: readonly { readonly id: string, readonly sourceId: string, readonly sourceRevision: number, readonly title: string, readonly text: string }[] }) => Promise<Result<{ readonly matches: readonly { readonly id: string, readonly score: number }[] }, SourceLibraryFailure>>
  *   },
  *   readonly maximumSemanticCandidates: number,
  *   readonly maximumPageSize: number,
@@ -174,17 +174,17 @@ export class SourceCatalogQueryService {
 
   /**
    * @overload
-   * @param {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly scope: "knowledge", readonly externalProcessingAllowed?: boolean }} command
+   * @param {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly scope: "knowledge", readonly externalProcessingAllowed?: boolean, readonly signal?: AbortSignal }} command
    * @returns {Promise<Result<readonly KnowledgeSearchHit[], SourceLibraryFailure>>}
    */
   /**
    * @overload
-   * @param {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly scope?: "sources", readonly externalProcessingAllowed?: boolean }} command
+   * @param {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly scope?: "sources", readonly externalProcessingAllowed?: boolean, readonly signal?: AbortSignal }} command
    * @returns {Promise<Result<readonly SourceSearchHit[], SourceLibraryFailure>>}
    */
   /**
    * @overload
-   * @param {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly scope: SourceSearchScope, readonly externalProcessingAllowed?: boolean }} command
+   * @param {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly scope: SourceSearchScope, readonly externalProcessingAllowed?: boolean, readonly signal?: AbortSignal }} command
    * @returns {Promise<Result<readonly (SourceSearchHit | KnowledgeSearchHit)[], SourceLibraryFailure>>}
    */
   /** @param {unknown} command @returns {Promise<Result<readonly (SourceSearchHit | KnowledgeSearchHit)[], SourceLibraryFailure>>} */
@@ -273,11 +273,11 @@ export class SourceCatalogQueryService {
       : active;
   }
 
-  /** @param {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode }} input */
+  /** @param {{ readonly ownerId: string, readonly query: string, readonly limit: number, readonly mode: SourceSearchMode, readonly signal?: AbortSignal }} input */
   async #semantic(input) {
     const page = await this.#dependencies.repository.browseActive({ ownerId: input.ownerId, limit: this.#dependencies.maximumSemanticCandidates, after: null });
     if (!page.ok) return page;
-    const ranked = await this.#dependencies.semanticRanker.rank({ query: input.query, scope: "sources", limit: input.limit, candidates: page.value.items.map((source) => freeze({ id: source.id, sourceId: source.id, sourceRevision: source.revision, title: source.title, text: source.description })) });
+    const ranked = await this.#dependencies.semanticRanker.rank({ signal: input.signal, query: input.query, scope: "sources", limit: input.limit, candidates: page.value.items.map((source) => freeze({ id: source.id, sourceId: source.id, sourceRevision: source.revision, title: source.title, text: source.description })) });
     if (!ranked.ok) return ranked;
     const sourceIds = ranked.value.matches.map((match) => match.id);
     const active = await this.#dependencies.repository.activeByIds({ ownerId: input.ownerId, sourceIds });
@@ -293,7 +293,7 @@ export class SourceCatalogQueryService {
     if (!indexed.ok) return indexed;
     if (indexed.value.privateDerivedCount > 0) return failure("SourceSemanticConsentRequired");
     const candidates = indexed.value.candidates.map((candidate) => freeze({ id: candidate.knowledge.knowledgeId, sourceId: candidate.knowledge.sourceId, sourceRevision: candidate.sourceRevision, title: candidate.knowledge.sourceTitle, text: candidate.knowledge.summary }));
-    const ranked = await this.#dependencies.semanticRanker.rank({ query: input.query, scope: "knowledge", limit: input.limit, candidates });
+    const ranked = await this.#dependencies.semanticRanker.rank({ signal: input.signal, query: input.query, scope: "knowledge", limit: input.limit, candidates });
     if (!ranked.ok) return ranked;
     const knowledge = new Map(indexed.value.candidates.map((candidate) => [candidate.knowledge.knowledgeId, candidate.knowledge]));
     return { ok: /** @type {const} */ (true), value: freeze(ranked.value.matches.map((match) => freeze({ knowledge: /** @type {KnowledgeSearchHit["knowledge"]} */ (knowledge.get(match.id)), score: match.score, matchedBy: "semantic" }))) };
@@ -351,6 +351,7 @@ function validateSearch(command, maximumPageSize, maximumQueryLength) {
   ) {
     return invalidCommand("mode");
   }
+  if (command.signal !== undefined && !(command.signal instanceof AbortSignal)) return invalidCommand("signal");
   if (command.scope !== undefined && command.scope !== "sources" && command.scope !== "knowledge") return invalidCommand("scope");
   if (command.externalProcessingAllowed !== undefined && typeof command.externalProcessingAllowed !== "boolean") return invalidCommand("externalProcessingAllowed");
   if (
@@ -368,6 +369,7 @@ function validateSearch(command, maximumPageSize, maximumQueryLength) {
       limit: command.limit,
       scope: command.scope ?? "sources",
       externalProcessingAllowed: command.externalProcessingAllowed,
+      signal: command.signal,
     }),
   };
 }

@@ -1,3 +1,5 @@
+import { D1SourceRenameRepository } from "./source-rename-d1.js";
+import { createSourceRenameService } from "../src/features/source-library/rename.js";
 // @ts-check
 
 import { CloudflareAccessAuthenticator } from "./access-authenticator.js";
@@ -430,20 +432,13 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         /** @type {string} */ (configuration.value.sourceCursorSecret),
         platform.subtle,
       ),
+      // Dedicated reranker model: https://openrouter.ai/cohere/rerank-4-fast
       semanticRanker: createSemanticRanker({
-        model: createOpenRouterKnowledgeModel({
-          apiKey: configuration.value.openRouterApiKey,
-          endpoint: "https://openrouter.ai/api/v1/chat/completions",
-          model: "z-ai/glm-5.3-flash",
-          timeoutMs: 15_000,
-          maximumInputCharacters: 12_000,
-          fetch: platform.fetch,
-          now: () => platform.now().getTime(),
-          logger: (entry) => console.info(JSON.stringify({ event: entry.event, role: entry.role, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken, durationMs: entry.durationMs, requestId: entry.requestId, inputTokens: entry.inputTokens, outputTokens: entry.outputTokens })),
-        }),
-        modelId: "z-ai/glm-5.3-flash",
+        apiKey: configuration.value.openRouterApiKey,
+        fetch: platform.fetch,
         maximumCandidates: 20,
-        maximumOutputTokens: 256,
+        timeoutMs: 3_000,
+        logger: entry => console.info(JSON.stringify(entry)),
       }),
       maximumSemanticCandidates: 20,
       maximumPageSize: 50,
@@ -985,6 +980,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       centralSearch: observedCentralSearch,
       sourceLibrary,
       sourceCatalog: sourceCatalogForHandler,
+      sourceRename: sourceRepository === null || configuration.value.sourceLibraryDatabase === null ? null : createSourceRenameService(
+        new D1SourceRenameRepository(configuration.value.sourceLibraryDatabase), sourceRepository,
+        { now:()=>platform.now().toISOString(), createId:()=>crypto.randomUUID(), logger:entry=>console.info(JSON.stringify(entry)) },
+      ),
       sourceRightsApproval,
       sourceIngestion,
       sourceRightsProfileFor,
@@ -2538,7 +2537,7 @@ function workflowControlRollback(command, prior, controlled) {
   if (!isRecord(command) || command.action !== "resume" || !isRecord(prior) || prior.ok !== true || !isRecord(prior.value) || !isRecord(controlled) || controlled.ok !== true || !isRecord(controlled.value)) return null;
   const previous = prior.value;
   const transitioned = controlled.value;
-  if (previous.state !== "retryable-failure" || transitioned.state !== "extraction-loop" || typeof previous.ownerId !== "string" || typeof previous.runId !== "string" || typeof transitioned.revision !== "number" || !Number.isSafeInteger(transitioned.revision)) return null;
+  if (previous.state !== "retryable-failure" || transitioned.state !== (previous.retryState ?? "extraction-loop") || typeof previous.ownerId !== "string" || typeof previous.runId !== "string" || typeof transitioned.revision !== "number" || !Number.isSafeInteger(transitioned.revision)) return null;
   return Object.freeze({ ownerId: previous.ownerId, runId: previous.runId, expectedRevision: transitioned.revision, nextState: "retryable-failure", failureKind: typeof previous.failureKind === "string" && previous.failureKind.trim() !== "" ? previous.failureKind : "WorkflowInstanceControlFailed" });
 }
 

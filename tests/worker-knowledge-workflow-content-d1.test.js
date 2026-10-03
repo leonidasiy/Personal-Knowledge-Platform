@@ -100,11 +100,29 @@ Deno.test("D1 quiz publication persists ordered blanks and rejects mismatched an
   const fixture = database();
   const repository = new D1QuizRepository({ database: fixture, logger: () => {}, now: () => "2026-09-18T00:00:00.000Z" });
   const knowledge = { id: "knowledge-a", sourceId: "source-a", sourceRevision: 1, summary: "The dominant resolves to the tonic.", normalizedHash: "hash-a", evidenceAnchors: [{ url: "https://example.test/a", selector: "#a" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://example.test/a" }, extractionVersion: "v1" };
-  const draft = { id: "draft-blanks", knowledgeId: "knowledge-a", knowledgeRevision: 1, kind: "fill-blank", prompt: "A ____ resolves to the ____.", options: [], answer: ["dominant", "tonic"], blanks: [{ id: "blank-1", acceptedAnswers: ["dominant"] }, { id: "blank-2", acceptedAnswers: ["tonic"] }], explanation: "The dominant resolves to the tonic.", citedEvidenceUrls: ["https://example.test/a"] };
+  const draft = { id: "draft-blanks", knowledgeId: "knowledge-a", knowledgeRevision: 1, kind: /** @type {const} */ ("fill-blank"), prompt: "A ____ resolves to the ____.", options: [], answer: ["dominant", "tonic"], blanks: [{ id: "blank-1", acceptedAnswers: ["dominant"] }, { id: "blank-2", acceptedAnswers: ["tonic"] }], explanation: "The dominant resolves to the tonic.", citedEvidenceUrls: ["https://example.test/a"] };
   const accepted = await repository.publish({ ownerId: "owner-a", runId: "run-a", knowledge, draft, score: 9, attempt: 1, status: "published" });
   assertEquals(accepted.ok, true);
   assertEquals(fixture.queries.some((bound) => Array.isArray(bound) && bound.some((value) => typeof value === "string" && value.includes('"blanks"'))), true);
   const rejected = await repository.publish({ ownerId: "owner-a", runId: "run-b", knowledge, draft: { ...draft, blanks: [{ id: "blank-1", acceptedAnswers: ["tonic"] }, ...draft.blanks.slice(1)] }, score: 9, attempt: 1, status: "published" });
   assertEquals(rejected.ok, false);
   if (!rejected.ok) assertEquals(rejected.error.kind, "QuizPublicationFailed");
+});
+
+Deno.test("D1 published quiz lookup is owner/run/point scoped and rejects corrupted or failed reads", async () => {
+  const fixture=database();
+  /** @type {unknown} */ let row=null;
+  let broken=false;
+  const prepare=fixture.prepare;
+  fixture.prepare=(query)=>({...prepare(query),async first(){if(broken)throw new Error("DatabaseUnavailable");return row;},bind(...values){fixture.queries.push(values);return this;}});
+  const repository=new D1QuizRepository({database:fixture,logger:()=>{},now:()=>"2026-10-02T00:00:00.000Z"});
+  const scope={ownerId:"owner-a",runId:"run-a",knowledgeId:"knowledge-a"};
+  assertEquals(JSON.stringify(await repository.findPublished(scope)),JSON.stringify({ok:true,value:null}));
+  row={status:"published",attempt_number:2};
+  assertEquals(JSON.stringify(await repository.findPublished(scope)),JSON.stringify({ok:true,value:{status:"published",attempt:2}}));
+  assertEquals(fixture.preparedQueries.every(query=>query.includes("WHERE owner_id=? AND run_id=? AND knowledge_id=?")),true);
+  assertEquals(JSON.stringify(fixture.queries[0]),JSON.stringify(["owner-a","run-a","knowledge-a"]));
+  for (const invalid of [{status:"unknown",attempt_number:1},{status:"published",attempt_number:4}]){row=invalid;assertEquals((await repository.findPublished(scope)).ok,false);}
+  broken=true;
+  assertEquals((await repository.findPublished(scope)).ok,false);
 });

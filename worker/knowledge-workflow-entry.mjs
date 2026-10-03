@@ -2,7 +2,7 @@ import { WorkflowEntrypoint } from "cloudflare:workers";
 import puppeteer from "@cloudflare/puppeteer";
 import { D1KnowledgeWorkflowRepository } from "./knowledge-workflow-d1.js";
 import { D1KnowledgeWorkflowMaterialRepository } from "./knowledge-workflow-material-d1.js";
-import { createKnowledgeWorkflowService } from "../src/features/knowledge-workflows/workflow.js";
+import { createKnowledgeWorkflowService, isWorkflowRetryStage } from "../src/features/knowledge-workflows/workflow.js";
 import { createKnowledgeWorkflowRuntime } from "./knowledge-workflow-runtime.js";
 import { createAgentConfigurationLoader } from "../src/features/knowledge-workflows/config.js";
 import { KNOWLEDGE_WORKFLOW_CONFIG_SOURCES } from "./knowledge-workflow-config-sources.js";
@@ -14,6 +14,8 @@ import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
 import { executeAuthoritativeWorkflowStep } from "./knowledge-workflow-step.js";
 import { createKnowledgeWorkflowBrowser } from "./knowledge-workflow-browser.js";
 import { createOpenSourceImageSearch } from "./open-source-image-search.js";
+import { createReminderRuntime } from "./reminders/runtime.js";
+import { notifyKnowledgeWorkflowOutcome } from "./knowledge-workflow-notifications.js";
 import fallbackMediaEntries from "../assets/fallback-media/manifest.json" with { type: "json" };
 
 const roleNames = /** @type {const} */ (["rights-assessor", "knowledge-scraper", "question-generator", "question-evaluator"]);
@@ -167,6 +169,12 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       createId: () => crypto.randomUUID(),
       logger: (entry) => logger({ event: entry.event, runId: entry.runId, ownerId: entry.ownerId, action: entry.action, failureKind: entry.failureKind }),
     });
+    const notifications = createReminderRuntime({environment:this.env,database,now:()=>new Date(),fetch:workerFetch,logger:(entry)=>console.info(JSON.stringify(entry))});
+    const notifyOutcome = async (run) => {
+      const delivered = await notifyKnowledgeWorkflowOutcome({run,now,notify:notifications.notifySource,load:()=>service.status({ownerId,runId})});
+      if (!delivered.ok) logger({event:"knowledge-workflow-notification-failure",ownerId,runId,failureKind:delivered.error.kind});
+      return delivered;
+    };
     let current = await step.do("load knowledge workflow run", async () => service.status({ ownerId, runId }));
     if (!current.ok) throw new Error(current.error.kind);
     const configurations = await step.do("validate workflow role configurations", async () => loadConfigurationSnapshots(current.value.configDigests));
@@ -198,6 +206,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       current = { ok: true, value: assessed.value };
     }
     if (current.value.state === "awaiting-rights-review") {
+      await step.do(`notify rights decision ${current.value.revision}`, () => notifyOutcome(current.value));
       try {
         await step.waitForEvent("wait for rights approval", { type: "rights-approved", timeout: "24 hours" });
       } catch (error) {
@@ -209,32 +218,38 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     /** @param {string} stepName @returns {Promise<import("../src/features/knowledge-workflows/workflow.js").Result<unknown, { readonly kind: string, readonly detailKind?: string, readonly detailDiagnosticToken?: string }>>} */
     async function executeOrAwaitMaterial(stepName) {
       runtime = createRuntime();
-      const executed = await executeAuthoritativeWorkflowStep({
+      let executed;
+      try {
+      executed = await executeAuthoritativeWorkflowStep({
         step,
         name: stepName,
         load: () => service.status({ ownerId, runId }),
         execute: (authoritativeRun) => /** @type {ReturnType<typeof createKnowledgeWorkflowRuntime>} */ (runtime).execute(authoritativeRun),
       });
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        executed = {ok:false,error:{kind:"WorkflowExecutionStopped"}};
+      }
       if (executed.ok) return executed;
       if (executed.error.kind !== "WorkflowRobotsFailed" && executed.error.kind !== "WorkflowUploadRequired") {
-        const latest = await step.do("reload before marking retryable workflow failure", async () => service.status({ ownerId, runId }));
+        const latest = await step.do(`${stepName}: reload before marking retryable workflow failure`, async () => service.status({ ownerId, runId }));
         if (!latest.ok) throw new Error(latest.error.kind);
-        if (latest.value.state !== "extraction-loop") throw new Error(executed.error.kind);
+        if (!isWorkflowRetryStage(latest.value.state)) throw new Error(executed.error.kind);
         const failureKind = typeof executed.error.detailKind === "string" && executed.error.detailKind.trim() !== "" ? executed.error.detailKind : executed.error.kind;
         const diagnosticToken = typeof executed.error.detailDiagnosticToken === "string" && /^[a-z0-9-]+$/u.test(executed.error.detailDiagnosticToken) ? executed.error.detailDiagnosticToken : undefined;
         logger({ event: "knowledge-workflow-execution-failure", ownerId, runId, stage: "executor", failureKind, ...(diagnosticToken === undefined ? {} : { diagnosticToken }) });
         const persistedFailureKind = diagnosticToken === undefined ? failureKind : `${failureKind}:${diagnosticToken}`;
-        const retryable = await step.do("persist retryable workflow failure", async () => service.advance({ ownerId, runId, expectedRevision: latest.value.revision, nextState: "retryable-failure", failureKind: persistedFailureKind }));
+        const retryable = await step.do(`persist retryable workflow failure ${latest.value.revision}`, async () => service.advance({ ownerId, runId, expectedRevision: latest.value.revision, nextState: "retryable-failure", failureKind: persistedFailureKind }));
         if (!retryable.ok) throw new Error(retryable.error.kind);
         return { ok: true, value: { state: retryable.value.state, run: retryable.value } };
       }
-      const latest = await step.do("reload before marking upload-required", async () => service.status({ ownerId, runId }));
+      const latest = await step.do(`${stepName}: reload before marking upload-required`, async () => service.status({ ownerId, runId }));
       if (!latest.ok) throw new Error(latest.error.kind);
       const failureKind = typeof executed.error.detailKind === "string" && executed.error.detailKind.trim() !== "" ? executed.error.detailKind : executed.error.kind;
       const diagnosticToken = typeof executed.error.detailDiagnosticToken === "string" && /^[a-z0-9-]+$/u.test(executed.error.detailDiagnosticToken) ? executed.error.detailDiagnosticToken : undefined;
       logger({ event: "knowledge-workflow-execution-failure", ownerId, runId, stage: "executor", failureKind, ...(diagnosticToken === undefined ? {} : { diagnosticToken }) });
       const persistedFailureKind = diagnosticToken === undefined ? failureKind : `${failureKind}:${diagnosticToken}`;
-      const awaitingUpload = await step.do("mark blocked workflow awaiting upload", async () => service.advance({ ownerId, runId, expectedRevision: latest.value.revision, nextState: "awaiting-upload", failureKind: persistedFailureKind }));
+      const awaitingUpload = await step.do(`mark blocked workflow awaiting upload ${latest.value.revision}`, async () => service.advance({ ownerId, runId, expectedRevision: latest.value.revision, nextState: "awaiting-upload", failureKind: persistedFailureKind }));
       if (!awaitingUpload.ok) throw new Error(awaitingUpload.error.kind);
       return { ok: true, value: { state: awaitingUpload.value.state, run: awaitingUpload.value } };
     }
@@ -252,20 +267,22 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
         result = executed.value;
         continue;
       }
+      await step.do(`notify workflow decision ${result.run?.revision}`, () => notifyOutcome(result.run));
       try {
-        await step.waitForEvent(result.state === "awaiting-upload" ? "wait for authorized material" : result.state === "retryable-failure" ? "wait for workflow retry" : "wait for workflow control", { type: result.state === "awaiting-upload" ? "workflow-material-ready" : "workflow-control", timeout: "24 hours" });
+        await step.waitForEvent(`wait for ${result.state} ${result.run?.revision}`, { type: result.state === "awaiting-upload" ? "workflow-material-ready" : "workflow-control", timeout: "24 hours" });
       } catch (error) {
         throw new Error(result.state === "awaiting-upload" ? "WorkflowMaterialTimeout" : "WorkflowControlTimeout");
       }
-      current = await step.do(result.state === "awaiting-upload" ? "reload after authorized material" : "reload after workflow control", async () => service.status({ ownerId, runId }));
+      current = await step.do(`reload after ${result.state} ${result.run?.revision}`, async () => service.status({ ownerId, runId }));
       if (!current.ok) throw new Error(current.error.kind);
-      executed = await executeOrAwaitMaterial(result.state === "awaiting-upload" ? "start extraction from authorized material" : result.state === "retryable-failure" ? "retry knowledge extraction and quiz stages" : "resume knowledge extraction and quiz stages");
+      executed = await executeOrAwaitMaterial(`resume knowledge workflow ${current.value.revision}`);
       result = executed.value;
     }
     if (!result || typeof result !== "object" || Array.isArray(result) || typeof result.state !== "string") throw new Error("WorkflowRuntimeOutputInvalid");
     const finalRun = "run" in result && result.run && typeof result.run === "object" && !Array.isArray(result.run) ? result.run : current.value;
     if (!finalRun || typeof finalRun !== "object" || Array.isArray(finalRun) || typeof finalRun.revision !== "number") throw new Error("WorkflowRuntimeOutputInvalid");
     const restrictedUntil = "restrictedUntil" in result && typeof result.restrictedUntil === "string" ? result.restrictedUntil : null;
+    await step.do(`notify workflow outcome ${finalRun.revision}`, () => notifyOutcome(finalRun));
     const restrictedKnowledgeIds = "restrictedKnowledgeIds" in result && Array.isArray(result.restrictedKnowledgeIds) && result.restrictedKnowledgeIds.every((value) => typeof value === "string" && value.trim() !== "") ? result.restrictedKnowledgeIds : [];
     if (restrictedUntil !== null && restrictedKnowledgeIds.length > 0) {
       const expiryMs = Date.parse(restrictedUntil);

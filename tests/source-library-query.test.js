@@ -47,7 +47,7 @@ const sources = Object.freeze([
   source("disabled", "2026-07-22T11:00:00.000Z", "disabled"),
 ]);
 
-/** @param {Partial<{ readonly catalogRevision: string, readonly decodeFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly semanticFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly privateDerivedCount: number, readonly onSemanticRanker: () => void, readonly semanticHits: readonly { readonly sourceId: string, readonly ownerId: string, readonly score: number, readonly modelId: string, readonly modelVersion: string, readonly dimensions: number }[] }>} [options] */
+/** @param {Partial<{ readonly catalogRevision: string, readonly decodeFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly semanticFailure: import("../src/features/source-library/contracts.js").SourceLibraryFailure, readonly privateDerivedCount: number, readonly onSemanticRanker: (signal?: AbortSignal) => void, readonly semanticHits: readonly { readonly sourceId: string, readonly ownerId: string, readonly score: number, readonly modelId: string, readonly modelVersion: string, readonly dimensions: number }[] }>} [options] */
 function fixture(options = {}) {
   const active = sources.filter((candidate) => candidate.state === "active");
   return new SourceCatalogQueryService({
@@ -125,7 +125,7 @@ function fixture(options = {}) {
         return Promise.resolve({ ok: true, value: JSON.parse(atob(value)) });
       },
     },
-    semanticRanker: { rank: ({ scope }) => { options.onSemanticRanker?.(); return options.semanticFailure === undefined ? Promise.resolve({ ok: true, value: { matches: scope === "knowledge" ? [{ id: "knowledge-cadence", score: 0.84 }] : (options.semanticHits ?? [{ sourceId: "source-2", score: 0.9 }]).map((hit) => ({ id: hit.sourceId, score: hit.score })) } }) : Promise.resolve({ ok: false, error: options.semanticFailure }); } },
+    semanticRanker: { rank: ({ scope, signal }) => { options.onSemanticRanker?.(signal); return options.semanticFailure === undefined ? Promise.resolve({ ok: true, value: { matches: scope === "knowledge" ? [{ id: "knowledge-cadence", score: 0.84 }] : (options.semanticHits ?? [{ sourceId: "source-2", score: 0.9 }]).map((hit) => ({ id: hit.sourceId, score: hit.score })) } }) : Promise.resolve({ ok: false, error: options.semanticFailure }); } },
     maximumSemanticCandidates: 20,
     maximumPageSize: 2,
     maximumQueryLength: 20,
@@ -365,4 +365,12 @@ Deno.test("active source checks are owner scoped, bounded, and exclude disabled 
   assertEquals(wrongOwner.ok, true);
   if (!wrongOwner.ok) throw new Error(wrongOwner.error.kind);
   assertEquals(wrongOwner.value.length, 0);
+});
+
+Deno.test("search propagates the handler cancellation signal to authorized ranking", async () => {
+  const controller = new AbortController();
+  let received;
+  const result = await fixture({ onSemanticRanker: (signal) => received = signal }).search({ ownerId: "owner-a", query: "harmony", mode: "semantic", limit: 2, externalProcessingAllowed: true, signal: controller.signal });
+  assertEquals(result.ok, true);
+  assertEquals(received, controller.signal);
 });

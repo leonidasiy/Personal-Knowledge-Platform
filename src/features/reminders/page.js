@@ -29,7 +29,7 @@ export function createSettingsPage(dependencies) {
         : !view.configured
         ? "Reminders aren’t configured on the server yet."
         : reminder?.enabled
-        ? "One gentle reminder, unless you’ve already finished."
+        ? "Daily review reminders and source updates are on."
         : "Reminders are off. Enable them only on devices you want notified.");
     const zone = reminder?.timeZone ??
       Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -44,13 +44,13 @@ export function createSettingsPage(dependencies) {
       : "No confirmed push send yet.";
     const version =
       `${reminder?.enabled}:${reminder?.time}:${reminder?.timeZone}`;
-    return `<section class="wide-view settings-page" aria-labelledby="settings-title"><div class="section-heading"><div><p class="eyebrow">Settings · your personal space</p><h1 id="settings-title">Make yourself at home.</h1><p>A little less noise. A rhythm that feels like yours.</p></div></div>
+    return `<section class="wide-view settings-page" aria-labelledby="settings-title"><div class="section-heading"><div><p class="eyebrow">Settings · your personal space</p><h1 id="settings-title">Settings</h1><p>Adjust appearance, motion, sound, and notifications on this device.</p></div></div>
       <section class="settings-preferences" aria-label="Workspace preferences">${dependencies.renderPreferences()}</section>
-      <section class="settings-reminders" aria-labelledby="reminder-title"><h2 id="reminder-title">A moment to revisit</h2><p>A quiet invitation to return. Never a streak to defend.</p>
+      <section class="settings-reminders" aria-labelledby="reminder-title"><h2 id="reminder-title">Review reminders and source updates</h2><p>Enable notifications on this device and choose a daily review reminder time.</p>
       <form data-reminder-form data-reminder-version="${
       escape(version)
     }" aria-busy="${busy}">
-      <label class="switch-control"><span><strong>Enable on this device</strong><small>Optional browser notifications</small></span><input name="enabled" data-focus-key="reminder-enabled" type="checkbox"${
+      <label class="switch-control"><span><strong>Enable on this device</strong><small>Daily review and source updates</small></span><input name="enabled" data-focus-key="reminder-enabled" type="checkbox"${
       reminder?.enabled ? " checked" : ""
     }${
       !mutable || (!canEnable && !reminder?.enabled) ? " disabled" : ""
@@ -85,7 +85,7 @@ export function createSettingsPage(dependencies) {
       <button class="button primary" data-focus-key="save-reminder"${
       !mutable || (!canEnable && !reminder?.enabled) ? " disabled" : ""
     }>Save reminder</button></div></form>
-      <p class="settings-form-note">Finishing a Review batch skips the reminder. When no review is due, a completed study batch counts. Incorrect answers count too. Delivery is best-effort; Android controls notification sounds.</p></section>
+      <p class="settings-form-note">Finished Review batches skip the daily reminder; when none is due, study counts. Incorrect answers count too. Source-ready and action-required alerts arrive independently. Delivery is best-effort; Android controls sounds.</p></section>
       </section>`;
   }
   /** @param {HTMLElement} root */

@@ -1,11 +1,70 @@
 import { renderLibraryRoute } from "../src/routes/library.js";
 import { createLibraryPage } from "../src/startup/library-page.js";
+import { createUploadPage } from "../src/features/uploads/page.js";
 import { SUBJECTS } from "../src/features/knowledge-subjects/public.js";
 
+// Supply the browser document boundary from the actual offline shell.
+const shell = Deno.readTextFileSync("index.html");
+Object.defineProperty(globalThis, "document", { configurable: true, value: {
+  getElementById: (/** @type {string} */ id) => {
+    const content = shell.match(new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`))?.[1];
+    return content === undefined ? null : { textContent: content };
+  },
+} });
 /** @param {boolean} condition @param {string} message */
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+
+Deno.test("Library static collection markup is supplied by the offline shell", async () => {
+  const html = Deno.readTextFileSync("index.html");
+  assert(html.includes('id="library-markup"'), "Library markup must live in the shell.");
+  assert(html.includes("Browse saved sources, search extracted knowledge, and check processing status."), "Shell preserves Library copy.");
+  assert(html.includes("Processing: generating and validating review quizzes."), "Shell carries processing copy too.");
+  const messages = [
+    "This source is unavailable. Return to Library and reopen Upload.",
+    "Select an awaiting source or a new private document and confirm processing permission.",
+    "The upload exceeds the 100 MiB limit.",
+    "Pasted text exceeds the one-million-character limit.",
+    "Provide either pasted text or one document.",
+    "Turn on image processing to upload several images together.",
+    "Choose a text, Markdown, PDF, PowerPoint, or raster image file.",
+    "Image processing requires a PDF or raster images.",
+    "Each image must be 20 MiB or less.",
+    "Select image mode for raster image files.",
+    "Give pasted material a title.",
+    "Page ranges apply only to PDF image processing.",
+  ];
+  for (const message of messages) assert(html.includes(message), `Shell is missing upload validation: ${message}`);
+  const page = createLibraryPage({
+    fetch: async () => { throw new Error("Invalid uploads must not request the network."); },
+    gatewayBaseUrl: "https://app.example/", escapeHtml: (value) => value, formatDate: (value) => value,
+    createId: () => "validation", confirmDisable: () => true, createObserver: () => null,
+    schedule: () => 1, cancel: () => {}, onNotice: () => {}, onError: () => {}, rerender: () => {},
+  });
+  const form = new FormData();
+  await page.uploadMaterial("", form);
+  assert(!page.uploadResult().ok && page.uploadResult().message === messages[1], "Permission failure copy is exact.");
+  form.set("attested", "on");
+  await page.uploadMaterial("", form);
+  assert(page.uploadResult().message === messages[4], "Missing content copy is exact.");
+  form.set("content", "x".repeat(1_000_001));
+  await page.uploadMaterial("", form);
+  assert(page.uploadResult().message === messages[3], "Oversized pasted text copy is exact.");
+  form.set("content", "x".repeat(1_000_000));
+  await page.uploadMaterial("", form);
+  assert(page.uploadResult().message === messages[10], "Inclusive text limit reaches the title validation.");
+  form.set("title", "Synthetic title");
+  form.set("pageRange", "1");
+  await page.uploadMaterial("", form);
+  assert(page.uploadResult().message === messages[11], "Inapplicable PDF page range copy is exact.");
+
+});
+
+Deno.test("Library contains no embedded uploader", () => {
+  const html = renderLibraryRoute(baseModel());
+  assert(!html.includes("data-library-upload") && !html.includes("data-upload-form") && !html.includes('type="file"'), "Uploads belong on the Upload route.");
+});
 
 const source = Object.freeze({
   id: "source-a",
@@ -108,18 +167,16 @@ Deno.test("Library restores subject selection and reports unavailable or invalid
 
 Deno.test("Library offers authorized material upload only for an awaiting-upload source", () => {
   const html = renderLibraryRoute({ ...baseModel(), workflowStatuses: [workflowStatus("awaiting-upload")] });
-  assert(html.includes('data-library-upload="source-a"'), "Blocked existing sources need a usable upload form.");
-  assert(html.includes('name="content"') && html.includes('name="file"'), "Both pasted text and documents must be offered.");
-  assert(html.includes('name="attested"') && html.includes("AI processing"), "Upload must require informed processing attestation.");
+  assert(html.includes('href="#upload?sourceId=source-a&amp;runId=run-source-a'), "Blocked sources must hand off to the dedicated route.");
+  assert(html.includes("title=Harmony+source") && html.includes("revision=2"), "Handoff must preserve displayed title and revision.");
+  assert(!html.includes('data-library-upload'), "Cards must not contain upload forms.");
   for (const state of ["completed", "extraction-loop", "abandoned"]) {
-    assert(!renderLibraryRoute({ ...baseModel(), workflowStatuses: [workflowStatus(state)] }).includes('data-library-upload="source-a"'), `${state} must not offer a conflicting source attachment.`);
+    assert(!renderLibraryRoute({ ...baseModel(), workflowStatuses: [workflowStatus(state)] }).includes('href="#upload?'), `${state} must not offer a conflicting source attachment.`);
   }
 });
 
 Deno.test("Library offers private document creation without an existing source", async () => {
-  assert(renderLibraryRoute({ ...baseModel(), collection: { ...baseModel().collection, items: [], state: "empty" } }).includes('data-library-upload=""'), "An empty Library must support standalone uploads.");
-  const uploadForm = renderLibraryRoute({ ...baseModel(), collection: { ...baseModel().collection, items: [], state: "empty" } });
-  assert(uploadForm.includes('type="checkbox" name="imageProcessing"') && !uploadForm.includes('name="imageProcessing" checked') && uploadForm.includes('name="pageRange"') && uploadForm.includes('name="file" multiple'), "Image processing must be an unchecked option with PDF ranges and multi-file selection.");
+  assert(!renderLibraryRoute({ ...baseModel(), collection: { ...baseModel().collection, items: [], state: "empty" } }).includes('data-library-upload'), "Private uploads belong on Upload.");
   const documentSource = { ...source, id: "private-source", origin: "private-document", canonicalUrl: "https://app.example/api/private-documents/private-source", submittedUrl: "https://app.example/api/private-documents/private-source" };
   const requests = /** @type {string[]} */ ([]);
   let fail = true;
@@ -183,8 +240,10 @@ Deno.test("Library uploads validated material to its persisted run and preserves
   await page.uploadMaterial("unknown-source", form);
   assert(uploads.length === 0, "Unknown sources must not be transmitted.");
   await page.uploadMaterial("source-a", form);
-  assert(uploads.length === 1 && errors.length > 0, "Storage failure must be reported.");
-  assert(page.render({}).includes("data-library-upload"), "Failure must leave a retry action available.");
+  assert(uploads.length === 1, "Storage failure must follow one upload attempt.");
+  assert(errors.length === 0, "Upload failures must not invoke the global error callback.");
+  assert(!page.uploadResult().ok && page.uploadResult().message.length > 0, "Storage failure must retain its inline retry message.");
+  assert(page.render({}).includes('href="#upload?'), "Failure must leave a retry action available.");
   const body = JSON.parse(String(uploads[0].body));
   assert(body.runId === "run-source-a" && body.sourceId === source.id && body.sourceRevision === source.revision && body.sourceUrl === source.canonicalUrl, "Upload must use the loaded source/run binding.");
   assert(!Object.hasOwn(body, "ownerId"), "The server owns authentication identity.");
@@ -381,7 +440,7 @@ Deno.test("Library offers unchecked external AI search consent and explains its 
   const html = renderLibraryRoute(baseModel());
   const checkbox = html.match(/<input[^>]*name="externalProcessingAllowed"[^>]*>/)?.[0];
   assert(checkbox !== undefined && !checkbox.includes("checked"), "AI processing must be an explicit opt-in.");
-  assert(html.includes("configured external AI provider"), "Search must disclose external processing.");
+  assert(html.includes("to OpenRouter"), "Search must disclose external processing.");
   assert(html.includes("20 candidates"), "Search must disclose its bounded candidate scope.");
 });
 
@@ -399,9 +458,9 @@ Deno.test("Library processing spinner respects reduced-motion CSS", async () => 
   assert(css.includes("animation-duration: 0.01ms"), "Reduced motion must shorten the spinner animation.");
 });
 
-Deno.test("Library renders a truthful empty knowledge state while processing is incomplete", () => {
+Deno.test("Library omits incomplete knowledge placeholders", () => {
   const html = renderLibraryRoute({ ...baseModel(), knowledge: [] });
-  assert(html.includes("Knowledge is still being processed"), "Processing state must not masquerade as a completed source.");
+  assert(!html.includes("Knowledge is still being processed"), "Incomplete material must not appear as knowledge.");
   assert(!html.includes("Policy assessment pending"), "Retired policy placeholder must not remain in Library.");
 });
 
@@ -456,7 +515,7 @@ Deno.test("Library treats an expired extraction as stopped and retryable", () =>
   assert(html.includes("Retry processing"), "The expired run must remain retryable.");
 });
 
-Deno.test("Library exposes bounded robots evidence and explicit robots-file absence", () => {
+Deno.test("Library keeps robots evidence out of cards", () => {
   const present = renderLibraryRoute({
     ...baseModel(),
     workflowStatuses: [{
@@ -475,9 +534,9 @@ Deno.test("Library exposes bounded robots evidence and explicit robots-file abse
       },
     }],
   });
-  assert(present.includes("View robots.txt"), "Library must offer the robots evidence disclosure.");
-  assert(present.includes("Disallow: /private"), "Library must show the bounded robots content.");
-  assert(present.includes("Open robots.txt"), "Library must link to the source robots file.");
+  assert(!present.includes("View robots.txt"), "Library must offer the robots evidence disclosure.");
+  assert(!present.includes("Disallow: /private"), "Library must show the bounded robots content.");
+  assert(!present.includes("Open robots.txt"), "Library must link to the source robots file.");
 
   const absent = renderLibraryRoute({
     ...baseModel(),
@@ -497,7 +556,7 @@ Deno.test("Library exposes bounded robots evidence and explicit robots-file abse
       },
     }],
   });
-  assert(absent.includes("robots.txt: no directives"), "Library must distinguish an explicit missing robots file.");
+  assert(!absent.includes("robots.txt"), "Library must distinguish an explicit missing robots file.");
 
   const unavailable = renderLibraryRoute({
     ...baseModel(),
@@ -517,8 +576,8 @@ Deno.test("Library exposes bounded robots evidence and explicit robots-file abse
       },
     }],
   });
-  assert(unavailable.includes("robots.txt: unavailable (HTTP 403)"), "Library must disclose an origin robots 403 separately from an explicit denial.");
-  assert(unavailable.includes("source page was reachable"), "Library must explain why extraction continued after the robots 403.");
+  assert(!unavailable.includes("robots.txt"), "Library must disclose an origin robots 403 separately from an explicit denial.");
+  assert(!unavailable.includes("source page was reachable"), "Library must explain why extraction continued after the robots 403.");
 });
 
 Deno.test("Library controller loads source knowledge and removes one knowledge pair", async () => {
@@ -550,9 +609,12 @@ Deno.test("Library controller loads source knowledge and removes one knowledge p
   assert(initial.includes("A cadence resolves musical tension."), "Library must show loaded knowledge.");
   page.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({
     querySelector: () => null,
-    querySelectorAll: (/** @type {string} */ selector) => selector === "[data-library-knowledge-remove]"
+    querySelectorAll: (/** @type {string} */ selector) => {
+      assert(selector !== "[data-library-upload]", "Library must not bind an embedded upload form.");
+      return selector === "[data-library-knowledge-remove]"
       ? [{ getAttribute: (/** @type {string} */ name) => name === "data-library-knowledge-remove" ? "knowledge-a" : null, addEventListener: (/** @type {string} */ _event, /** @type {() => void} */ listener) => { removeListener = listener; } }]
-      : [],
+      : [];
+    },
   })));
   if (removeListener === null) throw new Error("Knowledge removal action was not bound.");
   const action = /** @type {() => void} */ (removeListener);
@@ -768,4 +830,90 @@ Deno.test("Library preserves a known active status when a poll fails", async () 
   assert(page.render({}).includes("Processing 1 source"), "A status outage must retain the last confirmed processing state.");
   assert(errors.length === 1, "A status outage must be reported to the user.");
   assert(scheduled.length === 2, "A known active source may retry with one replacement poll after a transient status failure.");
+});
+
+Deno.test("Library uses approved descriptive copy and keeps intake on Upload", () => {
+  const html = renderLibraryRoute(baseModel());
+  assert(html.includes('<h1 id="library-title">Library</h1>'), "Library heading must name the panel.");
+  assert(html.includes("Browse saved sources, search extracted knowledge, and check processing status."), "Library subtitle must explain its purpose.");
+  assert(!html.includes("data-library-upload"), "Intake belongs on Upload.");
+  assert(html.includes("up to 20 candidate titles/descriptions or knowledge summaries to OpenRouter"), "Consent must identify data and recipient.");
+});
+
+Deno.test("Upload attaches validated source context without depending on Library pagination", async () => {
+  let uploaded = false;
+  const page = createLibraryPage({
+    fetch: async (url, init) => {
+      assert(String(url).endsWith("/material"), "Bound upload must never create a private source or read pagination.");
+      const command = JSON.parse(String(init?.body));
+      assert(command.sourceId === source.id && command.runId === "run-a" && command.sourceRevision === source.revision, "Bound material keeps current identity and revision.");
+      uploaded = true;
+      return Response.json({result:{status:"attached",materialId:"material-a",runId:"run-a",reused:false}});
+    }, gatewayBaseUrl:"https://app.example/", escapeHtml:value=>value, formatDate:value=>value, createId:()=>"id", confirmDisable:()=>true, createObserver:()=>null, schedule:()=>1, cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{},
+  });
+  const form = new FormData(); form.set("title",source.title);form.set("content","Synthetic material");form.set("attested","on");
+  await page.uploadMaterial(source.id,form,{source,runId:"run-a",reason:"Authorized material required."});
+  assert(uploaded,"Validated source-bound upload must work after direct navigation.");
+});
+Deno.test("Upload material failure retains inline retry context without a global toast", async () => {
+  /** @type {string[]} */ const errors = [];
+  let materialRequests = 0;
+  /** @type {typeof fetch} */ const fetchFixture = async (url) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith("/upload-context")) return Response.json({ result: { source, runId: "run-a", reason: "Authorized material required." } });
+    assert(path.endsWith("/material"), `Unexpected upload fixture request: ${path}`);
+    materialRequests += 1;
+    return Response.json({ error: "SyntheticUnavailable" }, { status: 503 });
+  };
+  const library = createLibraryPage({
+    fetch: fetchFixture, gatewayBaseUrl: "https://app.example/",
+    escapeHtml: value => value, formatDate: value => value, createId: () => "id",
+    confirmDisable: () => true, createObserver: () => null, schedule: () => 1,
+    cancel: () => {}, onNotice: () => {}, onError: message => errors.push(message), rerender: () => {},
+  });
+  const upload = createUploadPage({
+    fetch: fetchFixture, baseUrl: "https://app.example/", createId: () => "id",
+    onChange: () => {}, onRenamed: () => {},
+    upload: async (sourceId, form, context) => {
+      await library.uploadMaterial(sourceId, form, context);
+      return library.uploadResult();
+    },
+  });
+  await upload.load("#upload?sourceId=source-a&runId=run-a");
+  assert(errors.length === 0, "Loading upload context must not call onError.");
+  const form = new FormData();
+  form.set("title", source.title);
+  form.set("content", "Synthetic retained retry draft.");
+  form.set("attested", "on");
+  assert(await upload.submit(form) === false, "Material failure must report an unsuccessful upload.");
+  assert(materialRequests === 1, "The regression must reach the failing material endpoint exactly once.");
+  const html = upload.render();
+  assert(html.includes(`Title saved. Upload failed: ${library.uploadResult().message} Your draft is ready to retry.`), "Upload must retain its inline failure and retry message.");
+  assert(html.includes("Authorized material required.") && html.includes(source.title), "Upload must retain its source context and title.");
+  assert(html.includes("Synthetic retained retry draft."), "Upload must retain the material draft for retry.");
+  assert(html.includes("Upload and process") && !html.includes(' disabled'), "Upload must re-enable submission for retry.");
+  assert(errors.length === 0, `Upload material failure must not call global onError; received ${errors.length} call(s): ${JSON.stringify(errors)}`);
+});
+
+Deno.test("Library refresh invalidates previously loaded knowledge before replacement arrives", async () => {
+  let reads = 0;
+  const page = createLibraryPage({fetch:async url=>{
+    if(String(url).includes("library-knowledge")) return ++reads === 1 ? Response.json({result:{items:[{knowledgeId:"k",sourceId:source.id,questionId:"q",title:source.title,summary:"Previously retained idea",sourceUrl:source.canonicalUrl,evidenceAnchorIds:["a"],media:null,questionLocked:true}]}}) : Response.json({error:"Unavailable"},{status:503});
+    if(String(url).includes("source-status")) return Response.json({result:{sourceId:source.id,run:null,reasonCode:null,message:null}});
+    return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});
+  },gatewayBaseUrl:"https://app.example/",escapeHtml:value=>value,formatDate:value=>value,createId:()=>"id",confirmDisable:()=>true,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
+  await page.load(); assert(page.render({}).includes("Previously retained idea"),"Initial eligible knowledge is shown.");
+  await page.load(); assert(!page.render({}).includes("Previously retained idea"),"Failed refresh cannot leave stale knowledge visible.");
+});
+Deno.test("Source search invalidates old knowledge when the source revision changes", async () => {
+ let reads=0;
+ const page=createLibraryPage({fetch:async url=>{
+  const path=new URL(String(url)).pathname;
+  if(path.endsWith("library-knowledge"))return Response.json({result:{items:++reads===1?[{knowledgeId:"k",sourceId:source.id,questionId:"q",title:source.title,summary:"Old revision knowledge",sourceUrl:source.canonicalUrl,evidenceAnchorIds:["a"],media:null,questionLocked:true}]:[]}});
+  if(path.endsWith("source-status"))return Response.json({result:{sourceId:source.id,run:null,reasonCode:null,message:null}});
+  if(path.endsWith("/search"))return Response.json({result:[{source:{...source,revision:3},score:1,matchedBy:"exact"}]});
+  return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});
+ },gatewayBaseUrl:"https://app.example/",escapeHtml:value=>value,formatDate:value=>value,createId:()=>"id",confirmDisable:()=>true,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
+ await page.load();const form=new FormData();form.set("query","Harmony");form.set("searchScope","sources");await page.search(form);
+ assert(!page.render({}).includes("Old revision knowledge"),"Source search must not reattach stale knowledge from a previous revision.");
 });

@@ -721,6 +721,8 @@ Deno.test("failed retry control produces an owner-scoped rollback at the new rev
     { ok: true, value: { ownerId: "owner-a", runId: "run-a", state: "extraction-loop", revision: 6 } },
   );
   assertEquals(JSON.stringify(rollback), JSON.stringify({ ownerId: "owner-a", runId: "run-a", expectedRevision: 6, nextState: "retryable-failure", failureKind: "KnowledgePageFetchFailed" }));
+  const quizRollback=workflowControlRollback({action:"resume"},{ok:true,value:{ownerId:"owner-a",runId:"run-a",state:"retryable-failure",retryState:"per-point-quiz-loop",failureKind:"WorkflowQuizFailed"}},{ok:true,value:{state:"per-point-quiz-loop",revision:9}});
+  assertEquals(JSON.stringify(quizRollback),JSON.stringify({ownerId:"owner-a",runId:"run-a",expectedRevision:9,nextState:"retryable-failure",failureKind:"WorkflowQuizFailed"}));
 });
 
 Deno.test("configured Browser Run composition reaches the authoritative job repository", async () => {

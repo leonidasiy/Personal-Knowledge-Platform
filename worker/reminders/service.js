@@ -5,7 +5,7 @@
 /** @typedef {'enabled'|'skipped'|'sent'|'delivery-failed'|'disabled-expired'} ReminderStatus */
 /** @typedef {{deviceId:string,enabled:boolean,time:string,timeZone:string|null,skippedDate:string|null,lastStatus:ReminderStatus|null,publicKey:string|null}} ReminderSnapshot */
 /** @typedef {{endpoint:string,keys:{p256dh:string,auth:string}}} Subscription */
-/** @typedef {{type:'daily-reminder',id:string,expiresAt:string,test?:boolean}} PushPayload */
+/** @typedef {{type:'daily-reminder'|'source-ready'|'source-attention',id:string,expiresAt:string,test?:boolean}} PushPayload */
 /** @typedef {{success:boolean,meta?:{changes?:number}}} Write */
 /** @typedef {{bind:(...values:(string|number|null)[])=>Statement,first:()=>Promise<unknown>,all:()=>Promise<{success:boolean,results:readonly unknown[]}>,run:()=>Promise<Write>}} Statement */
 /** @typedef {{prepare:(query:string)=>Statement}} Database */

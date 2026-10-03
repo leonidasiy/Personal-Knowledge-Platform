@@ -52,7 +52,9 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   if (event.notification.tag.startsWith("resonance-reminder:")) {
-    event.waitUntil(openReminder());
+    event.waitUntil(openReminder("review"));
+  } else if (event.notification.tag.startsWith("resonance-source:")) {
+    event.waitUntil(openReminder("library"));
   }
 });
 
@@ -65,34 +67,34 @@ async function showReminder(event) {
     throw new Error("ReminderPushInvalid");
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
-      payload.type !== "daily-reminder" ||
+      (payload.type !== "daily-reminder" && payload.type !== "source-ready" && payload.type !== "source-attention") ||
       typeof payload.id !== "string" || !/^[a-zA-Z0-9:_-]{1,128}$/.test(payload.id) ||
       typeof payload.expiresAt !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.expiresAt) ||
       !Number.isFinite(Date.parse(payload.expiresAt)) || new Date(payload.expiresAt).toISOString() !== payload.expiresAt ||
-      (payload.test !== undefined && typeof payload.test !== "boolean")) {
+      (payload.test !== undefined && (payload.type !== "daily-reminder" || typeof payload.test !== "boolean"))) {
     throw new Error("ReminderPushInvalid");
   }
   // Expired messages must not become a backlog after the phone reconnects.
   if (Date.parse(payload.expiresAt) <= Date.now()) return;
   if (Date.parse(payload.expiresAt) > Date.now() + 65 * 60_000) throw new Error("ReminderPushInvalid");
   await self.registration.showNotification("Resonance", {
-    body: payload.test ? "Your test reminder is ready." : "A little time to revisit what you’ve learned?",
+    body: payload.type === "source-ready" ? "Your knowledge and quizzes are ready. Tap to explore them in Library." : payload.type === "source-attention" ? "A source needs your attention. Tap to open Library and see the next step." : payload.test ? "Your reminder is working. Tap to try your daily retrieval quiz." : "What do you remember? Tap to start your daily review.",
     icon: new URL("assets/app-icon-192.png", self.registration.scope).href,
-    tag: `resonance-reminder:${payload.id}`,
+    tag: `${payload.type === "daily-reminder" ? "resonance-reminder" : "resonance-source"}:${payload.id}`,
     renotify: false,
   });
 }
 
-async function openReminder() {
+async function openReminder(view) {
   const scope = new URL(self.registration.scope);
-  const target = new URL("?view=review", scope).href;
+  const target = new URL(`?view=${view}`, scope).href;
   const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   const existing = clients.find((client) => {
     const url = new URL(client.url);
     return url.origin === scope.origin && url.pathname.startsWith(scope.pathname);
   });
   if (existing) {
-    existing.postMessage({ type: "resonance-reminder-open" });
+    existing.postMessage({ type: view === "review" ? "resonance-reminder-open" : "resonance-source-update-open" });
     await existing.focus();
   } else {
     await self.clients.openWindow(target);

@@ -134,19 +134,49 @@ export class D1QuizRepository {
     this.#bucket = dependencies.bucket ?? null;
   }
 
+  /** @param {{readonly ownerId:string,readonly runId:string,readonly knowledgeId:string}} scope @returns {Promise<import('../src/features/knowledge-workflows/quiz.js').Result<{status:'published'|'pending-review',attempt:number}|null,unknown>>} */
+  async findPublished(scope) {
+    if (!text(scope?.ownerId) || !text(scope.runId) || !text(scope.knowledgeId)) return {ok:false,error:{kind:"QuizPersistenceFailed"}};
+    this.#logger({event:"quiz-publication-read-entry",ownerId:scope.ownerId,runId:scope.runId});
+    try {
+      const row=await this.#database.prepare("SELECT status,attempt_number FROM knowledge_workflow_quizzes WHERE owner_id=? AND run_id=? AND knowledge_id=? LIMIT 1").bind(scope.ownerId,scope.runId,scope.knowledgeId).first();
+      if (row===null) { this.#logger({event:"quiz-publication-read-success",ownerId:scope.ownerId,runId:scope.runId}); return {ok:true,value:null}; }
+      if (!isRecord(row) || (row.status!=="published" && row.status!=="pending-review") || !positiveInteger(row.attempt_number) || row.attempt_number>3) {
+        this.#logger({event:"quiz-publication-read-failure",failureKind:"QuizPersistenceFailed"});
+        return {ok:false,error:{kind:"QuizPersistenceFailed"}};
+      }
+      this.#logger({event:"quiz-publication-read-success",ownerId:scope.ownerId,runId:scope.runId});
+      return {ok:true,value:{status:row.status,attempt:row.attempt_number}};
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      this.#logger({event:"quiz-publication-read-failure",failureKind:"QuizPersistenceFailed"});
+      return {ok:false,error:{kind:"QuizPersistenceFailed"}};
+    }
+  }
+
   /** @param {QuizAttempt} attempt @returns {Promise<ContentResult>} */
   async appendAttempt(attempt) {
     if (!isQuizAttempt(attempt)) return { ok: false, error: { kind: "QuizPersistenceFailed" } };
+    this.#logger({event:"quiz-attempt-d1-entry",ownerId:attempt.ownerId,runId:attempt.runId});
     try {
-      const result = await this.#database.prepare("INSERT INTO knowledge_workflow_quiz_attempts (owner_id, attempt_id, run_id, knowledge_id, attempt_number, draft_id, score, feedback, failure_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(attempt.ownerId, attempt.id, attempt.runId, attempt.knowledgeId, attempt.attempt, attempt.draftId, attempt.score, attempt.feedback, attempt.failureKind, attempt.createdAt).run();
-      return changed(result) ? { ok: true, value: null } : { ok: false, error: { kind: "QuizPersistenceFailed" } };
+      const values=[attempt.ownerId,attempt.id,attempt.runId,attempt.knowledgeId,attempt.attempt,attempt.draftId,attempt.score,attempt.feedback,attempt.failureKind,attempt.createdAt];
+      const results=await this.#database.batch([
+        this.#database.prepare("INSERT INTO knowledge_workflow_quiz_attempts (owner_id, attempt_id, run_id, knowledge_id, attempt_number, draft_id, score, feedback, failure_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id,run_id,knowledge_id,attempt_number) DO NOTHING").bind(...values),
+        this.#database.prepare("INSERT INTO knowledge_workflow_quiz_retry_attempts (owner_id, attempt_id, run_id, knowledge_id, attempt_number, draft_id, score, feedback, failure_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...values),
+      ]);
+      if (results.length!==2 || !results[0]?.success || !changed(results[1])) {
+        this.#logger({event:"quiz-attempt-d1-failure",failureKind:"QuizPersistenceFailed"});
+        return {ok:false,error:{kind:"QuizPersistenceFailed"}};
+      }
+      this.#logger({event:"quiz-attempt-d1-success",ownerId:attempt.ownerId,runId:attempt.runId});
+      return {ok:true,value:null};
     } catch (error) {
       this.#logger({ event: "quiz-attempt-d1-failure", ownerId: attempt.ownerId, runId: attempt.runId, knowledgeId: attempt.knowledgeId, failureKind: "QuizPersistenceFailed" });
       return { ok: false, error: { kind: "QuizPersistenceFailed" } };
     }
   }
 
-  /** @param {{ readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly knowledgeId: string, readonly draft: QuestionDraft }} command @returns {Promise<{ readonly ok: true, readonly value: boolean } | { readonly ok: false, readonly error: { readonly kind: "QuizDuplicateCheckFailed" } }>} */
+  /** @param {{ readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly knowledgeId: string, readonly draft: unknown }} command @returns {Promise<{ readonly ok: true, readonly value: boolean } | { readonly ok: false, readonly error: { readonly kind: "QuizDuplicateCheckFailed" } }>} */
   async hasDuplicateDraft(command) {
     const fingerprint = draftFingerprint(command?.draft);
     if (!text(command?.ownerId) || !text(command?.sourceId) || !positiveInteger(command.sourceRevision) || !text(command.knowledgeId) || fingerprint === null) return { ok: false, error: { kind: "QuizDuplicateCheckFailed" } };
@@ -413,7 +443,7 @@ function acceptedAnswerProjection(draft) {
 }
 /** @param {QuestionDraft} draft @returns {LearningTask["expectedConcepts"]} */
 function expectedConceptProjection(draft) {
-  return draft.kind === "short-response" || draft.kind === "symbolic" || draft.kind === "notation" ? /** @type {[string, ...string[]]} */ (Object.freeze([draft.prompt])) : null;
+  return draft.kind === "short-response" || draft.kind === "symbolic" || draft.kind === "notation" ? /** @type {readonly [string, ...string[]]} */ (Object.freeze([draft.prompt])) : null;
 }
 
 export {};
