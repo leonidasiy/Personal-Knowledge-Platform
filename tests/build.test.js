@@ -202,8 +202,25 @@ Deno.test("artifact budgets accept exact boundaries", () => {
   );
   assertEquals(oversizedStylesheet.ok, false);
   if (!oversizedStylesheet.ok) assertEquals(oversizedStylesheet.error.kind, "ArtifactRawBudgetExceeded");
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 220_000);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 72_000);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 222_630);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 72_317);
+  const exactAggregate = validateArtifactBudget(
+    { path: "src/*.js", rawBytes: 222_630, gzipBytes: 72_317 },
+    ARTIFACT_BUDGETS.aggregateJavascript,
+  );
+  assertEquals(exactAggregate.ok, true);
+  const oversizedAggregateRaw = validateArtifactBudget(
+    { path: "src/*.js", rawBytes: 222_631, gzipBytes: 1 },
+    ARTIFACT_BUDGETS.aggregateJavascript,
+  );
+  assertEquals(oversizedAggregateRaw.ok, false);
+  if (!oversizedAggregateRaw.ok) assertEquals(oversizedAggregateRaw.error.kind, "ArtifactRawBudgetExceeded");
+  const oversizedAggregateGzip = validateArtifactBudget(
+    { path: "src/*.js", rawBytes: 1, gzipBytes: 72_318 },
+    ARTIFACT_BUDGETS.aggregateJavascript,
+  );
+  assertEquals(oversizedAggregateGzip.ok, false);
+  if (!oversizedAggregateGzip.ok) assertEquals(oversizedAggregateGzip.error.kind, "ArtifactGzipBudgetExceeded");
 });
 
 Deno.test("service-worker cache identity follows the complete build graph", async () => {

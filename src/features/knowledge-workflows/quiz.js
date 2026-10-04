@@ -1,5 +1,7 @@
 // @ts-check
 
+import { validateAssembledQuizPair } from "./quiz-pair.js";
+
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 /** @typedef {import("./extraction.js").KnowledgePoint} KnowledgePoint */
 /** @typedef {"single-choice" | "multiple-choice" | "fill-blank" | "short-response" | "case-study" | "symbolic" | "notation"} QuizKind */
@@ -15,7 +17,8 @@
  *   readonly answer: string | readonly string[],
  *   readonly blanks?: readonly { readonly id: string, readonly acceptedAnswers: readonly string[] }[],
  *   readonly explanation?: string,
- *   readonly citedEvidenceUrls: readonly string[]
+ *   readonly citedEvidenceUrls: readonly string[],
+ *   readonly pairedQuiz?: { readonly multipleChoice: { readonly id: string, readonly kind: "single-choice"|"multiple-choice", readonly prompt: string, readonly options: readonly {readonly key:string,readonly text:string}[], readonly correctOptionKeys: readonly string[], readonly canonicalAnswers: readonly string[], readonly explanation: string }, readonly fillBlank: { readonly id:string,readonly kind:"fill-blank",readonly prompt:string,readonly blanks:readonly {readonly id:string,readonly canonicalAnswer:string,readonly acceptedAnswers:readonly string[]}[], readonly canonicalAnswers:readonly string[], readonly explanation:string }, readonly canonicalAnswers:readonly string[], readonly citedEvidenceUrls:readonly string[] }
  * }} QuestionDraft
  */
 
@@ -116,6 +119,7 @@ function validateGrounding(draft, knowledge) {
   if (draft.knowledgeId !== knowledge.id || draft.knowledgeRevision !== knowledge.sourceRevision) return { kind: "QuizDraftSchemaInvalid" };
   const evidence = new Set(knowledge.evidenceAnchors.map((anchor) => anchor.url));
   if (draft.citedEvidenceUrls.some((url) => !evidence.has(url))) return { kind: "QuizDraftUngrounded" };
+  if (draft.pairedQuiz !== undefined && (!validateAssembledQuizPair(draft.pairedQuiz) || draft.pairedQuiz.citedEvidenceUrls.length === 0 || draft.pairedQuiz.citedEvidenceUrls.some((url) => !evidence.has(url)) || draft.kind !== draft.pairedQuiz.multipleChoice.kind || draft.prompt !== draft.pairedQuiz.multipleChoice.prompt)) return { kind: "QuizDraftSchemaInvalid" };
   if (new Set(draft.options.map((option) => option.normalize("NFKC").trim().toLocaleLowerCase())).size !== draft.options.length) return { kind: "QuizDraftSchemaInvalid" };
   if (draft.kind === "single-choice" && (draft.options.length < 2 || typeof draft.answer !== "string" || !draft.options.includes(draft.answer))) return { kind: "QuizDraftSchemaInvalid" };
   if (draft.kind === "multiple-choice" && (draft.options.length < 2 || !Array.isArray(draft.answer) || draft.answer.length >= draft.options.length || new Set(draft.answer).size !== draft.answer.length || draft.answer.some((answer) => !draft.options.includes(answer)))) return { kind: "QuizDraftSchemaInvalid" };

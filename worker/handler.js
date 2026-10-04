@@ -38,6 +38,10 @@ import { handleReminderRequest } from "./reminders/http.js";
  *     readonly suppressed: (command: unknown) => Promise<Result<readonly string[], SourceLibraryFailure>>,
  *     readonly active: (command: unknown) => Promise<Result<readonly string[], SourceLibraryFailure>>
  *   },
+ *   readonly sourceClassification?: null | {
+ *     readonly updateManual: (command: unknown) => Promise<Result<{ readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly mainSubject: string, readonly topic: string, readonly classificationRevision: number }, { readonly kind: string }>>
+ *   },
+ *   readonly sourceClassificationBackfill?: null | { readonly run: (command: unknown) => Promise<Result<{ readonly ownerId: string, readonly counts: { readonly scanned: number, readonly classified: number, readonly needsReview: number, readonly alreadyProcessed: number, readonly manualPreserved: number } }, { readonly kind: string }>> },
  *   readonly sourceIngestion?: null | { readonly run: (command: unknown) => Promise<Result<{ readonly state: "completed" | "partial", readonly itemsStored: number }, import("../src/features/source-library/ingestion-contracts.js").SourceIngestionFailure>> },
  *   readonly sourceRightsProfileFor?: (canonicalUrl: string) => SourceRightsProfile | null,
  *   readonly knowledgeWorkflow?: null | {
@@ -154,6 +158,8 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const sourceRightsApproval = url.pathname === "/api/source-library/rights/approve";
       const sourceBrowse = url.pathname === "/api/source-library";
       const sourceSearch = url.pathname === "/api/source-library/search";
+      const sourceClassification = url.pathname === "/api/source-library/classification";
+      const sourceClassificationBackfill = url.pathname === "/api/source-library/classification/backfill";
       const sourceSuppressionCheck =
         url.pathname === "/api/source-library/suppressions/check";
       const sourceActiveCheck =
@@ -187,7 +193,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
       if (
         !reminders && !rssPath && !centralSearchPath &&
         !centralCapabilitiesPath && !sourceUploadContext && !sourceRename && sourceAction === null && !privateDocumentCreate && privateDocumentId === null && !sourceRightsApproval && !sourceBrowse &&
-        !sourceSearch && !sourceSuppressionCheck && !sourceActiveCheck &&
+        !sourceSearch && !sourceClassification && !sourceClassificationBackfill && !sourceSuppressionCheck && !sourceActiveCheck &&
         !sourceIngestion && !manualMaterial && !wikimediaTimedText &&
         !learningStatus && !learningReviewQueue && !learningPublished && !learningReview && !learningRevocation &&
         !learningProgress && !learningClassification && !learningFeedBatch && !learningLibraryKnowledge && !learningFeedRefresh && !learningFeedComplete && !learningReviewBatch && !learningReviewRefresh && !learningReviewAnswer && !learningPreference && !learningKnowledgeRemove &&
@@ -445,6 +451,22 @@ export function createDiscoveryWorker(configuration, dependencies) {
           });
         }
         throw error;
+      }
+      if (sourceClassification) {
+        if (dependencies.sourceClassification == null) return sourceClassificationFailureResponse({ kind: "SourceClassificationPersistenceFailed" });
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId") || Object.keys(document).some((key) => !["sourceId", "sourceRevision", "expectedRevision", "mainSubject", "topic"].includes(key))) return sourceClassificationFailureResponse({ kind: "SourceClassificationCommandInvalid" });
+        const result = await dependencies.sourceClassification.updateManual({ ...document, ownerId: authenticated.value.ownerId, classification: { mainSubject: document.mainSubject, topic: document.topic } });
+        if (!result.ok) return sourceClassificationFailureResponse(result.error);
+        return json({ ownerId: authenticated.value.ownerId, result: { sourceId: result.value.sourceId, sourceRevision: result.value.sourceRevision, classificationRevision: result.value.classificationRevision, mainSubject: result.value.mainSubject, topic: result.value.topic } }, 200);
+      }
+      if (sourceClassificationBackfill) {
+        if (dependencies.sourceClassificationBackfill == null) return sourceClassificationBackfillFailureResponse({ kind: "BackfillUnavailable" });
+        const pageSize = isRecord(document) ? document.pageSize : undefined;
+        if (!isRecord(document) || Object.hasOwn(document, "ownerId") || Object.keys(document).sort().join(",") !== "pageSize" || typeof pageSize !== "number" || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 500) return sourceClassificationBackfillFailureResponse({ kind: "BackfillCommandInvalid" });
+        const result = await dependencies.sourceClassificationBackfill.run(Object.freeze({ ownerId: authenticated.value.ownerId, pageSize }));
+        if (!result.ok) return sourceClassificationBackfillFailureResponse(result.error);
+        if (!isRecord(result.value) || result.value.ownerId !== authenticated.value.ownerId || !isRecord(result.value.counts) || Object.keys(result.value.counts).sort().join(",") !== "alreadyProcessed,classified,manualPreserved,needsReview,scanned" || ![result.value.counts.scanned, result.value.counts.classified, result.value.counts.needsReview, result.value.counts.alreadyProcessed, result.value.counts.manualPreserved].every((count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)) return sourceClassificationBackfillFailureResponse({ kind: "BackfillResponseInvalid" });
+        return json({ ownerId: authenticated.value.ownerId, result: { counts: result.value.counts } }, 200);
       }
       if (sourceRename) {
         if (dependencies.sourceRename == null) return sourceRenameFailureResponse({ kind: "SourceRenamePersistenceFailed" });
@@ -998,6 +1020,23 @@ function failureResponse(failure) {
   return json({ error: failure.kind }, status);
 }
 
+/** @param {{ readonly kind: string }} failure */
+function sourceClassificationFailureResponse(failure) {
+  const status = failure.kind === "SourceClassificationSourceMissing" ? 404
+    : failure.kind === "SourceClassificationRevisionConflict" ? 409
+    : failure.kind === "SourceClassificationPersistenceFailed" ? 503
+    : 400;
+  return json({ error: failure.kind }, status);
+}
+
+/** @param {{ readonly kind: string }} failure */
+function sourceClassificationBackfillFailureResponse(failure) {
+  const status = failure.kind === "BackfillUnavailable" ? 503
+    : failure.kind.endsWith("Failed") || failure.kind === "BackfillResponseInvalid" ? 503
+    : 400;
+  return json({ error: failure.kind }, status);
+}
+
 /** @param {{ readonly kind: string, readonly field?: string, readonly sourceId?: string, readonly state?: string, readonly revision?: number }} failure */
 function sourceFailureResponse(failure) {
   const status = failure.kind === "SourceOwnerMismatch" ||
@@ -1101,7 +1140,7 @@ function learningBatchFailureResponse(failure) {
         failure.kind === "ReviewAnswerNotAllowed" || failure.kind === "ClassificationConflict"
     ? 409
     : failure.kind === "ProgressReadUnavailable" || failure.kind === "ProgressHistoryLimitExceeded" || failure.kind === "ProgressDataInvalid" || failure.kind === "ClassificationWriteUnavailable" || failure.kind === "LearningBatchUnavailable" ||
-        failure.kind === "ReviewGradePending" ||
+        failure.kind === "ReviewGradePending" || failure.kind === "ReviewGradingUnavailable" ||
         failure.kind === "LearningBatchPersistenceFailed" ||
         failure.kind === "KnowledgePurgeFailed" ||
         failure.kind === "LearningPreferencePersistenceFailed"

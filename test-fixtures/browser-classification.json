@@ -1,0 +1,46 @@
+{
+  "notice": "Synthetic isolated browser fixture. These records are test data, not production or learner data.",
+  "sourceId": "synthetic-classification-source",
+  "sourceRevision": 3,
+  "classificationRevision": 1,
+  "initialClassification": {
+    "mainSubject": "music",
+    "topic": "Cadential harmony"
+  },
+  "updatedClassification": {
+    "mainSubject": "history",
+    "topic": "Municipal choral ledgers"
+  },
+  "knowledge": [
+    {
+      "knowledgeId": "synthetic-k1",
+      "title": "Cadences mark musical closure",
+      "summary": "A cadence organizes harmonic motion at a musical boundary.",
+      "sourceUrl": "https://example.test/synthetic-music-source"
+    },
+    {
+      "knowledgeId": "synthetic-k2",
+      "title": "Public concerts shaped civic life",
+      "summary": "Public concerts connected music-making with eighteenth-century civic life.",
+      "sourceUrl": "https://example.test/synthetic-music-source"
+    },
+    {
+      "knowledgeId": "synthetic-k3",
+      "title": "The dominant prepares resolution",
+      "summary": "Dominant harmony commonly directs a phrase toward its tonic.",
+      "sourceUrl": "https://example.test/synthetic-music-source"
+    },
+    {
+      "knowledgeId": "synthetic-k4",
+      "title": "Patrons supported musical institutions",
+      "summary": "Patronage helped sustain musical institutions in European cities.",
+      "sourceUrl": "https://example.test/synthetic-music-source"
+    },
+    {
+      "knowledgeId": "synthetic-k5",
+      "title": "Phrase endings create expectation",
+      "summary": "Listeners use phrase endings to anticipate musical continuation.",
+      "sourceUrl": "https://example.test/synthetic-music-source"
+    }
+  ]
+}

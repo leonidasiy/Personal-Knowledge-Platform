@@ -1,6 +1,6 @@
 // @ts-check
 
-import { parseClassification } from "../src/features/knowledge-subjects/public.js";
+import { isSubjectId } from "../src/features/knowledge-subjects/public.js";
 import { createLearningProgressService } from "./learning-progress-d1.js";
 
 import { selectKnowledgeBatch } from "../src/features/learning-generation/batches.js";
@@ -11,12 +11,13 @@ import { selectKnowledgeBatch } from "../src/features/learning-generation/batche
 /** @typedef {{ readonly prepare: (query: string) => D1Statement, readonly batch: (statements: readonly D1Statement[]) => Promise<readonly D1Result[]> }} D1DatabasePort */
 /** @typedef {{ readonly delete: (key: string) => Promise<unknown> }} MediaBucket */
 /** @typedef {{ readonly event: string, readonly ownerId?: string, readonly batchId?: string, readonly knowledgeId?: string, readonly failureKind?: string, readonly itemCount?: number }} LearnerBatchLog */
-/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly questionId: string, readonly viewCount: number, readonly lastAnswerCorrect: boolean | null, readonly scheduledDays: number, readonly preference: number, readonly dueAt: string | null, readonly studiedAt: string | null, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly classification: import("../src/features/knowledge-subjects/public.js").Classification | null, readonly classificationRevision: number, readonly question: PublicQuestion, readonly media: PublicMedia | null }} LearnerCandidate */
-/** @typedef {{ readonly id: string, readonly kind: string, readonly prompt: string, readonly explanation: string, readonly sourceAnchorIds: readonly string[], readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly correctChoiceIds: readonly string[] | null, readonly acceptedAnswers: readonly string[] | null, readonly blankId: string | null, readonly blanks: readonly { readonly id: string, readonly acceptedAnswers: readonly string[] }[] | null, readonly revision: number }} PublicQuestion */
+/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly sourceRevision: number, readonly questionId: string, readonly viewCount: number, readonly lastAnswerCorrect: boolean | null, readonly scheduledDays: number, readonly preference: number, readonly dueAt: string | null, readonly studiedAt: string | null, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly sourceClassification: { readonly mainSubject: string, readonly topic: string } | null, readonly sourceClassificationRevision: number, readonly question: PublicQuestion, readonly media: PublicMedia | null }} LearnerCandidate */
+/** @typedef {{ readonly id:string, readonly kind:"single-choice"|"multiple-choice"|"fill-blank", readonly prompt:string, readonly explanation:string, readonly choices:readonly {readonly id:string,readonly label:string}[]|null, readonly correctChoiceIds:readonly string[]|null, readonly blanks:readonly {readonly id:string,readonly acceptedAnswers:readonly string[]}[]|null }} PairedVariant */
+/** @typedef {{ readonly id: string, readonly kind: string, readonly prompt: string, readonly explanation: string, readonly sourceAnchorIds: readonly string[], readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly correctChoiceIds: readonly string[] | null, readonly acceptedAnswers: readonly string[] | null, readonly blankId: string | null, readonly blanks: readonly { readonly id: string, readonly acceptedAnswers: readonly string[] }[] | null, readonly pairedVariants: readonly PairedVariant[] | null, readonly revision: number }} PublicQuestion */
 /** @typedef {{ readonly assetId: string, readonly kind: string, readonly url: string, readonly attribution: string }} PublicMedia */
 /** @typedef {{ readonly batchId: string, readonly learningDay: string, readonly status: "open" | "completed", readonly itemIds: readonly string[], readonly revision: number, readonly createdAt: string, readonly completedAt: string | null }} BatchRow */
 /** @typedef {{ readonly ownerId: string, readonly batchId: string, readonly idempotencyKey: string }} FeedCompleteCommand */
-/** @typedef {{ readonly ownerId: string, readonly batchId: string, readonly questionId: string, readonly selectedChoiceIds: readonly string[], readonly answerText?: string | null, readonly blankAnswers?: readonly { readonly id: string, readonly text: string }[], readonly idempotencyKey: string }} ReviewAnswerCommand */
+/** @typedef {{ readonly ownerId: string, readonly batchId: string, readonly questionId: string, readonly questionRevision?:number, readonly selectedChoiceIds: readonly string[], readonly answerText?: string | null, readonly blankAnswers?: readonly { readonly id: string, readonly text: string }[], readonly pairedBlankAnswers?: readonly { readonly id:string,readonly text:string }[] | null, readonly idempotencyKey: string }} ReviewAnswerCommand */
 /** @typedef {{ readonly ownerId: string, readonly knowledgeId: string, readonly choice: "more" | "less", readonly idempotencyKey: string }} PreferenceCommand */
 /** @typedef {{ readonly ownerId: string, readonly knowledgeId: string, readonly idempotencyKey: string }} KnowledgeRemoveCommand */
 /** @typedef {{ readonly ownerId: string, readonly sourceId: string, readonly idempotencyKey: string }} SourceRemoveCommand */
@@ -47,10 +48,16 @@ function parseQuestion(value) {
   const acceptedAnswers = value.acceptedAnswers === undefined || value.acceptedAnswers === null ? null : stringList(value.acceptedAnswers) ? [...value.acceptedAnswers] : undefined;
   const blankId = value.blankId === undefined || value.blankId === null ? null : text(value.blankId) ? value.blankId : undefined;
   const blanks = value.blanks === undefined || value.blanks === null ? null : Array.isArray(value.blanks) && value.blanks.length >= 2 && value.blanks.length <= 4 && value.blanks.every((blank, index) => record(blank) && blank.id === `blank-${index + 1}` && stringList(blank.acceptedAnswers)) ? value.blanks.map((blank) => Object.freeze({ id: /** @type {string} */ (blank.id), acceptedAnswers: Object.freeze(/** @type {string[]} */ ([...blank.acceptedAnswers])) })) : undefined;
-  if (choices === undefined || correctChoiceIds === undefined || acceptedAnswers === undefined || blankId === undefined || blanks === undefined) return null;
+  const pairedVariants = value.pairedVariants === undefined || value.pairedVariants === null ? null : Array.isArray(value.pairedVariants) && value.pairedVariants.length === 2 && value.pairedVariants.every((variant) => record(variant) && text(variant.id) && (variant.kind === "single-choice" || variant.kind === "multiple-choice" || variant.kind === "fill-blank") && text(variant.prompt) && text(variant.explanation)) ? /** @type {unknown[]} */ (value.pairedVariants).map((rawVariant) => {
+    if (!record(rawVariant)) return null;
+    const variant = rawVariant;
+    if (variant.kind === "fill-blank") return Array.isArray(variant.blanks) && variant.blanks.length > 0 && variant.blanks.every((blank) => record(blank) && text(blank.id) && stringList(blank.acceptedAnswers)) ? Object.freeze({ id: /** @type {string} */ (variant.id), kind: "fill-blank", prompt: /** @type {string} */ (variant.prompt), explanation: /** @type {string} */ (variant.explanation), choices: null, correctChoiceIds: null, blanks: Object.freeze(variant.blanks.map((blank) => Object.freeze({ id: /** @type {string} */ (blank.id), acceptedAnswers: Object.freeze(/** @type {string[]} */ ([...blank.acceptedAnswers])) }))) }) : null;
+    return Array.isArray(variant.choices) && variant.choices.length >= 2 && variant.choices.every((choice) => record(choice) && text(choice.id) && text(choice.label)) && stringList(variant.correctChoiceIds) ? Object.freeze({ id: /** @type {string} */ (variant.id), kind: /** @type {"single-choice"|"multiple-choice"} */ (variant.kind), prompt: /** @type {string} */ (variant.prompt), explanation: /** @type {string} */ (variant.explanation), choices: Object.freeze(variant.choices.map((choice) => Object.freeze({ id: /** @type {string} */ (choice.id), label: /** @type {string} */ (choice.label) }))), correctChoiceIds: Object.freeze(/** @type {string[]} */ ([...variant.correctChoiceIds])), blanks: null }) : null;
+  }).filter((variant) => variant !== null) : undefined;
+  if (choices === undefined || correctChoiceIds === undefined || acceptedAnswers === undefined || blankId === undefined || blanks === undefined || pairedVariants === undefined || pairedVariants !== null && pairedVariants.length !== 2) return null;
   if (value.kind === "fill-blank" && (blanks === null ? acceptedAnswers === null || blankId === null : acceptedAnswers !== null || blankId !== null || new Set(blanks.map((blank) => blank.id)).size !== blanks.length)) return null;
   if (value.kind !== "fill-blank" && blanks !== null) return null;
-  return Object.freeze({ id: value.id, kind: value.kind, prompt: value.prompt, explanation: value.explanation, sourceAnchorIds: Object.freeze([...value.sourceAnchorIds]), choices: choices === null ? null : Object.freeze(choices), correctChoiceIds: correctChoiceIds === null ? null : Object.freeze(correctChoiceIds), acceptedAnswers: acceptedAnswers === null ? null : Object.freeze(acceptedAnswers), blankId, blanks: blanks === null ? null : Object.freeze(blanks), revision: value.revision });
+  return Object.freeze({ id: value.id, kind: value.kind, prompt: value.prompt, explanation: value.explanation, sourceAnchorIds: Object.freeze([...value.sourceAnchorIds]), choices: choices === null ? null : Object.freeze(choices), correctChoiceIds: correctChoiceIds === null ? null : Object.freeze(correctChoiceIds), acceptedAnswers: acceptedAnswers === null ? null : Object.freeze(acceptedAnswers), blankId, blanks: blanks === null ? null : Object.freeze(blanks), pairedVariants: pairedVariants === null ? null : Object.freeze(pairedVariants), revision: value.revision });
 }
 
 /** @param {unknown} value @returns {BatchRow | null} */
@@ -64,20 +71,19 @@ function parseBatch(value, allowLess = false) {
 
 /** @param {unknown} value @returns {LearnerCandidate | null} */
 function parseCandidate(value) {
-  if (!record(value) || !text(value.point_json) || !text(value.task_json) || !text(value.knowledge_id) || !text(value.source_id) || !text(value.source_title) || !text(value.canonical_url) || !nonNegativeInteger(value.view_count) || (value.last_answer_correct !== null && value.last_answer_correct !== 0 && value.last_answer_correct !== 1) || !nonNegativeInteger(value.scheduled_days) || (value.due_at !== null && !iso(value.due_at)) || (value.studied_at !== null && !iso(value.studied_at)) || typeof value.preference !== "number" || !Number.isFinite(value.preference) || value.preference < -1 || value.preference > 1) return null;
+  if (!record(value) || !text(value.point_json) || !text(value.task_json) || !text(value.knowledge_id) || !text(value.source_id) || !positiveInteger(value.source_revision) || !text(value.source_title) || !text(value.canonical_url) || !nonNegativeInteger(value.view_count) || (value.last_answer_correct !== null && value.last_answer_correct !== 0 && value.last_answer_correct !== 1) || !nonNegativeInteger(value.scheduled_days) || (value.due_at !== null && !iso(value.due_at)) || (value.studied_at !== null && !iso(value.studied_at)) || typeof value.preference !== "number" || !Number.isFinite(value.preference) || value.preference < -1 || value.preference > 1) return null;
   let point;
   let task;
   try { point = JSON.parse(value.point_json); task = JSON.parse(value.task_json); } catch (error) { return null; }
   if (!record(point) || !text(point.summary) || !record(point.attribution) || !text(point.attribution.sourceUrl) || !Array.isArray(point.evidenceAnchors)) return null;
-  let classification = null;
-  const classificationRevision = value.classification_revision === undefined || value.classification_revision === null ? 0 : value.classification_revision;
-  if (!nonNegativeInteger(classificationRevision)) return null;
-  let metadata = point.classification;
-  if (value.classification_json !== undefined && value.classification_json !== null) {
-    if (!text(value.classification_json)) return null;
-    try { metadata = JSON.parse(value.classification_json); } catch (error) { if (error instanceof SyntaxError) return null; throw error; }
-  }
-  if (metadata !== undefined) { const parsed = parseClassification(metadata); if (!parsed.ok) return null; classification = parsed.value; }
+  const sourceClassificationRevision = value.source_classification_revision === null ? 0 : value.source_classification_revision;
+  if (!nonNegativeInteger(sourceClassificationRevision)) return null;
+  const sourceClassification = value.source_main_subject === null && value.source_topic === null
+    ? null
+    : isSubjectId(value.source_main_subject) && typeof value.source_topic === "string" && value.source_topic.trim() === value.source_topic && value.source_topic.length >= 1 && value.source_topic.length <= 120 && !/[<>\x00-\x1f\x7f]/u.test(value.source_topic)
+    ? Object.freeze({ mainSubject: value.source_main_subject, topic: value.source_topic })
+    : undefined;
+  if (sourceClassification === undefined) return null;
   const question = parseQuestion(task);
   if (question === null) return null;
   const evidenceAnchorIds = point.evidenceAnchors.flatMap((anchor) => {
@@ -92,16 +98,16 @@ function parseCandidate(value) {
   const selectedMedia = record(point.mediaSelection) && text(point.mediaSelection.assetId) && text(point.mediaSelection.kind) && text(point.mediaSelection.url) && !point.mediaSelection.url.startsWith("/assets/fallback-media/") && text(point.mediaSelection.attribution)
     ? Object.freeze({ assetId: point.mediaSelection.assetId, kind: point.mediaSelection.kind, url: point.mediaSelection.url, attribution: point.mediaSelection.attribution })
     : null;
-  return Object.freeze({ knowledgeId: value.knowledge_id, sourceId: value.source_id, questionId: question.id, viewCount: value.view_count, lastAnswerCorrect: value.last_answer_correct === null ? null : value.last_answer_correct === 1, scheduledDays: value.scheduled_days, dueAt: value.due_at, studiedAt: value.studied_at, preference: value.preference, title: value.source_title, summary: point.summary, sourceUrl: point.attribution.sourceUrl, evidenceAnchorIds: Object.freeze(evidenceAnchorIds), classification, classificationRevision, question, media: storedMedia ?? selectedMedia });
+  return Object.freeze({ knowledgeId: value.knowledge_id, sourceId: value.source_id, sourceRevision: value.source_revision, questionId: question.id, viewCount: value.view_count, lastAnswerCorrect: value.last_answer_correct === null ? null : value.last_answer_correct === 1, scheduledDays: value.scheduled_days, dueAt: value.due_at, studiedAt: value.studied_at, preference: value.preference, title: value.source_title, summary: point.summary, sourceUrl: point.attribution.sourceUrl, evidenceAnchorIds: Object.freeze(evidenceAnchorIds), sourceClassification, sourceClassificationRevision, question, media: storedMedia ?? selectedMedia });
 }
 
 /** @param {LearnerCandidate} candidate @returns {Record<string, unknown>} */
 function publicCandidate(candidate) {
-  return { knowledgeId: candidate.knowledgeId, sourceId: candidate.sourceId, questionId: candidate.questionId, title: candidate.title, summary: candidate.summary, sourceUrl: candidate.sourceUrl, evidenceAnchorIds: candidate.evidenceAnchorIds, media: candidate.media, questionLocked: candidate.studiedAt === null, classification: candidate.classification, classificationRevision: candidate.classificationRevision };
+  return { knowledgeId: candidate.knowledgeId, sourceId: candidate.sourceId, sourceRevision: candidate.sourceRevision, questionId: candidate.questionId, title: candidate.title, summary: candidate.summary, sourceUrl: candidate.sourceUrl, evidenceAnchorIds: candidate.evidenceAnchorIds, media: candidate.media, questionLocked: candidate.studiedAt === null, sourceClassification: candidate.sourceClassification, sourceClassificationRevision: candidate.sourceClassificationRevision };
 }
 /** @param {LearnerCandidate} candidate @returns {Record<string, unknown>} */
 function publicQuestion(candidate) {
-  return { questionId: candidate.questionId, knowledgeId: candidate.knowledgeId, title: candidate.title, prompt: candidate.question.prompt, kind: candidate.question.kind, choices: candidate.question.choices, blanks: candidate.question.blanks?.map((blank) => ({ id: blank.id })) ?? null, sourceAnchorIds: candidate.question.sourceAnchorIds, revision: candidate.question.revision };
+  return { questionId: candidate.questionId, knowledgeId: candidate.knowledgeId, title: candidate.title, prompt: candidate.question.prompt, kind: candidate.question.kind, choices: candidate.question.choices, blanks: candidate.question.blanks?.map((blank) => ({ id: blank.id })) ?? null, pairedVariants: candidate.question.pairedVariants?.map((variant) => ({ id: variant.id, kind: variant.kind, prompt: variant.prompt, choices: variant.choices, blanks: variant.blanks?.map((blank) => ({ id: blank.id })) ?? null })) ?? null, sourceAnchorIds: candidate.question.sourceAnchorIds, revision: candidate.question.revision };
 }
 
 /** @param {PublicQuestion} question @returns {string | null} */
@@ -112,7 +118,7 @@ function correctAnswer(question) {
   return labels.length === question.correctChoiceIds.length && labels.every(text) ? labels.join(", ") : null;
 }
 
-/** @param {{ readonly database: D1DatabasePort, readonly now: () => string, readonly random?: () => number, readonly logger: (entry: LearnerBatchLog) => void, readonly semanticGrader?: (command: { readonly prompt: string, readonly answers: readonly { readonly response: string, readonly acceptedAnswers: readonly string[] }[] }) => Promise<Result<readonly boolean[]>>, readonly bucket?: MediaBucket | null, readonly fallbackPack?: readonly { readonly id: string, readonly path: string, readonly alt: string, readonly creator: string, readonly sourceUrl: string, readonly licence: string, readonly attribution: string }[] }} dependencies */
+/** @param {{ readonly database: D1DatabasePort, readonly now: () => string, readonly random?: () => number, readonly logger: (entry: LearnerBatchLog) => void, readonly semanticGrader?: (command: { readonly prompt: string, readonly answers: readonly { readonly id: string, readonly response: string, readonly canonicalAnswers: readonly string[] }[] }) => Promise<Result<readonly boolean[]>>, readonly bucket?: MediaBucket | null, readonly fallbackPack?: readonly { readonly id: string, readonly path: string, readonly alt: string, readonly creator: string, readonly sourceUrl: string, readonly licence: string, readonly attribution: string }[] }} dependencies */
 export function createLearningBatchService(dependencies) {
   if (typeof dependencies?.database?.prepare !== "function" || typeof dependencies.database.batch !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || (dependencies.semanticGrader !== undefined && typeof dependencies.semanticGrader !== "function") || (dependencies.bucket !== undefined && dependencies.bucket !== null && typeof dependencies.bucket.delete !== "function")) throw new TypeError("Learning batch dependencies are invalid.");
   const random = dependencies.random ?? Math.random;
@@ -123,7 +129,7 @@ export function createLearningBatchService(dependencies) {
   async function candidates(ownerId, now) {
     if (!text(ownerId) || !iso(now)) return { ok: false, error: { kind: "LearningBatchCommandInvalid" } };
     try {
-      const result = await database.prepare("SELECT kp.point_json, kc.classification_json, kc.revision AS classification_revision, kp.knowledge_id, kp.source_id, t.task_json, s.title AS source_title, s.canonical_url, COALESCE(ls.view_count, 0) AS view_count, ls.last_answer_correct, COALESCE(ls.scheduled_days, 0) AS scheduled_days, ls.due_at, ls.studied_at, COALESCE(ls.preference, pf.preference, 0) AS preference, ma.asset_id, ma.kind AS media_kind, ma.attribution AS media_attribution FROM extraction_knowledge_points kp JOIN knowledge_workflow_quizzes q ON q.owner_id = kp.owner_id AND q.knowledge_id = kp.knowledge_id AND q.run_id = kp.run_id AND q.source_id = kp.source_id AND q.source_revision = kp.source_revision AND q.status = 'published' JOIN learning_generation_tasks t ON t.owner_id = q.owner_id AND t.item_id = q.knowledge_id AND t.status = 'published' JOIN library_sources s ON s.owner_id = kp.owner_id AND s.source_id = kp.source_id AND s.state = 'active' LEFT JOIN knowledge_classifications kc ON kc.owner_id = kp.owner_id AND kc.knowledge_id = kp.knowledge_id LEFT JOIN learner_knowledge_state ls ON ls.owner_id = kp.owner_id AND ls.knowledge_id = kp.knowledge_id LEFT JOIN learner_preference_feedback pf ON pf.owner_id = kp.owner_id AND pf.knowledge_id = kp.knowledge_id LEFT JOIN knowledge_workflow_media_assets ma ON ma.owner_id = kp.owner_id AND ma.knowledge_id = kp.knowledge_id AND ma.revoked_at IS NULL WHERE kp.owner_id = ? AND kp.source_revision = s.revision AND json_type(kp.point_json, '$.summary') = 'text' AND length(trim(json_extract(kp.point_json, '$.summary'), char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279))) > 0 AND EXISTS (SELECT 1 FROM knowledge_workflow_runs r WHERE r.owner_id = kp.owner_id AND r.run_id = kp.run_id AND r.source_id = kp.source_id AND r.source_revision = kp.source_revision AND r.state = 'completed') ORDER BY kp.created_at ASC, kp.knowledge_id ASC LIMIT ?").bind(ownerId, MAX_CANDIDATES).all();
+      const result = await database.prepare("SELECT kp.point_json, kc.classification_json, kc.revision AS classification_revision, kp.knowledge_id, kp.source_id, s.revision AS source_revision, sc.main_subject AS source_main_subject, sc.topic AS source_topic, sc.classification_revision AS source_classification_revision, t.task_json, s.title AS source_title, s.canonical_url, COALESCE(ls.view_count, 0) AS view_count, ls.last_answer_correct, COALESCE(ls.scheduled_days, 0) AS scheduled_days, ls.due_at, ls.studied_at, COALESCE(ls.preference, pf.preference, 0) AS preference, ma.asset_id, ma.kind AS media_kind, ma.attribution AS media_attribution FROM extraction_knowledge_points kp JOIN knowledge_workflow_quizzes q ON q.owner_id = kp.owner_id AND q.knowledge_id = kp.knowledge_id AND q.run_id = kp.run_id AND q.source_id = kp.source_id AND q.source_revision = kp.source_revision AND q.status = 'published' JOIN learning_generation_tasks t ON t.owner_id = q.owner_id AND t.item_id = q.knowledge_id AND t.status = 'published' JOIN library_sources s ON s.owner_id = kp.owner_id AND s.source_id = kp.source_id AND s.state = 'active' LEFT JOIN knowledge_classifications kc ON kc.owner_id = kp.owner_id AND kc.knowledge_id = kp.knowledge_id LEFT JOIN source_classifications sc ON sc.owner_id = kp.owner_id AND sc.source_id = kp.source_id LEFT JOIN learner_knowledge_state ls ON ls.owner_id = kp.owner_id AND ls.knowledge_id = kp.knowledge_id LEFT JOIN learner_preference_feedback pf ON pf.owner_id = kp.owner_id AND pf.knowledge_id = kp.knowledge_id LEFT JOIN knowledge_workflow_media_assets ma ON ma.owner_id = kp.owner_id AND ma.knowledge_id = kp.knowledge_id AND ma.revoked_at IS NULL WHERE kp.owner_id = ? AND kp.source_revision = s.revision AND json_type(kp.point_json, '$.summary') = 'text' AND length(trim(json_extract(kp.point_json, '$.summary'), char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279))) > 0 AND EXISTS (SELECT 1 FROM knowledge_workflow_runs r WHERE r.owner_id = kp.owner_id AND r.run_id = kp.run_id AND r.source_id = kp.source_id AND r.source_revision = kp.source_revision AND r.state = 'completed') ORDER BY kp.created_at ASC, kp.knowledge_id ASC LIMIT ?").bind(ownerId, MAX_CANDIDATES).all();
       if (!result.success || !Array.isArray(result.results) || result.results.length > MAX_CANDIDATES) return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
       const parsed = [];
       for (const row of result.results) {
@@ -293,7 +299,7 @@ export function createLearningBatchService(dependencies) {
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
   async function answerReview(command) {
-    if (!record(command) || !text(command.ownerId) || !text(command.batchId) || !text(command.questionId) || !text(command.idempotencyKey) || !Array.isArray(command.selectedChoiceIds) || command.selectedChoiceIds.some((id) => !text(id)) || (command.answerText !== undefined && command.answerText !== null && !text(command.answerText)) || (command.blankAnswers !== undefined && command.blankAnswers !== null && (!Array.isArray(command.blankAnswers) || command.blankAnswers.some((answer) => !record(answer) || !text(answer.id) || !text(answer.text))))) {
+    if (!record(command) || !text(command.ownerId) || !text(command.batchId) || !text(command.questionId) || !text(command.idempotencyKey) || !Array.isArray(command.selectedChoiceIds) || command.selectedChoiceIds.some((id) => !text(id)) || (command.answerText !== undefined && command.answerText !== null && !text(command.answerText)) || (command.blankAnswers !== undefined && command.blankAnswers !== null && (!Array.isArray(command.blankAnswers) || command.blankAnswers.some((answer) => !record(answer) || !text(answer.id) || !text(answer.text)))) || (command.pairedBlankAnswers !== undefined && command.pairedBlankAnswers !== null && (!Array.isArray(command.pairedBlankAnswers) || command.pairedBlankAnswers.some((answer) => !record(answer) || !text(answer.id) || !text(answer.text))))) {
       dependencies.logger({ event: "learning-review-answer-failure", failureKind: "ReviewAnswerNotAllowed" });
       return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
     }
@@ -312,6 +318,49 @@ export function createLearningBatchService(dependencies) {
     if (!all.ok) return fail(all.error.kind);
     const candidate = all.value.find((item) => item.questionId === command.questionId);
     if (candidate === undefined || candidate.studiedAt === null) return fail("KnowledgePairNotFound");
+    if (candidate.question.pairedVariants !== null) {
+      if (candidate.question.pairedVariants.length !== 2 || command.questionRevision !== candidate.question.revision || command.selectedChoiceIds.length === 0 || command.pairedBlankAnswers === undefined || command.pairedBlankAnswers === null || command.answerText !== undefined && command.answerText !== null || command.blankAnswers !== undefined && command.blankAnswers !== null) return fail("ReviewAnswerNotAllowed");
+      const choiceVariant = candidate.question.pairedVariants.find((variant) => variant.kind === "single-choice" || variant.kind === "multiple-choice");
+      const blankVariant = candidate.question.pairedVariants.find((variant) => variant.kind === "fill-blank");
+      if (choiceVariant === undefined || blankVariant === undefined || choiceVariant.choices === null || choiceVariant.correctChoiceIds === null || blankVariant.blanks === null || command.selectedChoiceIds.some((id) => !choiceVariant.choices?.some((choice) => choice.id === id)) || new Set(command.selectedChoiceIds).size !== command.selectedChoiceIds.length || choiceVariant.kind === "single-choice" && command.selectedChoiceIds.length !== 1) return fail("ReviewAnswerNotAllowed");
+      const choiceCorrect = command.selectedChoiceIds.length === choiceVariant.correctChoiceIds.length && command.selectedChoiceIds.every((id) => choiceVariant.correctChoiceIds?.includes(id));
+      const fillBlanks = blankVariant.blanks;
+      if (fillBlanks.length === 0 || command.pairedBlankAnswers.length !== fillBlanks.length || command.pairedBlankAnswers.some((answer, index) => answer.id !== fillBlanks[index]?.id) || new Set(command.pairedBlankAnswers.map((answer) => answer.id)).size !== fillBlanks.length) return fail("ReviewAnswerNotAllowed");
+      const pairedBlankAnswers = /** @type {readonly {readonly id:string,readonly text:string}[]} */ (command.pairedBlankAnswers);
+      /** @type {(value:string)=>string} */
+      const normalizeAnswer = (value) => value.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ");
+      const blankCorrect = fillBlanks.map((blank, index) => blank.acceptedAnswers.some((answer) => normalizeAnswer(answer) === normalizeAnswer(pairedBlankAnswers[index].text)));
+      if (blankCorrect.some((correct) => !correct)) {
+        if (dependencies.semanticGrader === undefined) return fail("ReviewGradingUnavailable");
+        let judged;
+        const unresolved = fillBlanks.flatMap((blank, index) => blankCorrect[index] ? [] : [{ id: blank.id, response: pairedBlankAnswers[index].text, canonicalAnswers: blank.acceptedAnswers }]);
+        try { judged = await dependencies.semanticGrader({ prompt: blankVariant.prompt, answers: unresolved }); } catch (error) { return fail("ReviewGradingUnavailable"); }
+        if (!judged.ok || judged.value.length !== unresolved.length || judged.value.some((value) => typeof value !== "boolean")) return fail("ReviewGradingUnavailable");
+        let gradedIndex = 0;
+        for (let index = 0; index < blankCorrect.length; index += 1) if (!blankCorrect[index]) blankCorrect[index] = judged.value[gradedIndex++];
+      }
+      const fillCorrect = blankCorrect.every(Boolean);
+      const correct = choiceCorrect && fillCorrect;
+      const now = dependencies.now();
+      if (!iso(now)) return fail("LearningBatchClockInvalid");
+      const nextDays = correct ? Math.min(365, Math.max(1, candidate.scheduledDays === 0 ? 1 : candidate.scheduledDays * 2)) : 1;
+      const dueAt = new Date(Date.parse(now) + nextDays * 86_400_000).toISOString();
+      const correctChoiceLabels = choiceVariant.correctChoiceIds.map((id) => choiceVariant.choices?.find((choice) => choice.id === id)?.label);
+      if (correctChoiceLabels.some((label) => !text(label))) return fail("LearningPairInvalid");
+      const feedback = { explanation: `${choiceVariant.explanation} ${blankVariant.explanation}`, correctAnswer: `${correctChoiceLabels.join(", ")}; ${fillBlanks.map((blank) => blank.acceptedAnswers[0]).join(", ")}`, components: [{ id: choiceVariant.id, correct: choiceCorrect, correctAnswer: correctChoiceLabels.join(", ") }, ...fillBlanks.map((blank, index) => ({ id: blank.id, correct: blankCorrect[index], correctAnswer: blank.acceptedAnswers[0] }))] };
+      const answer = { ownerId: command.ownerId, batchId: command.batchId, questionId: command.questionId, correct, score: correct ? 1 : 0, nextDueAt: dueAt, feedback, completed: false };
+      const statements = [
+        database.prepare("INSERT INTO learner_review_answers (owner_id, batch_id, question_id, selected_choice_ids_json, correct, score, answered_at, knowledge_id) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? AND status = 'open')").bind(command.ownerId, command.batchId, command.questionId, JSON.stringify(command.selectedChoiceIds), correct ? 1 : 0, correct ? 1 : 0, now, candidate.knowledgeId, command.ownerId, command.batchId),
+        database.prepare("UPDATE learner_knowledge_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ?, review_count = review_count + 1, updated_at = ? WHERE owner_id = ? AND knowledge_id = ? AND studied_at IS NOT NULL AND EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(correct ? 1 : 0, nextDays, dueAt, now, command.ownerId, candidate.knowledgeId, command.ownerId, command.batchId, command.questionId),
+        database.prepare("UPDATE learner_review_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open' AND (SELECT COUNT(*) FROM learner_review_answers WHERE owner_id = ? AND batch_id = ?) = json_array_length(question_ids_json)").bind(now, command.ownerId, command.batchId, command.ownerId, command.batchId),
+        database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) SELECT ?, ?, 'review-answer', json_set(?, '$.completed', CASE WHEN (SELECT status FROM learner_review_batches WHERE owner_id = ? AND batch_id = ?) = 'completed' THEN json('true') ELSE json('false') END), ? WHERE EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(command.ownerId, command.idempotencyKey, JSON.stringify(answer), command.ownerId, command.batchId, now, command.ownerId, command.batchId, command.questionId),
+      ];
+      const written = await database.batch(statements);
+      if (written.length !== statements.length || written.some((entry) => !entry.success) || !changed(written[0]) || !changed(written[3])) return fail("LearningBatchPersistenceFailed");
+      const result = Object.freeze({ ...answer, completed: changed(written[2]) });
+      dependencies.logger({ event: "learning-review-answer-success", ownerId: command.ownerId, batchId: command.batchId });
+      return { ok: true, value: result };
+    }
     if (candidate.question.kind === "fill-blank" ? command.selectedChoiceIds.length !== 0 || (candidate.question.blanks === null ? command.blankAnswers !== undefined && command.blankAnswers !== null : command.answerText !== undefined && command.answerText !== null) : command.blankAnswers !== undefined && command.blankAnswers !== null || command.answerText !== undefined && command.answerText !== null) return fail("ReviewAnswerNotAllowed");
     let score;
     /** @type {{ id: string, correct: boolean, correctAnswer: string }[]} */
@@ -325,10 +374,10 @@ export function createLearningBatchService(dependencies) {
         const normalized = (value) => value.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ");
         const exact = blanks.map((blank, index) => blank.acceptedAnswers.some((answer) => normalized(answer) === normalized(submitted[index].text)));
         if (exact.some((value) => !value)) {
-          if (dependencies.semanticGrader === undefined) return fail("ReviewGradePending");
+          if (dependencies.semanticGrader === undefined) return fail("ReviewGradingUnavailable");
           let judged;
-          try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: blanks.filter((_, index) => !exact[index]).map((blank) => ({ response: submitted[blanks.indexOf(blank)].text, acceptedAnswers: blank.acceptedAnswers })) }); } catch (error) { return fail("ReviewGradePending"); }
-          if (!judged.ok || judged.value.length !== exact.filter((value) => !value).length || judged.value.some((value) => typeof value !== "boolean")) return fail("ReviewGradePending");
+          try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: blanks.filter((_, index) => !exact[index]).map((blank) => ({ id: blank.id, response: submitted[blanks.indexOf(blank)].text, canonicalAnswers: blank.acceptedAnswers })) }); } catch (error) { return fail("ReviewGradingUnavailable"); }
+          if (!judged.ok || judged.value.length !== exact.filter((value) => !value).length || judged.value.some((value) => typeof value !== "boolean")) return fail("ReviewGradingUnavailable");
           let cursor = 0;
           for (let index = 0; index < exact.length; index += 1) if (!exact[index]) exact[index] = judged.value[cursor++];
         }
@@ -341,10 +390,10 @@ export function createLearningBatchService(dependencies) {
       const normalized = answerText.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ");
       const exact = normalized !== "" && acceptedAnswers.some((answer) => answer.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ") === normalized);
       if (!exact) {
-        if (dependencies.semanticGrader === undefined) return fail("ReviewGradePending");
+        if (dependencies.semanticGrader === undefined) return fail("ReviewGradingUnavailable");
         let judged;
-        try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: [{ response: answerText, acceptedAnswers }] }); } catch (error) { return fail("ReviewGradePending"); }
-        if (!judged.ok || judged.value.length !== 1 || typeof judged.value[0] !== "boolean") return fail("ReviewGradePending");
+        try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: [{ id: /** @type {string} */ (candidate.question.blankId), response: answerText, canonicalAnswers: acceptedAnswers }] }); } catch (error) { return fail("ReviewGradingUnavailable"); }
+        if (!judged.ok || judged.value.length !== 1 || typeof judged.value[0] !== "boolean") return fail("ReviewGradingUnavailable");
         score = judged.value[0] ? 1 : 0;
       } else score = 1;
       components.push({ id: /** @type {string} */ (candidate.question.blankId), correct: score === 1, correctAnswer: acceptedAnswers[0] });
@@ -356,7 +405,7 @@ export function createLearningBatchService(dependencies) {
       if (expected === null || choices === null || selected.length === 0 || new Set(selected).size !== selected.length || selected.some((id) => !choices.some((choice) => choice.id === id)) || (candidate.question.kind === "single-choice" && selected.length !== 1)) return fail("ReviewAnswerNotAllowed");
       const hits = selected.filter((id) => expected.includes(id)).length;
       const wrong = selected.length - hits;
-      score = candidate.question.kind === "multiple-choice" ? Math.max(0, (hits - wrong) / expected.length) : hits === 1 ? 1 : 0;
+      score = candidate.question.kind === "multiple-choice" ? hits === expected.length && wrong === 0 ? 1 : 0 : hits === 1 ? 1 : 0;
       choices.forEach((choice) => components.push({ id: choice.id, correct: expected.includes(choice.id) === selected.includes(choice.id), correctAnswer: expected.includes(choice.id) ? choice.label : "" }));
     }
     const now = dependencies.now();

@@ -58,7 +58,7 @@ class Database {
 }
 
 function rows(count = 5) {
-  return Array.from({ length: count }, (_, index) => ({ point_json: point(index), knowledge_id: `knowledge-${index}`, source_id: "source-a", task_json: task(index), source_title: "Music theory", canonical_url: "https://example.test/lesson", view_count: 0, last_answer_correct: null, scheduled_days: 0, due_at: null, studied_at: null, preference: 0, asset_id: null, media_kind: null, media_attribution: null }));
+  return Array.from({ length: count }, (_, index) => ({ point_json: point(index), knowledge_id: `knowledge-${index}`, source_id: "source-a", source_revision: 1, source_main_subject: null, source_topic: null, source_classification_revision: null, task_json: task(index), source_title: "Music theory", canonical_url: "https://example.test/lesson", view_count: 0, last_answer_correct: null, scheduled_days: 0, due_at: null, studied_at: null, preference: 0, asset_id: null, media_kind: null, media_attribution: null }));
 }
 
 Deno.test("learner projection suppresses legacy decorative fallback selections", async () => {
@@ -204,7 +204,7 @@ Deno.test("unavailable semantic grading leaves an uncertain fill response pendin
   const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", semanticGrader: async () => ({ ok: false, error: { kind: "KnowledgeModelUnavailable" } }), logger: () => {} });
   const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: [], answerText: "home note", idempotencyKey: "answer-1" });
   assertEquals(result.ok, false);
-  if (!result.ok) assertEquals(result.error.kind, "ReviewGradePending");
+  if (!result.ok) assertEquals(result.error.kind, "ReviewGradingUnavailable");
   assertEquals(database.queries.some((query) => query.includes("INSERT INTO learner_review_answers")), false);
 });
 
@@ -224,7 +224,7 @@ Deno.test("legacy single-blank answers and semantic equivalents remain gradeable
   assertEquals(answer.nextDueAt, "2026-08-23T00:00:00.000Z");
 });
 
-Deno.test("multi-select partial credit penalizes wrong selections without extending the interval", async () => {
+Deno.test("multi-select requires exact set equality and wrong selections do not extend the interval", async () => {
   const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z", scheduled_days: 2 }));
   due[0].task_json = JSON.stringify({ id: "task-0", kind: "multiple-choice", prompt: "Which relationships hold?", explanation: "The source supports A and B.", sourceAnchorIds: ["anchor-0"], choices: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }], correctChoiceIds: ["a", "b"], acceptedAnswers: null, blankId: null, revision: 1 });
   const database = new Database(due);
@@ -235,7 +235,7 @@ Deno.test("multi-select partial credit penalizes wrong selections without extend
   assertEquals(result.ok, true);
   if (!result.ok) return;
   const answer = /** @type {{ readonly score: number, readonly correct: boolean, readonly nextDueAt: string }} */ (result.value);
-  assertEquals(answer.score, 0.5);
+  assertEquals(answer.score, 0);
   assertEquals(answer.correct, false);
   assertEquals(answer.nextDueAt, "2026-08-20T00:00:00.000Z");
 });

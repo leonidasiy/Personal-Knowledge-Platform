@@ -20,7 +20,7 @@ function rights() {
 
 Deno.test("executor waits for rights before robots and runs extraction then quiz sequentially", async () => {
   /** @type {string[]} */ const calls = [];
-  const executor = createKnowledgeWorkflowExecutor({
+  const executor = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: current, nextState }) => { calls.push(`transition:${nextState}`); return { ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }; },
     robots: { check: async () => { calls.push("robots"); return { ok: true, value: {} }; } },
     extraction: { run: async () => { calls.push("extraction"); return { ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 1, pagesProcessed: 2 } }; } },
@@ -41,6 +41,7 @@ Deno.test("executor waits for rights before robots and runs extraction then quiz
 Deno.test("executor preserves pause and timeout decisions and rejects an empty knowledge set", async () => {
   /** @type {import("../src/features/knowledge-workflows/executor.js").WorkflowExecutorDependencies} */
   const base = {
+    classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: current, nextState }) => ({ ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }),
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => ({ ok: true, value: { state: "paused", scratchpad: {}, knowledgePointCount: 0, pagesProcessed: 0 } }) },
@@ -59,7 +60,7 @@ Deno.test("executor preserves pause and timeout decisions and rejects an empty k
 });
 
 Deno.test("executor turns a hard browser access block into an upload-required outcome", async () => {
-  const executor = createKnowledgeWorkflowExecutor({
+  const executor = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: current, nextState }) => ({ ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }),
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => ({ ok: false, error: { kind: "ExtractionAcquisitionFailed", causeKind: "KnowledgePageBotAccessDenied" } }) },
@@ -76,7 +77,7 @@ Deno.test("executor turns a hard browser access block into an upload-required ou
 });
 
 Deno.test("executor preserves an invalid extraction plan for the retryable workflow status", async () => {
-  const executor = createKnowledgeWorkflowExecutor({
+  const executor = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: current, nextState }) => ({ ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }),
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => ({ ok: false, error: { kind: "ExtractionPlanInvalid" } }) },
@@ -93,7 +94,7 @@ Deno.test("executor preserves an invalid extraction plan for the retryable workf
 });
 
 Deno.test("executor preserves the concrete robots failure kind", async () => {
-  const executor = createKnowledgeWorkflowExecutor({
+  const executor = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: current, nextState }) => ({ ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }),
     robots: { check: async () => ({ ok: false, error: { kind: "RobotsFetchUnavailable", causeKind: "KnowledgeRobotsNativeResponseRejected", diagnosticToken: "native-http-503" } }) },
     extraction: { run: async () => { throw new Error("Robots failure must stop before extraction."); } },
@@ -113,7 +114,7 @@ Deno.test("executor preserves the concrete robots failure kind", async () => {
 Deno.test("quiz-stage retry retains cumulative extraction counts after an earlier discard", async () => {
   const current={...run("per-point-quiz-loop"),counts:{pages:2,knowledgePoints:2,acceptedQuizzes:0,pendingQuizzes:0}};
   const point={id:"remaining",sourceId:"source-a",sourceRevision:1,summary:"Specific",normalizedHash:"hash-a",evidenceAnchors:[{url:"https://example.test/learn",selector:"#a"}],coverageGoalIds:[],mediaCandidates:[],attribution:{sourceUrl:"https://example.test/learn"},extractionVersion:"v1"};
-  const executor=createKnowledgeWorkflowExecutor({
+  const executor=createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition:async({run:active,nextState,counts})=>{assert(counts!==undefined && counts.knowledgePoints>=active.counts.knowledgePoints,"Counts cannot decrease after discard");return {ok:true,value:{...active,state:nextState,counts:counts??active.counts}};},
     robots:{check:async()=>{throw new Error("MustNotRecheckRobots");}},extraction:{run:async()=>{throw new Error("MustNotReextract");}},
     knowledge:{list:async()=>({ok:true,value:[point]})},quiz:{run:async()=>({ok:true,value:{dispositions:[{knowledgeId:point.id,status:"accepted",publicationStatus:"published",attempts:1,failureKind:null,restrictedUntil:null}]}})},logger:()=>{},
@@ -127,7 +128,7 @@ Deno.test("quiz-stage retry retains cumulative extraction counts after an earlie
 
 Deno.test("executor treats a completed run replay as an idempotent no-op", async () => {
   let quizCalls = 0;
-  const executor = createKnowledgeWorkflowExecutor({
+  const executor = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async () => { throw new Error("Completed replay must not transition."); },
     robots: { check: async () => { throw new Error("Completed replay must not check robots."); } },
     extraction: { run: async () => { throw new Error("Completed replay must not extract."); } },
@@ -153,6 +154,7 @@ Deno.test("5 executor converts every injected operation rejection into its typed
   ];
   for (const testCase of cases) {
     const executor = createKnowledgeWorkflowExecutor(/** @type {import("../src/features/knowledge-workflows/executor.js").WorkflowExecutorDependencies} */ ({
+      classification: { ensure: async () => ({ ok: true, value: null }) },
       transition: async ({ run: current, nextState }) => ({ ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }),
       robots: { check: async () => ({ ok: true, value: {} }) },
       extraction: { run: async () => ({ ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 1, pagesProcessed: 1 } }) },
@@ -167,6 +169,7 @@ Deno.test("5 executor converts every injected operation rejection into its typed
   }
   /** @type {import("../src/features/knowledge-workflows/executor.js").WorkflowExecutorDependencies & { readonly cleanup: { readonly close: () => Promise<never> } }} */
   const cleanupDependencies = {
+    classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: current, nextState }) => ({ ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }),
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => ({ ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 1, pagesProcessed: 1 } }) },
@@ -189,7 +192,7 @@ Deno.test("6 post-persistence publication failure remains explicitly resumable a
   const transitions = /** @type {string[]} */ ([]);
   const publications = /** @type {unknown[]} */ ([]);
   const persisted = { id: "knowledge-a", sourceId: "source-a", sourceRevision: 1, summary: "Persisted before quiz publication", normalizedHash: "hash-a", evidenceAnchors: [{ url: "https://example.test/learn", selector: "main" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://example.test/learn" }, extractionVersion: "v1" };
-  const executor = createKnowledgeWorkflowExecutor({
+  const executor = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: current, nextState }) => { transitions.push(nextState); return { ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }; },
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => ({ ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 1, pagesProcessed: 1 } }) },
@@ -234,6 +237,7 @@ Deno.test("7 composed authorized Browser extraction preserves identity and exact
   let cleanupCalls = 0;
   /** @type {import("../src/features/knowledge-workflows/executor.js").WorkflowExecutorDependencies & { readonly cleanup: { readonly close: () => Promise<{ readonly ok: true, readonly value: null }> } }} */
   const executorDependencies = {
+    classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: active, nextState, counts }) => ({ ok: true, value: current = { ...active, state: nextState, revision: active.revision + 1, counts: counts ?? active.counts } }),
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => extraction.run({ ownerId: current.ownerId, runId: current.runId, sourceId: current.sourceId, sourceRevision: current.sourceRevision, rootUrl: evidenceUrl, startedAtMs: 0, deadlineAtMs: 100 }) },
@@ -259,7 +263,7 @@ Deno.test("7 composed authorized Browser extraction preserves identity and exact
 Deno.test("8 composition failures and repository results cannot cross owner, source, revision, or run boundaries", async () => {
   const unauthorized = { id: "knowledge-x", ownerId: "owner-b", runId: "run-b", sourceId: "source-b", sourceRevision: 2, summary: "Unauthorized", normalizedHash: "hash-x", evidenceAnchors: [{ url: "https://other.example/", selector: "main" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://other.example/" }, extractionVersion: "v1" };
   let quizCalls = 0;
-  const executor = createKnowledgeWorkflowExecutor({
+  const executor = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: active, nextState }) => ({ ok: true, value: { ...active, state: nextState, revision: active.revision + 1 } }),
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => ({ ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 1, pagesProcessed: 1 } }) },
@@ -273,7 +277,7 @@ Deno.test("8 composition failures and repository results cannot cross owner, sou
 
   for (const [kind, stage] of [["KnowledgeModelUnavailable", "extraction-loop"], ["MediaDependencyRejected", "extraction-loop"], ["KnowledgeRepositoryRejected", "per-point-quiz-loop"], ["QuizRepositoryRejected", "per-point-quiz-loop"]]) {
     let quizDispatches = 0;
-    const failed = createKnowledgeWorkflowExecutor({
+    const failed = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
       transition: async ({ run: active, nextState }) => ({ ok: true, value: { ...active, state: nextState, revision: active.revision + 1 } }), robots: { check: async () => ({ ok: true, value: {} }) },
       extraction: { run: async () => stage === "extraction-loop" ? Promise.reject({ kind }) : ({ ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 1, pagesProcessed: 1 } }) },
       knowledge: { list: async () => stage === "per-point-quiz-loop" && kind === "KnowledgeRepositoryRejected" ? Promise.reject({ kind }) : ({ ok: true, value: [{ ...unauthorized, ownerId: "owner-a", runId: "run-a", sourceId: "source-a", sourceRevision: 1 }] }) },
@@ -287,7 +291,7 @@ Deno.test("8 composition failures and repository results cannot cross owner, sou
 
 Deno.test("9 unit 2 preserves fail-closed rights, deterministic quiz publication, and untouched Browser, logging, and media seams", async () => {
   let sideEffects = 0;
-  const executor = createKnowledgeWorkflowExecutor({
+  const executor = createKnowledgeWorkflowExecutor({ classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async () => { sideEffects += 1; return { ok: false, error: { kind: "unexpected" } }; }, robots: { check: async () => { sideEffects += 1; return { ok: true, value: {} }; } }, extraction: { run: async () => { sideEffects += 1; return { ok: false, error: { kind: "unexpected" } }; } }, knowledge: { list: async () => { sideEffects += 1; return { ok: true, value: [] }; } }, quiz: { run: async () => { sideEffects += 1; return { ok: true, value: { dispositions: [] } }; } }, logger: () => {},
   });
   const wrongOwnerRights = { ...rights(), ownerId: "owner-b" };
@@ -303,4 +307,21 @@ Deno.test("9 unit 2 preserves fail-closed rights, deterministic quiz publication
   await actor.run({ ownerId: "owner-a", runId: "run-a", points: [quizPoint] });
   assertEquals(statuses.join(","), "published,published");
   assert(!JSON.stringify(statuses).includes("private"), "Regression output must remain content-free.");
+});
+
+Deno.test("executor classifies the complete consolidated source exactly once before quiz publication", async () => {
+  /** @type {string[]} */ const calls = [];
+  const point = { id: "k-a", sourceId: "source-a", sourceRevision: 1, summary: "A cadence resolves.", normalizedHash: "h-a", evidenceAnchors: [{ url: "https://example.test/learn", selector: "main" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://example.test/learn" }, extractionVersion: "v1" };
+  const executor = createKnowledgeWorkflowExecutor({
+    transition: async ({ run: active, nextState }) => ({ ok: true, value: { ...active, state: nextState } }),
+    robots: { check: async () => ({ ok: true, value: {} }) },
+    extraction: { run: async () => ({ ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 1, pagesProcessed: 2 } }) },
+    knowledge: { list: async () => ({ ok: true, value: [point] }) },
+    classification: { ensure: async ({ points }) => { calls.push(`classify:${points.length}`); return { ok: true, value: null }; } },
+    quiz: { run: async ({ points }) => { calls.push(`quiz:${points.length}`); return { ok: true, value: { dispositions: [{ knowledgeId: "k-a", status: "accepted", publicationStatus: "published", attempts: 1, failureKind: null, restrictedUntil: null }] } }; } },
+    logger: () => {},
+  });
+  const result = await executor.run({ run: run("extraction-finalized"), rootUrl: "https://example.test/learn" });
+  assertEquals(result.ok, true);
+  assertEquals(calls.join(","), "classify:1,quiz:1");
 });

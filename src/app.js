@@ -682,9 +682,9 @@ async function loadLearnerController() {
     escapeHtml,
     now: () => new Date().toISOString(),
     createId: () => crypto.randomUUID(),
-    onChange: (message) => {
+    onChange: (message, preferredFocusKey = null, fallbackHeadingId = null) => {
       notice = message ?? null;
-      if (message === undefined) render();
+      if (message === undefined) render(preferredFocusKey, fallbackHeadingId);
       else { errorMessage = null; renderMessagesOnly(); }
     },
   });

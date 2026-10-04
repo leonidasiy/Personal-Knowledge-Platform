@@ -1,7 +1,5 @@
 // @ts-check
 
-import { parseClassification } from "../knowledge-subjects/public.js";
-
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
 /**
@@ -86,9 +84,9 @@ import { parseClassification } from "../knowledge-subjects/public.js";
  *   readonly evidenceAnchors: readonly EvidenceAnchor[],
  *   readonly coverageGoalIds: readonly string[],
  *   readonly mediaCandidates: readonly (VisualMediaReference | unknown)[],
- *   readonly classification?: unknown,
  *   readonly attribution: { readonly sourceUrl: string },
- *   readonly extractionVersion: string
+ *   readonly extractionVersion: string,
+ *   readonly classification?: unknown
  * }} KnowledgePoint
  */
 
@@ -238,7 +236,7 @@ function validSimilarity(value) { return isRecord(value) && JSON.stringify(Objec
 /** @param {unknown} value @returns {value is VisualMediaReference} */
 function validVisualMediaReference(value) { return isRecord(value) && JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["visualId"]) && text(value.visualId); }
 /** @param {unknown} value @returns {value is KnowledgeCandidate} */
-function validCandidate(value) { return isRecord(value) && (JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["classification", "coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["classification", "coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "similarity", "summary"])) && text(value.summary) && text(value.normalizedHash) && parseClassification(value.classification).ok && Array.isArray(value.evidenceAnchors) && value.evidenceAnchors.length > 0 && value.evidenceAnchors.every(validAnchor) && Array.isArray(value.coverageGoalIds) && value.coverageGoalIds.every(text) && Array.isArray(value.mediaCandidates) && value.mediaCandidates.length <= 1 && (value.similarity === undefined || validSimilarity(value.similarity)); }
+function validCandidate(value) { return isRecord(value) && (JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "similarity", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["classification", "coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["classification", "coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "similarity", "summary"])) && text(value.summary) && text(value.normalizedHash) && Array.isArray(value.evidenceAnchors) && value.evidenceAnchors.length > 0 && value.evidenceAnchors.every(validAnchor) && Array.isArray(value.coverageGoalIds) && value.coverageGoalIds.every(text) && Array.isArray(value.mediaCandidates) && value.mediaCandidates.length <= 1 && (value.similarity === undefined || validSimilarity(value.similarity)); }
 /** @param {unknown} value @returns {value is PageObservation} */
 function validObservation(value) { return isRecord(value) && publicHttps(value.url) && text(value.title) && nonNegativeInteger(value.byteCount) && nonNegativeInteger(value.redirects) && Array.isArray(value.links) && value.links.every(publicHttps) && timestamp(value.observedAt) && Array.isArray(value.candidates) && value.candidates.every(validCandidate) && (value.notes === undefined || (text(value.notes) && value.notes.length <= 2_000)); }
 
@@ -422,7 +420,7 @@ export function createExtractionRunner(dependencies) {
           if (candidate.similarity?.decision === "ambiguous") return fail({ kind: "KnowledgeDuplicateAmbiguous" }, dependencies, command.runId);
           if (candidate.similarity !== undefined) scratchpad = cloneScratchpad({ ...scratchpad, similarityEvidence: [...scratchpad.similarityEvidence, { candidateHash: candidate.normalizedHash, comparedLocalHash: candidate.similarity.comparedLocalHash, score: candidate.similarity.score, decision: candidate.similarity.decision }] });
           if (candidate.similarity?.decision === "merge") continue;
-          const point = /** @type {KnowledgePoint} */ (freeze({ id: `knowledge:${command.sourceId}:${command.sourceRevision}:${candidate.normalizedHash}`, sourceId: command.sourceId, sourceRevision: command.sourceRevision, summary: candidate.summary, normalizedHash: candidate.normalizedHash, evidenceAnchors: freeze(candidate.evidenceAnchors.map((anchor) => freeze({ ...anchor }))), coverageGoalIds: freeze([...candidate.coverageGoalIds]), mediaCandidates: freeze([...candidate.mediaCandidates]), classification: candidate.classification, attribution: freeze({ sourceUrl: observation.url }), extractionVersion }));
+          const point = /** @type {KnowledgePoint} */ (freeze({ id: `knowledge:${command.sourceId}:${command.sourceRevision}:${candidate.normalizedHash}`, sourceId: command.sourceId, sourceRevision: command.sourceRevision, summary: candidate.summary, normalizedHash: candidate.normalizedHash, evidenceAnchors: freeze(candidate.evidenceAnchors.map((anchor) => freeze({ ...anchor }))), coverageGoalIds: freeze([...candidate.coverageGoalIds]), mediaCandidates: freeze([...candidate.mediaCandidates]), attribution: freeze({ sourceUrl: observation.url }), extractionVersion }));
           let appended;
           try { appended = await dependencies.knowledge.append(point); } catch (error) { const causeKind = isRecord(error) && text(error.kind) ? error.kind : "KnowledgeRepositoryRejected"; return fail({ kind: "KnowledgePersistenceFailed", causeKind }, dependencies, command.runId); }
           if (!appended.ok) { const causeKind = isRecord(appended.error) && text(appended.error.kind) ? appended.error.kind : undefined; return fail({ kind: "KnowledgePersistenceFailed", ...(causeKind === undefined || causeKind === "KnowledgePersistenceFailed" ? {} : { causeKind }) }, dependencies, command.runId); }

@@ -453,7 +453,7 @@ Deno.test("D1 keyword search parameterizes escaped terms and keeps owner scope",
 
 Deno.test("D1 semantic knowledge candidates fail closed for unconsented active uploaded runs before ranking", async () => {
   const database = new DatabaseFixture();
-  database.allRows.set("browse:owner-a|5", [{ ...sourceRow(), knowledge_id: "knowledge:1", source_revision: 1, point_json: JSON.stringify({ summary: "A source concept.", attribution: { sourceUrl: "https://publisher.example/learn" }, evidenceAnchors: [{ id: "anchor:1" }] }), source_title: "Learning source", source_url: "https://publisher.example/learn", question_locked: 1 }]);
+  database.allRows.set("browse:owner-a|5", [{ ...sourceRow(), knowledge_id: "knowledge:1", source_revision: 1, source_topic: null, point_json: JSON.stringify({ summary: "A source concept.", attribution: { sourceUrl: "https://publisher.example/learn" }, evidenceAnchors: [{ id: "anchor:1" }] }), source_title: "Learning source", source_url: "https://publisher.example/learn", question_locked: 1 }]);
   database.rows.set("semantic-private:owner-a", { private_derived_count: 0 });
   const result = await new D1SourceLibraryRepository(database).knowledgeSemanticCandidates({
     ownerId: "owner-a",

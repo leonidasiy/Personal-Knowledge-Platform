@@ -12,7 +12,7 @@ function response(body, status = 200) {
 
 const feed = {
   batch: { batchId: "feed:a", learningDay: "2026-08-19", status: "open", itemIds: ["k1", "k2", "k3", "k4", "k5"], revision: 1, createdAt: "2026-08-19T00:00:00.000Z", completedAt: null },
-  items: Array.from({ length: 5 }, (_, index) => ({ knowledgeId: `k${index + 1}`, sourceId: "s1", questionId: `q${index + 1}`, title: "Music", summary: `Point ${index + 1}`, sourceUrl: "https://example.test", evidenceAnchorIds: ["anchor-1"], media: null, questionLocked: true })),
+  items: Array.from({ length: 5 }, (_, index) => ({ knowledgeId: `k${index + 1}`, sourceId: "s1", sourceRevision: 2, questionId: `q${index + 1}`, title: "Music", summary: `Point ${index + 1}`, sourceUrl: "https://example.test", evidenceAnchorIds: ["anchor-1"], media: null, questionLocked: true, sourceClassification: { mainSubject: "music", topic: "Cadential harmony" }, sourceClassificationRevision: 1 })),
 };
 
 const review = {
@@ -49,6 +49,40 @@ Deno.test("learner gateway parses paired Feed and Review projections", async () 
     assertEquals(Object.hasOwn(loadedReview.value.questions[0] ?? {}, "explanation"), false);
     assertEquals(Object.hasOwn(loadedReview.value.questions[0] ?? {}, "correctChoiceIds"), false);
   }
+});
+
+Deno.test("learner gateway accepts one answer-hidden choice and fill-blank variant", async () => {
+  const paired = { ...review, questions: [{ ...review.questions[0], pairedVariants: [
+    { id: "choice-v1", kind: "multiple-choice", prompt: "Select every interval class with six semitones.", explanation: "Intervals are counted in semitones.", choices: [{ id: "tritone", label: "Tritone" }, { id: "octave", label: "Octave" }], blanks: null },
+    { id: "fill-v1", kind: "fill-blank", prompt: "A six-semitone interval is a ____.", explanation: "A tritone spans six semitones.", choices: null, blanks: [{ id: "blank-1" }] },
+  ] }] };
+  for (const [variants, expected] of [
+    [paired.questions[0].pairedVariants, true],
+    [[paired.questions[0].pairedVariants[1], paired.questions[0].pairedVariants[0]], true],
+    [[paired.questions[0].pairedVariants[0], paired.questions[0].pairedVariants[0]], false],
+    [[{ ...paired.questions[0].pairedVariants[0], correctChoiceIds: ["tritone"] }, paired.questions[0].pairedVariants[1]], false],
+    [[{ ...paired.questions[0].pairedVariants[0], choices: [{ id: "tritone", label: "Tritone", isCorrect: true }, { id: "octave", label: "Octave" }] }, paired.questions[0].pairedVariants[1]], false],
+    [[{ ...paired.questions[0].pairedVariants[0], canonicalAnswers: ["tritone"] }, paired.questions[0].pairedVariants[1]], false],
+    [[paired.questions[0].pairedVariants[0]], false],
+  ]) {
+    const gateway = new LearningBatchGatewayClient({ fetch: async () => response({ result: { ...paired, questions: [{ ...paired.questions[0], pairedVariants: variants }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1_000 });
+    const result = await gateway.loadReview("2026-08-19");
+    assertEquals(result.ok, expected);
+  }
+  const rootAnswerLeak = { ...paired, questions: [{ ...paired.questions[0], choices: [{ id: "choice-1", label: "A", isCorrect: true }, { id: "choice-2", label: "B" }] }] };
+  const rootGateway = new LearningBatchGatewayClient({ fetch: async () => response({ result: rootAnswerLeak }), baseUrl: "https://app.example.test/", timeoutMs: 1_000 });
+  assertEquals((await rootGateway.loadReview("2026-08-19")).ok, false);
+});
+
+Deno.test("learner gateway validates and sends a source-level edit with both optimistic revisions", async () => {
+  let requestBody = /** @type {unknown} */ (null);
+  const gateway = new LearningBatchGatewayClient({ fetch: async (_input, init) => { requestBody = JSON.parse(String(init?.body)); return response({ result: { sourceId: "s1", sourceRevision: 2, classificationRevision: 2, mainSubject: "music", topic: "Secondary dominants" } }); }, baseUrl: "https://app.example.test/", timeoutMs: 1_000 });
+  const saved = await gateway.updateSourceClassification({ sourceId: "s1", sourceRevision: 2, expectedRevision: 1, mainSubject: "music", topic: "Secondary dominants" });
+  assertEquals(saved.ok, true);
+  assertEquals(JSON.stringify(requestBody), JSON.stringify({ sourceId: "s1", sourceRevision: 2, expectedRevision: 1, mainSubject: "music", topic: "Secondary dominants" }));
+  const invalid = await gateway.updateSourceClassification({ sourceId: "s1", sourceRevision: 2, expectedRevision: 1, mainSubject: "invented", topic: "topic" });
+  assertEquals(invalid.ok, false);
+  if (!invalid.ok) assertEquals(invalid.error.kind, "LearningBatchGatewayCommandInvalid");
 });
 
 Deno.test("learner gateway invokes injected fetch without rebinding its receiver", async () => {

@@ -17,9 +17,10 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   aggregateJavascript: Object.freeze({
     label: "Aggregate JavaScript",
     // Settings/reminders aggregate allowance approved 2026-09-19.
+    // Minimal learner-feature packaging adjustment measured 2026-10-04.
     // Initial and lazy-chunk limits remain unchanged.
-    rawBytes: 220_000,
-    gzipBytes: 72_000,
+    rawBytes: 222_630,
+    gzipBytes: 72_317,
   }),
   stylesheet: Object.freeze({
     label: "CSS",

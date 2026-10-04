@@ -142,6 +142,7 @@
  *   readonly blankId: string | null,
  *   readonly acceptedAnswers: readonly [string, ...string[]] | null,
  *   readonly blanks?: readonly { readonly id: string, readonly acceptedAnswers: readonly [string, ...string[]] }[] | null,
+ *   readonly pairedVariants?: readonly [{ readonly id: string, readonly kind: "single-choice" | "multiple-choice", readonly prompt: string, readonly explanation: string, readonly choices: readonly LearningChoice[], readonly correctChoiceIds: readonly [string, ...string[]] }, { readonly id: string, readonly kind: "fill-blank", readonly prompt: string, readonly explanation: string, readonly blanks: readonly { readonly id:string, readonly acceptedAnswers:readonly [string,...string[]] }[] }],
  *   readonly expectedConcepts: readonly [string, ...string[]] | null,
  *   readonly minimumWords: number | null,
  *   readonly stimulus: LearningSymbolicStimulus | string | null,

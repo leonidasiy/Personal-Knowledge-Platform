@@ -1,6 +1,7 @@
 // @ts-check
 
 import { parseClassification } from "../src/features/knowledge-subjects/public.js";
+import { validateAssembledQuizPair } from "../src/features/knowledge-workflows/quiz-pair.js";
 
 /** @import { ExtractionScratchpad, KnowledgePoint } from "../src/features/knowledge-workflows/extraction.js" */
 /** @import { QuizAttempt, QuizRepository, QuestionDraft } from "../src/features/knowledge-workflows/quiz.js" */
@@ -307,6 +308,7 @@ function isQuizAttempt(value) { return isRecord(value) && typeof value.id === "s
 /** @param {unknown} value @returns {value is QuestionDraft} */
 function isDraft(value) {
   if (!isRecord(value) || !text(value.id) || !text(value.knowledgeId) || !positiveInteger(value.knowledgeRevision) || !text(value.kind) || !text(value.prompt) || !Array.isArray(value.options) || !value.options.every(text) || !Array.isArray(value.citedEvidenceUrls) || value.citedEvidenceUrls.length === 0 || !value.citedEvidenceUrls.every(text)) return false;
+  if (value.pairedQuiz !== undefined && (!validateAssembledQuizPair(value.pairedQuiz) || value.kind !== value.pairedQuiz.multipleChoice.kind || value.prompt !== value.pairedQuiz.multipleChoice.prompt || value.knowledgeId === "")) return false;
   if (!text(value.answer) && !(Array.isArray(value.answer) && value.answer.length > 0 && value.answer.every(text))) return false;
   const options = value.options;
   if (value.kind === "single-choice" && (options.length < 2 || typeof value.answer !== "string" || !options.includes(value.answer))) return false;
@@ -323,7 +325,7 @@ function isDraft(value) {
 function draftFingerprint(draft) {
   if (!isDraft(draft)) return null;
   const answer = Array.isArray(draft.answer) ? [...draft.answer].sort() : draft.answer;
-  const canonical = JSON.stringify({ kind: draft.kind, prompt: draft.prompt.trim(), options: [...draft.options], answer, blanks: draft.blanks, citedEvidenceUrls: [...draft.citedEvidenceUrls].sort() });
+  const canonical = JSON.stringify({ kind: draft.kind, prompt: draft.prompt.trim(), options: [...draft.options], answer, blanks: draft.blanks, pairedQuiz: draft.pairedQuiz ?? null, citedEvidenceUrls: [...draft.citedEvidenceUrls].sort() });
   let hash = 2166136261;
   for (const character of canonical) { hash ^= character.codePointAt(0) ?? 0; hash = Math.imul(hash, 16777619); }
   return `sha256:quiz-${(hash >>> 0).toString(16).padStart(8, "0")}`;
@@ -374,6 +376,10 @@ function projectReviewQueue(command, createdAt) {
     blankId: command.draft.kind === "fill-blank" && command.draft.blanks === undefined ? `${taskId}:blank` : null,
     acceptedAnswers: acceptedAnswerProjection(command.draft),
     blanks: command.draft.blanks === undefined ? null : Object.freeze(command.draft.blanks.map((/** @type {{ readonly id: string, readonly acceptedAnswers: readonly string[] }} */ blank) => Object.freeze({ id: blank.id, acceptedAnswers: Object.freeze([...blank.acceptedAnswers]) }))),
+    ...(command.draft.pairedQuiz === undefined ? {} : { pairedVariants: Object.freeze([
+      Object.freeze({ id: command.draft.pairedQuiz.multipleChoice.id, kind: command.draft.pairedQuiz.multipleChoice.kind, prompt: command.draft.pairedQuiz.multipleChoice.prompt, explanation: command.draft.pairedQuiz.multipleChoice.explanation, choices: Object.freeze(command.draft.pairedQuiz.multipleChoice.options.map((option) => Object.freeze({ id: option.key, label: option.text }))), correctChoiceIds: Object.freeze([...command.draft.pairedQuiz.multipleChoice.correctOptionKeys]) }),
+      Object.freeze({ id: command.draft.pairedQuiz.fillBlank.id, kind: command.draft.pairedQuiz.fillBlank.kind, prompt: command.draft.pairedQuiz.fillBlank.prompt, explanation: command.draft.pairedQuiz.fillBlank.explanation, blanks: Object.freeze(command.draft.pairedQuiz.fillBlank.blanks.map((blank) => Object.freeze({ id: blank.id, acceptedAnswers: Object.freeze([...blank.acceptedAnswers]) }))) }),
+    ]) }),
     expectedConcepts: expectedConceptProjection(command.draft),
     minimumWords: responseKind(command.draft.kind) === "text" && command.draft.kind === "short-response" ? 1 : null,
     stimulus: command.draft.kind === "case-study" || command.draft.kind === "symbolic" || command.draft.kind === "notation" ? command.knowledge.summary : null,

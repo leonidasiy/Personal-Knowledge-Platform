@@ -62,7 +62,8 @@ test("production upload runtime resumes text batches and processes selected PDF 
       const envelope = Array.isArray(message) ? message[0].text : message;
       const task = JSON.parse(envelope.slice(envelope.indexOf("\n") + 1, envelope.lastIndexOf("\n"))).task;
       let output;
-      if (task.operation === "plan-authorized-material" || task.operation === "replan-authorized-material") {
+      if (task.source && task.points) output = { mainSubject: "music", topic: "Synthetic source relationships" };
+      else if (task.operation === "plan-authorized-material" || task.operation === "replan-authorized-material") {
         // Even a sparse planner cannot drop supplied file pages.
         output = { revision: 1, frontier: [], coverageGoals: [], unresolvedGaps: [], stopDecision: { decision: "continue", rationale: "Observe supplied inventory.", evidenceUrls: [], unresolvedGapIds: [] } };
         assert.equal(task.scratchpad.pendingBatch, undefined);
@@ -82,10 +83,11 @@ test("production upload runtime resumes text batches and processes selected PDF 
           assert.equal(body.reasoning.effort, "low");
         } else assert.equal(body.response_format.type, "json_object");
         output = task.mode === "image"
-          ? { notes: "Synthetic concise progress.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two cases are labeled in the figure.", normalizedHash: `fixture-image-${imageBatchSizes.length}`, coverageGoalIds: [], classification: { version: 1, primarySubject: null, secondarySubjects: [], subcategory: null } }] }
-          : { pages: task.sections.map((section) => ({ url: section.url, notes: "Synthetic concise progress.", candidates: section.text === "" ? [] : [{ summary: section.text, normalizedHash: section.id, evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [], classification: { version: 1, primarySubject: null, secondarySubjects: [], subcategory: null } }] })) };
-      } else if (task.draft) output = { score: 9, reasons: ["Synthetic fixture"], feedback: "Accepted fixture", groundingProblems: [] };
-      else if (task.knowledge) output = { id: `quiz-${task.knowledge.normalizedHash}`, knowledgeId: task.knowledge.id, knowledgeRevision: 1, kind: "single-choice", prompt: `Which fixture belongs to ${task.knowledge.normalizedHash}?`, options: ["Fixture", "Other"], answer: "Fixture", explanation: "Synthetic explanation.", citedEvidenceUrls: task.knowledge.evidenceAnchors.map((anchor) => anchor.url) };
+          ? { notes: "Synthetic concise progress.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two cases are labeled in the figure.", normalizedHash: `fixture-image-${imageBatchSizes.length}`, coverageGoalIds: [] }] }
+          : { pages: task.sections.map((section) => ({ url: section.url, notes: "Synthetic concise progress.", candidates: section.text === "" ? [] : [{ summary: section.text, normalizedHash: section.id, evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [] }] })) };
+      } else if (task.source && task.points) output = { mainSubject: "music", topic: "Synthetic material" };
+      else if (task.draft) output = { score: 9, reasons: ["Synthetic fixture"], feedback: "Accepted fixture", groundingProblems: [] };
+      else if (task.knowledge) output = { knowledgeId: task.knowledge.id, knowledgeRevision: task.knowledge.sourceRevision, canonicalAnswers: ["fixture"], citedEvidenceUrls: task.knowledge.evidenceAnchors.map((anchor) => anchor.url), multipleChoice: { prompt: `Which fixture belongs to ${task.knowledge.normalizedHash}?`, options: [{ key: "choice-a", text: "Fixture" }, { key: "choice-b", text: "Other" }], correctOptionKeys: ["choice-a"], correctOptionAnswers: [{ key: "choice-a", canonicalAnswer: "fixture" }], explanation: "Fixture is supported by the source." }, fillBlank: { prompt: "The supported answer is ____.", blanks: [{ id: "blank-1", canonicalAnswer: "fixture", acceptedAnswers: ["fixture"] }], explanation: "Fixture is supported by the source." } };
       else assert.fail("Unexpected synthetic model task");
       return Response.json({ id: `fixture-${modelCalls}`, choices: [{ finish_reason: "stop", message: { content: JSON.stringify(output) } }], usage: { prompt_tokens: 100, completion_tokens: 100 } });
     };

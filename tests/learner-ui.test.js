@@ -40,7 +40,7 @@ const review = {
 
 Deno.test("Feed is text-only without associated media and hides legacy fallback images", async () => {
   for (const media of [null, { assetId: "old-fallback", kind: "image", url: "/assets/fallback-media/old.png", attribution: "User-attested local fallback" }]) {
-    const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:a", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media, questionLocked: true }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
+    const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:a", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media, questionLocked: true }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
     await controller.loadFeed();
     const html = controller.renderFeed();
     assert(html.includes("A useful relationship."), "Text must remain visible.");
@@ -53,7 +53,7 @@ Deno.test("Feed is text-only without associated media and hides legacy fallback 
 });
 
 Deno.test("Feed renders an associated source image without an unrelated fallback", async () => {
-  const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:image", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", questionId: "question-1", title: "Source", summary: "A diagram-backed relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: { assetId: "media-1", kind: "image", url: "/api/knowledge-workflows/media/media-1?variant=feed", attribution: "Source page diagram" }, questionLocked: true }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
+  const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:image", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A diagram-backed relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: { assetId: "media-1", kind: "image", url: "/api/knowledge-workflows/media/media-1?variant=feed", attribution: "Source page diagram" }, questionLocked: true }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
   await controller.loadFeed();
   const html = controller.renderFeed();
   assert(html.includes("data-associated-media=\"true\""), "Associated source media must render.");
@@ -62,8 +62,21 @@ Deno.test("Feed renders an associated source image without an unrelated fallback
   assert(html.indexOf('card-knowledge') < html.indexOf('card-media') && html.indexOf('card-media') < html.indexOf('card-source'), "Associated media must support the knowledge before its source, not lead the page.");
 });
 
+Deno.test("Feed source editor exposes only main subject dropdown and free-text topic", async () => {
+  const card = { knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 3, sourceClassificationRevision: 2, sourceClassification: { mainSubject: "music", topic: "Cadential harmony" }, questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: true };
+  const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:source-edit", itemIds: ["knowledge-1"] }, items: [card] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
+  const loaded = await controller.loadFeed();
+  assert(loaded.ok, "The source-level classification projection must load.");
+  const html = controller.renderFeed();
+  const editor = html.slice(html.indexOf("<form class=\"classification-form\""), html.indexOf("</form>") + 7);
+  assert(editor.includes('name="mainSubject"') && editor.includes("<select"), "Main subject remains one dropdown.");
+  assert(editor.includes('name="topic"') && editor.includes("<input"), "Topic remains free text.");
+  assert((editor.match(/<select\b/gu) ?? []).length === 1 && (editor.match(/<input\b/gu) ?? []).length === 1, "Exactly two editable fields appear.");
+  assert(!/name="(?:secondary|subcategory|primarySubject)"/iu.test(editor), "Per-point taxonomy fields are absent.");
+});
+
 Deno.test("completed Feed replaces study action with one Review continuation", async () => {
-  const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:done", status: "completed", completedAt: "2026-09-01T12:00:00.000Z", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: false }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
+  const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:done", status: "completed", completedAt: "2026-09-01T12:00:00.000Z", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: false }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
   await controller.loadFeed();
   const html = controller.renderFeed();
   assert(!html.includes('data-action="complete-learner-feed"'), "Completed batch must not offer another study write.");
@@ -103,6 +116,23 @@ Deno.test("Review renders ordered blank inputs without revealing answers", async
   assert(html.includes('name="blank:blank-1"') && html.includes('name="blank:blank-2"'), "Both blanks need accessible inputs.");
   assert(html.includes("Blank 1") && html.includes("Blank 2"), "Each input needs a distinct label.");
   assert(!html.includes("dominant") && !html.includes("tonic"), "The pre-attempt view must not reveal answers.");
+});
+
+Deno.test("Review renders exactly one keyboard-operable choice and one fill-blank variant without answer keys", async () => {
+  const paired = { ...review, questions: [{ ...review.questions[0], pairedVariants: [
+    { id: "choice-v1", kind: "single-choice", prompt: "Which interval spans six semitones?", explanation: "A tritone spans six semitones.", choices: [{ id: "tritone", label: "Tritone" }, { id: "octave", label: "Octave" }], blanks: null },
+    { id: "fill-v1", kind: "fill-blank", prompt: "A six-semitone interval is a ____.", explanation: "A tritone spans six semitones.", choices: null, blanks: [{ id: "blank-1" }] },
+  ] }] };
+  const controller = createLearnerController({ fetch: async () => response({ result: paired }), baseUrl: "https://app.example.test/", timeoutMs: 1_000, escapeHtml: (value) => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "id-1", onChange: () => {} });
+  const loaded = await controller.loadReview();
+  assert(loaded.ok, "The answer-hidden server pair must load.");
+  const html = controller.renderReview();
+  assert((html.match(/<fieldset\b/gu) ?? []).length === 2, "The learner must see exactly two separately labelled variant groups.");
+  assert(html.includes("Which interval spans six semitones?"), "The MCQ prompt must be visible.");
+  assert(html.includes("A six-semitone interval is a ____.") && html.includes("Blank 1"), "The fill-blank prompt and distinct blank label must be visible.");
+  assert(html.includes('type="radio" name="selectedChoiceIds"') && html.includes('name="pairedBlank:blank-1" size="28"'), "Single-choice and comfortably sized typed responses must use native controls.");
+  assert(html.includes("Check both answers"), "The pair is submitted together.");
+  assert(!html.includes("correctChoiceIds") && !html.includes("acceptedAnswers") && !html.includes("A tritone spans six semitones."), "No grading key or explanation may appear before an attempt.");
 });
 
 Deno.test("Review empty state contains no knowledge-card content", async () => {

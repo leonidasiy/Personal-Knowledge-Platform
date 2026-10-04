@@ -69,7 +69,7 @@ const freeze = Object.freeze;
  *     readonly browseActive: (query: SourcePageQuery) => Promise<Result<{ readonly items: readonly LibrarySource[], readonly interestAreas: readonly SourceInterestArea[], readonly catalogRevision: string }, SourceLibraryFailure>>,
  *     readonly keywordSearch: (query: SourceKeywordQuery) => Promise<Result<readonly SourceSearchHit[], SourceLibraryFailure>>,
  *     readonly knowledgeKeywordSearch: (query: SourceKeywordQuery) => Promise<Result<readonly KnowledgeSearchHit[], SourceLibraryFailure>>,
- *     readonly knowledgeSemanticCandidates: (query: { readonly ownerId: string, readonly limit: number }) => Promise<Result<{ readonly candidates: readonly { readonly knowledge: KnowledgeSearchHit["knowledge"], readonly sourceRevision: number }[], readonly privateDerivedCount: number }, SourceLibraryFailure>>,
+ *     readonly knowledgeSemanticCandidates: (query: { readonly ownerId: string, readonly limit: number }) => Promise<Result<{ readonly candidates: readonly { readonly knowledge: KnowledgeSearchHit["knowledge"], readonly sourceRevision: number, readonly sourceTopic: string | null }[], readonly privateDerivedCount: number }, SourceLibraryFailure>>,
  *     readonly activeByIds: (query: ActiveSourceQuery) => Promise<Result<readonly LibrarySource[], SourceLibraryFailure>>
  *     readonly suppressed: (query: { readonly ownerId: string, readonly canonicalIdentities: readonly string[] }) => Promise<Result<readonly string[], SourceLibraryFailure>>
  *   },
@@ -292,7 +292,7 @@ export class SourceCatalogQueryService {
     const indexed = await this.#dependencies.repository.knowledgeSemanticCandidates({ ownerId: input.ownerId, limit: this.#dependencies.maximumSemanticCandidates });
     if (!indexed.ok) return indexed;
     if (indexed.value.privateDerivedCount > 0) return failure("SourceSemanticConsentRequired");
-    const candidates = indexed.value.candidates.map((candidate) => freeze({ id: candidate.knowledge.knowledgeId, sourceId: candidate.knowledge.sourceId, sourceRevision: candidate.sourceRevision, title: candidate.knowledge.sourceTitle, text: candidate.knowledge.summary }));
+    const candidates = indexed.value.candidates.map((candidate) => freeze({ id: candidate.knowledge.knowledgeId, sourceId: candidate.knowledge.sourceId, sourceRevision: candidate.sourceRevision, title: candidate.knowledge.sourceTitle, text: [candidate.knowledge.summary, candidate.sourceTopic].filter((value) => value !== null && value !== "").join("\n") }));
     const ranked = await this.#dependencies.semanticRanker.rank({ signal: input.signal, query: input.query, scope: "knowledge", limit: input.limit, candidates });
     if (!ranked.ok) return ranked;
     const knowledge = new Map(indexed.value.candidates.map((candidate) => [candidate.knowledge.knowledgeId, candidate.knowledge]));

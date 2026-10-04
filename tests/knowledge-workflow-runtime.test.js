@@ -120,9 +120,9 @@ Deno.test("robots denial never invokes raw Worker fetch", async () => {
 
 Deno.test("live quiz prompts enumerate the exact generator and evaluator contracts", () => {
   if (!questionGeneratorPrompt.includes("meaningful complete mapping") || !questionEvaluatorPrompt.includes("arbitrary word-order permutations")) throw new Error("Quiz prompts did not require meaningful distinctions.");
-  if (!questionGeneratorPrompt.includes("multiple blanks") || !questionGeneratorPrompt.includes("acceptedAnswers")) throw new Error("Quiz prompt omitted the supported multi-blank contract.");
+  if (!questionGeneratorPrompt.includes("two to four blanks") || !questionGeneratorPrompt.includes("acceptedAnswers")) throw new Error("Quiz prompt omitted the supported multi-blank contract.");
   if (questionGeneratorPrompt.includes("visibleEvidence")) throw new Error("Quiz prompt requested extraction evidence cues.");
-  for (const field of ["id", "knowledgeId", "knowledgeRevision", "kind", "prompt", "options", "answer", "citedEvidenceUrls"]) {
+  for (const field of ["knowledgeId", "knowledgeRevision", "canonicalAnswers", "multipleChoice", "fillBlank", "citedEvidenceUrls"]) {
     if (!questionGeneratorPrompt.includes(field)) throw new Error(`Generator prompt omitted ${field}.`);
   }
   for (const field of ["score", "reasons", "feedback", "groundingProblems"]) {
@@ -230,17 +230,14 @@ Deno.test("page observation returns a typed failure after the bounded schema ret
   assertEquals(logs.some((entry) => entry.event === "knowledge-workflow-observation-schema-failure" && entry.failureKind === "KnowledgeObservationInvalid" && entry.diagnosticToken === "missing-candidates"), true);
 });
 
-Deno.test("web observation rejects missing and unknown classifications", async () => {
-  for (const classification of [undefined, { version: 1, primarySubject: "unknown", secondarySubjects: [], subcategory: "topic" }]) {
-    let calls = 0;
-    const result = await requestPageObservation({ taskId: "classification-web", input: { url: "https://example.test/learn" }, maxOutputTokens: 1024, logger: () => {}, generate: async () => {
-      calls += 1;
-      const candidate = { summary: "A supported claim.", normalizedHash: "claim", evidenceAnchors: [{ url: "https://example.test/learn", selector: "main" }], coverageGoalIds: [], mediaCandidates: [], ...(classification === undefined ? {} : { classification }) };
-      return { ok: true, value: { notes: "One point.", candidates: [candidate] } };
-    } });
-    assertEquals(result.ok, false);
-    assertEquals(calls, 2);
-  }
+Deno.test("web observation accepts unclassified candidates for one later source-level inference", async () => {
+  let calls = 0;
+  const result = await requestPageObservation({ taskId: "classification-web", input: { url: "https://example.test/learn" }, maxOutputTokens: 1024, logger: () => {}, generate: async () => {
+    calls += 1;
+    return { ok: true, value: { notes: "One point.", candidates: [{ summary: "A supported claim.", normalizedHash: "claim", evidenceAnchors: [{ url: "https://example.test/learn", selector: "main" }], coverageGoalIds: [], mediaCandidates: [] }] } };
+  } });
+  assertEquals(result.ok, true);
+  assertEquals(calls, 1);
 });
 
 Deno.test("live page-observation prompts name the bounded output contract", () => {
@@ -342,7 +339,6 @@ Deno.test("material batch fails closed on malformed pages, unsupported anchors, 
     { pages: [{ ...page, candidates: [{ ...candidate, evidenceAnchors: [{ url: section.url, selector: "page:2" }] }] }] },
     { pages: [{ ...page, candidates: [{ ...candidate, coverageGoalIds: ["invented"] }] }] },
     { pages: [{ ...page, candidates: [{ ...candidate, mediaCandidates: [{ url: "invented" }] }] }] },
-    { pages: [{ ...page, candidates: [{ ...candidate, classification: { version: 1, primarySubject: "invented", secondarySubjects: [], subcategory: "topic" } }] }] },
   ]) {
     let calls = 0;
     const result = await requestMaterialBatch({ taskId: "batch", input: { sections: [section], coverageGoals: [], fileName: "example.pdf", progress: {} }, maxOutputTokens: 16384, logger: () => {}, generate: async () => { calls++; return { ok: true, value: output }; } });
@@ -363,7 +359,7 @@ Deno.test("material batch fails closed on malformed pages, unsupported anchors, 
 Deno.test("image material batches derive exact source and media identifiers and never exceed one section", async () => {
   const section = { id: "image-1", url: "https://example.test/source#section=image-1", title: "chapter5-page-001.png", locator: "image:1", text: "" };
   const visualId = "visual:sha256:source:image-1";
-  const candidate = { summary: "The diagram distinguishes the two cases.", visibleEvidence: "The diagram labels the two cases separately.", normalizedHash: "hash-diagram", coverageGoalIds: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } };
+  const candidate = { summary: "The diagram distinguishes the two cases.", visibleEvidence: "The diagram labels the two cases separately.", normalizedHash: "hash-diagram", coverageGoalIds: [] };
   let calls = 0;
   const seen = /** @type {(readonly import("../worker/knowledge-workflow-model.js").KnowledgeModelAttachment[] | undefined)[]} */ ([]);
   const accepted = await requestMaterialBatch({ taskId: "image-batch", input: { sections: [section], coverageGoals: [], fileName: "chapter5-page-001.png", sourceContext: { title: "Harmony lesson", overview: "A lesson on harmonic function." }, progress: {}, mode: "image", visualId }, attachments: [{ id: visualId, mediaType: "image/png", bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) }], maxOutputTokens: 4_096, logger: () => {}, generate: async (command) => { calls += 1; seen.push(command.attachments); assertEquals(command.timeoutMs, 90_000); assertEquals(command.responseSchema?.name, "material_image_v4"); assertEquals(command.reasoningEffort, "low"); assertEquals(command.providerSort, "throughput"); assertEquals(JSON.stringify(command.input).includes("chapter5"), false); assertEquals(JSON.stringify(command.input).includes("Harmony lesson"), true); assertEquals(JSON.stringify(command.input).includes("harmonic function"), true); return { ok: true, value: { notes: "The diagram contributes one distinction.", candidates: [candidate] } }; } });
@@ -394,45 +390,33 @@ Deno.test("image material batches reject extra source fields and unsupported goa
   }
 });
 
-Deno.test("text material batches reject candidates missing required classification", async () => {
+Deno.test("text material batches preserve unclassified candidates for source-level inference", async () => {
   const section = { id: "page-1", url: "https://example.test/source#section=page-1", title: "Page 1", locator: "page:1", text: "The source distinguishes two cases." };
   const candidate = { summary: section.text, normalizedHash: "cases", evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [] };
   const base = { taskId: "text-classification", input: { sections: [section], coverageGoals: [], fileName: "source.pdf", progress: {}, mode: /** @type {const} */ ("text") }, maxOutputTokens: 16_384, logger: () => {} };
   let calls = 0;
-  const rejected = await requestMaterialBatch({ ...base, generate: async () => {
-    calls += 1;
-    return { ok: true, value: { pages: [{ url: section.url, notes: "One supported distinction.", candidates: [candidate] }] } };
-  } });
-  assertEquals(rejected.ok, false);
-  if (!rejected.ok) assertEquals(rejected.error.kind, "KnowledgeMaterialBatchInvalid");
-  assertEquals(calls, 2);
-
-  const classification = { version: 1, primarySubject: null, secondarySubjects: [], subcategory: null };
-  calls = 0;
   const accepted = await requestMaterialBatch({ ...base, generate: async () => {
     calls += 1;
-    return { ok: true, value: { pages: [{ url: section.url, notes: "One supported distinction.", candidates: [{ ...candidate, classification }] }] } };
+    return { ok: true, value: { pages: [{ url: section.url, notes: "One supported distinction.", candidates: [candidate] }] } };
   } });
   assertEquals(accepted.ok, true);
   assertEquals(calls, 1);
   if (accepted.ok) {
     assertEquals(accepted.value[0].candidates.length, 1);
-    assertEquals(JSON.stringify(accepted.value[0].candidates[0].classification), JSON.stringify(classification));
+    assertEquals(Object.hasOwn(accepted.value[0].candidates[0], "classification"), false);
   }
 });
 
-Deno.test("image material batches fail closed on missing and unknown classifications", async () => {
+Deno.test("image material batches produce unclassified candidates for source-level inference", async () => {
   const section = { id: "image-1", url: "https://example.test/source#section=image-1", title: "Figure", locator: "image:1", text: "" };
-  for (const classification of [undefined, { version: 1, primarySubject: "invented", secondarySubjects: [], subcategory: "figure" }]) {
-    let calls = 0;
-    const result = await requestMaterialBatch({ taskId: "image-classification", input: { sections: [section], coverageGoals: [], fileName: "figure.png", progress: {}, mode: "image", visualId: "visual:image-1" }, maxOutputTokens: 4_096, logger: () => {}, generate: async () => {
-      calls += 1;
-      const candidate = { summary: "The figure distinguishes two cases.", visibleEvidence: "Two labels are visible.", normalizedHash: "cases", coverageGoalIds: [], ...(classification === undefined ? {} : { classification }) };
-      return { ok: true, value: { notes: "One distinction.", candidates: [candidate] } };
-    } });
-    assertEquals(result.ok, false);
-    assertEquals(calls, 2);
-  }
+  let calls = 0;
+  const result = await requestMaterialBatch({ taskId: "image-classification", input: { sections: [section], coverageGoals: [], fileName: "figure.png", progress: {}, mode: "image", visualId: "visual:image-1" }, maxOutputTokens: 4_096, logger: () => {}, generate: async () => {
+    calls += 1;
+    return { ok: true, value: { notes: "One distinction.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two labels are visible.", normalizedHash: "cases", coverageGoalIds: [] }] } };
+  } });
+  assertEquals(result.ok, true);
+  assertEquals(calls, 1);
+  if (result.ok) assertEquals(Object.hasOwn(result.value[0].candidates[0], "classification"), false);
 });
 
 Deno.test("failed initial image processing retries once without changing the selected page", async () => {
@@ -444,7 +428,7 @@ Deno.test("failed initial image processing retries once without changing the sel
   const recovered = await requestMaterialBatch({ ...base, generate: async (command) => {
     calls++;
     if (command.attachments?.[0]?.id !== visualId) throw new Error("Retry changed visual identity.");
-    return calls === 1 ? { ok: false, error: { kind: "KnowledgeModelUnavailable" } } : { ok: true, value: { notes: "The figure distinguishes two cases.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two labeled cases are shown.", normalizedHash: "cases", coverageGoalIds: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] } };
+    return calls === 1 ? { ok: false, error: { kind: "KnowledgeModelUnavailable" } } : { ok: true, value: { notes: "The figure distinguishes two cases.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two labeled cases are shown.", normalizedHash: "cases", coverageGoalIds: [] }] } };
   } });
   if (!recovered.ok || calls !== 2) throw new Error("Initial provider failure did not recover in one bounded retry.");
   calls = 0;
@@ -457,7 +441,7 @@ Deno.test("image processing repairs malformed JSON and retries rate limits, but 
   const base = { taskId: "image-repair", input: { sections: [section], coverageGoals: [], fileName: "figure.png", progress: {}, mode: /** @type {const} */ ("image"), visualId: "visual:image-1" }, maxOutputTokens: 4_096, logger: () => {} };
   for (const error of [{ kind: "KnowledgeModelResponseInvalid" }, { kind: "KnowledgeModelRejected", status: 429 }]) {
     let calls = 0;
-    const result = await requestMaterialBatch({ ...base, generate: async (command) => { calls++; if (calls === 2 && error.kind === "KnowledgeModelResponseInvalid" && !command.systemPrompt.includes("# Correction")) throw new Error("Schema repair lacked targeted guidance."); return calls === 1 ? { ok: false, error } : { ok: true, value: { notes: "The figure supports one relationship.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two labeled cases are shown.", normalizedHash: "cases", coverageGoalIds: [], classification: { version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" } }] } }; } });
+    const result = await requestMaterialBatch({ ...base, generate: async (command) => { calls++; if (calls === 2 && error.kind === "KnowledgeModelResponseInvalid" && !command.systemPrompt.includes("# Correction")) throw new Error("Schema repair lacked targeted guidance."); return calls === 1 ? { ok: false, error } : { ok: true, value: { notes: "The figure supports one relationship.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two labeled cases are shown.", normalizedHash: "cases", coverageGoalIds: [] }] } }; } });
     assertEquals(result.ok, true);
     assertEquals(calls, 2);
   }

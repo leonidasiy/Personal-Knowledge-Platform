@@ -15,16 +15,17 @@ function fixture() {
     CREATE TABLE knowledge_workflow_materials (owner_id TEXT, run_id TEXT, material_json TEXT);
     CREATE TABLE learner_knowledge_state (owner_id TEXT, knowledge_id TEXT, studied_at TEXT, view_count INTEGER, last_answer_correct INTEGER, scheduled_days INTEGER, due_at TEXT, preference REAL);
     CREATE TABLE knowledge_classifications (owner_id TEXT, knowledge_id TEXT, classification_json TEXT, revision INTEGER);
+    CREATE TABLE source_classifications (owner_id TEXT, source_id TEXT, topic TEXT, main_subject TEXT, classification_revision INTEGER);
     CREATE TABLE learner_preference_feedback (owner_id TEXT, knowledge_id TEXT, preference REAL);
     CREATE TABLE knowledge_workflow_media_assets (owner_id TEXT, knowledge_id TEXT, revoked_at TEXT, asset_id TEXT, kind TEXT, attribution TEXT);
-    CREATE VIRTUAL TABLE knowledge_points_fts USING fts5(owner_id UNINDEXED, knowledge_id UNINDEXED, summary);
+    CREATE VIRTUAL TABLE knowledge_points_search_fts USING fts5(owner_id UNINDEXED, knowledge_id UNINDEXED, source_id UNINDEXED, summary, source_title, source_topic);
   `);
   function seed(id, options = {}) {
     const { owner = 'owner', revision = 1, state = 'completed', summary = 'cadence summary', quiz = 'published', task = 'published', runRevision = 1, quizRun = id, quizRevision = 1 } = options;
     db.prepare('INSERT INTO library_sources VALUES (?, ?, ?, ?, ?, ?)').run(owner, id, 'active', id, 'https://example.test/', revision);
     db.prepare('INSERT INTO knowledge_workflow_runs VALUES (?, ?, ?, ?, ?)').run(owner, id, id, runRevision, state);
     db.prepare('INSERT INTO extraction_knowledge_points VALUES (?, ?, ?, ?, ?, ?, ?)').run(owner, id, id, 1, id, JSON.stringify({ summary, attribution: { sourceUrl: 'https://example.test/' }, evidenceAnchors: [{ id: 'anchor' }] }), id);
-    db.prepare('INSERT INTO knowledge_points_fts VALUES (?, ?, ?)').run(owner, id, typeof summary === 'string' ? summary : 'cadence');
+    db.prepare('INSERT INTO knowledge_points_search_fts VALUES (?, ?, ?, ?, ?, ?)').run(owner, id, id, typeof summary === 'string' ? summary : 'cadence', id, '');
     if (quiz !== null) db.prepare('INSERT INTO knowledge_workflow_quizzes VALUES (?, ?, ?, ?, ?, ?)').run(owner, quizRun, id, quizRevision, id, quiz);
     if (task !== null) db.prepare('INSERT INTO learning_generation_tasks VALUES (?, ?, ?, ?)').run(owner, id, task, JSON.stringify({ id: `question-${id}`, kind: 'single-choice', prompt: 'Which cadence?', explanation: 'Cadence explanation', sourceAnchorIds: ['anchor'], choices: [{ id: 'a', label: 'A' }], correctChoiceIds: ['a'], revision: 1 }));
   }

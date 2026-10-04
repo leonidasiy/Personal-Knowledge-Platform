@@ -13,7 +13,7 @@ import { isWorkflowRobotsEvidence } from "./workflow.js";
 
 /**
  * @typedef {{
- *   readonly stage: "rights" | "robots" | "extraction" | "knowledge" | "quiz" | "cleanup" | "transition",
+ *   readonly stage: "rights" | "robots" | "extraction" | "knowledge" | "classification" | "quiz" | "cleanup" | "transition",
  *   readonly causeKind: string,
  *   readonly detailKind?: string,
  *   readonly detailDiagnosticToken?: string,
@@ -35,8 +35,9 @@ import { isWorkflowRobotsEvidence } from "./workflow.js";
 /** @typedef {{ readonly run: (command: { readonly run: KnowledgeWorkflowRun, readonly rights: RightsDecision, readonly robots: unknown }) => Promise<Result<{ readonly state: "completed" | "paused" | "awaiting-time-limit-decision", readonly scratchpad: unknown, readonly knowledgePointCount: number, readonly pagesProcessed: number }, unknown>> }} WorkflowExtraction */
 /** @typedef {{ readonly list: (scope: { readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number }) => Promise<Result<readonly KnowledgePoint[], unknown>> }} WorkflowKnowledge */
 /** @typedef {{ readonly run: (command: { readonly ownerId: string, readonly runId: string, readonly points: readonly KnowledgePoint[] }) => Promise<Result<QuizRunResult, unknown>> }} WorkflowQuiz */
+/** @typedef {{ readonly ensure: (command: { readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly points: readonly KnowledgePoint[] }) => Promise<Result<null, unknown>> }} WorkflowClassification */
 /** @typedef {{ readonly close: () => Promise<Result<null, unknown>> }} WorkflowCleanup */
-/** @typedef {{ readonly transition: (command: { readonly run: KnowledgeWorkflowRun, readonly nextState: WorkflowState, readonly counts?: { readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }, readonly robotsEvidence?: WorkflowRobotsEvidence | null }) => Promise<Result<KnowledgeWorkflowRun, unknown>>, readonly robots: WorkflowRobots, readonly extraction: WorkflowExtraction, readonly knowledge: WorkflowKnowledge, readonly quiz: WorkflowQuiz, readonly cleanup?: WorkflowCleanup, readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly stage?: string, readonly failureKind?: string, readonly diagnosticToken?: string }) => void }} WorkflowExecutorDependencies */
+/** @typedef {{ readonly transition: (command: { readonly run: KnowledgeWorkflowRun, readonly nextState: WorkflowState, readonly counts?: { readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }, readonly robotsEvidence?: WorkflowRobotsEvidence | null }) => Promise<Result<KnowledgeWorkflowRun, unknown>>, readonly robots: WorkflowRobots, readonly extraction: WorkflowExtraction, readonly knowledge: WorkflowKnowledge, readonly classification: WorkflowClassification, readonly quiz: WorkflowQuiz, readonly cleanup?: WorkflowCleanup, readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly stage?: string, readonly failureKind?: string, readonly diagnosticToken?: string }) => void }} WorkflowExecutorDependencies */
 
 const freeze = Object.freeze;
 
@@ -108,7 +109,7 @@ function fail(error, dependencies, runId) {
 
 /** @param {WorkflowExecutorDependencies} dependencies */
 export function createKnowledgeWorkflowExecutor(dependencies) {
-  if (!dependencies || typeof dependencies.transition !== "function" || typeof dependencies.robots?.check !== "function" || typeof dependencies.extraction?.run !== "function" || typeof dependencies.knowledge?.list !== "function" || typeof dependencies.quiz?.run !== "function" || (dependencies.cleanup !== undefined && typeof dependencies.cleanup.close !== "function") || typeof dependencies.logger !== "function") throw new TypeError("Knowledge workflow executor dependencies are invalid.");
+  if (!dependencies || typeof dependencies.transition !== "function" || typeof dependencies.robots?.check !== "function" || typeof dependencies.extraction?.run !== "function" || typeof dependencies.knowledge?.list !== "function" || typeof dependencies.classification?.ensure !== "function" || typeof dependencies.quiz?.run !== "function" || (dependencies.cleanup !== undefined && typeof dependencies.cleanup.close !== "function") || typeof dependencies.logger !== "function") throw new TypeError("Knowledge workflow executor dependencies are invalid.");
   /** @param {unknown} input @returns {Promise<Result<WorkflowExecutionResult, WorkflowExecutorFailure>>} */
   async function execute(input) {
       if (!validCommand(input)) return fail({ stage: "transition", causeKind: "WorkflowCommandInvalid" }, dependencies, "unknown");
@@ -163,6 +164,9 @@ export function createKnowledgeWorkflowExecutor(dependencies) {
         if (!points.ok) return fail(operationFailure("knowledge", "WorkflowKnowledgeLoadFailed", points.error, "per-point-quiz-loop"), dependencies, current.runId);
         if (points.value.length === 0) return fail({ stage: "quiz", causeKind: "KnowledgeSetEmpty", resumableState: "per-point-quiz-loop" }, dependencies, current.runId);
         if (!points.value.every((point) => knowledgeScopeMatches(point, current))) return fail({ stage: "quiz", causeKind: "WorkflowKnowledgeScopeInvalid", resumableState: "per-point-quiz-loop" }, dependencies, current.runId);
+        let classification;
+        try { classification = await dependencies.classification.ensure({ ownerId: current.ownerId, sourceId: current.sourceId, sourceRevision: current.sourceRevision, points: points.value }); } catch (error) { return fail(operationFailure("classification", "WorkflowSourceClassificationFailed", error, "per-point-quiz-loop", "SourceClassificationDependencyRejected"), dependencies, current.runId); }
+        if (!classification.ok) return fail(operationFailure("classification", "WorkflowSourceClassificationFailed", classification.error, "per-point-quiz-loop"), dependencies, current.runId);
         let quiz;
         try { quiz = await dependencies.quiz.run({ ownerId: current.ownerId, runId: current.runId, points: points.value }); } catch (error) { return fail(operationFailure("quiz", "WorkflowQuizFailed", error, "per-point-quiz-loop", "QuizGenerationRejected"), dependencies, current.runId); }
         if (!quiz.ok) return fail(operationFailure("quiz", "WorkflowQuizFailed", quiz.error, "per-point-quiz-loop"), dependencies, current.runId);

@@ -1,6 +1,6 @@
 // @ts-check
 
-import { SUBJECTS, parseClassification } from "../knowledge-subjects/public.js";
+import { SUBJECTS } from "../knowledge-subjects/public.js";
 import { subjectPresentation } from "../knowledge-subjects/presentation.js";
 
 import { LearningBatchGatewayClient } from "./batches-gateway.js";
@@ -15,7 +15,7 @@ import { LearningBatchGatewayClient } from "./batches-gateway.js";
  *   readonly escapeHtml: (value: string) => string,
  *   readonly now: () => string,
  *   readonly createId: () => string,
- *   readonly onChange: (notice?: string) => void
+ *   readonly onChange: (notice?: string, preferredFocusKey?: string | null, fallbackHeadingId?: string | null) => void
  * }} LearnerControllerDependencies
  */
 
@@ -29,6 +29,7 @@ export function createLearnerController(dependencies) {
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: FeedBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let feed = { state: "idle", value: null, error: null };
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: ReviewBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let review = { state: "idle", value: null, error: null };
   /** @type {Map<string, { readonly correct: boolean, readonly score: number, readonly explanation: string, readonly correctAnswer: string, readonly components: readonly { readonly id: string, readonly correct: boolean, readonly correctAnswer: string }[] }> } */ const answers = new Map();
+  /** @type {Map<string, { readonly selectedChoiceIds: readonly string[], readonly blanks: Readonly<Record<string, string>> }> } */ const attempts = new Map();
 
   let classificationMessage = "";
 
@@ -95,14 +96,18 @@ export function createLearnerController(dependencies) {
     const answerText = formData.get("answerText");
     const question = review.value?.questions.find((candidate) => candidate.questionId === questionId);
     const blankAnswers = question?.blanks?.map((blank) => ({ id: blank.id, text: formData.get(`blank:${blank.id}`) })) ?? null;
-    if (batchId === "" || questionId === "" || question === undefined || (question.kind === "fill-blank" ? blankAnswers === null ? typeof answerText !== "string" || answerText.trim() === "" : blankAnswers.some((answer) => typeof answer.text !== "string" || answer.text.trim() === "") : selectedChoiceIds.length === 0)) return;
-    const result = await gateway.answerReview(batchId, questionId, /** @type {string[]} */ (selectedChoiceIds), `review-answer:${batchId}:${questionId}`, typeof answerText === "string" ? answerText : null, blankAnswers === null ? null : blankAnswers.map((answer) => ({ id: answer.id, text: /** @type {string} */ (answer.text) })));
+    const pairedFill = question?.pairedVariants?.find((variant) => variant.kind === "fill-blank");
+    const pairedBlankAnswers = pairedFill?.blanks?.map((blank) => ({ id: blank.id, text: formData.get(`pairedBlank:${blank.id}`) })) ?? null;
+    if (batchId === "" || questionId === "" || question === undefined || (question.pairedVariants === null ? question.kind === "fill-blank" ? blankAnswers === null ? typeof answerText !== "string" || answerText.trim() === "" : blankAnswers.some((answer) => typeof answer.text !== "string" || answer.text.trim() === "") : selectedChoiceIds.length === 0 : selectedChoiceIds.length === 0 || pairedBlankAnswers === null || pairedBlankAnswers.some((answer) => typeof answer.text !== "string" || answer.text.trim() === ""))) return;
+    attempts.set(questionId, { selectedChoiceIds: freeze([...selectedChoiceIds]), blanks: freeze(Object.fromEntries((pairedFill?.blanks ?? []).map((blank) => [blank.id, String(formData.get(`pairedBlank:${blank.id}`) ?? "")])))});
+    const result = await gateway.answerReview(batchId, questionId, /** @type {string[]} */ (selectedChoiceIds), `review-answer:${batchId}:${questionId}`, typeof answerText === "string" ? answerText : null, blankAnswers === null ? null : blankAnswers.map((answer) => ({ id: answer.id, text: /** @type {string} */ (answer.text) })), pairedBlankAnswers === null ? null : pairedBlankAnswers.map((answer) => ({ id: answer.id, text: /** @type {string} */ (answer.text) })), question.revision);
     if (!result.ok) {
       review = { state: "error", value: review.value, error: result.error };
-      onChange();
+      onChange(undefined, `review-submit:${questionId}`);
       return;
     }
     const correct = result.value.correct === true;
+    attempts.delete(questionId);
     const alreadyAnswered = answers.has(questionId);
     answers.set(questionId, { correct, score: result.value.score, explanation: result.value.feedback.explanation, correctAnswer: result.value.feedback.correctAnswer, components: result.value.feedback.components });
     if (review.value !== null) {
@@ -111,7 +116,7 @@ export function createLearnerController(dependencies) {
         : review.value.batch;
       review = { state: "success", value: { ...review.value, batch, dueCount: Math.max(0, review.value.dueCount - (alreadyAnswered ? 0 : 1)) }, error: null };
     }
-    onChange();
+    onChange(undefined, `review-feedback:${questionId}`, "review-title");
   }
 
   /** @param {HTMLElement} button */
@@ -150,6 +155,7 @@ export function createLearnerController(dependencies) {
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchIncomplete") return "Finish the current five-card batch before refreshing it.";
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewRefreshLocked") return "Answer every question in the current Review batch before refreshing it.";
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradePending") return "Your answer is still being checked. Try again; this attempt has not been recorded.";
+    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradingUnavailable") return "Answer checking is temporarily unavailable. Your responses are still here; try again when the checker is available.";
     return "The learning batch could not be updated. Try again.";
   }
 
@@ -175,9 +181,9 @@ export function createLearnerController(dependencies) {
 
   /** @param {LearningKnowledgeCard} card */
   function renderCard(card) {
-    const classification = card.classification ?? null;
-    const presentation = subjectPresentation(classification?.primarySubject ?? null);
-    const subject = presentation === null ? "" : ` data-subject="${escapeHtml(classification?.primarySubject ?? "")}" style="--subject-hue:${presentation.hue};--subject-turn:${presentation.turn}"`;
+    const classification = card.sourceClassification;
+    const presentation = subjectPresentation(classification?.mainSubject ?? null);
+    const subject = presentation === null ? "" : ` data-subject="${escapeHtml(classification?.mainSubject ?? "")}" style="--subject-hue:${presentation.hue};--subject-turn:${presentation.turn}"`;
     const mark = presentation === null ? "" : `<svg class="subject-mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="${presentation.path}"/></svg>`;
     const media = card.media === null || card.media.url.startsWith("/assets/fallback-media/") ? "" : `<figure class="card-media"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true"><figcaption class="media-attribution">${escapeHtml(card.media.attribution)}</figcaption></figure>`;
     return `<article class="learning-card"${subject} data-reveal="knowledge:${escapeHtml(card.knowledgeId)}" data-knowledge-id="${escapeHtml(card.knowledgeId)}"><div class="card-body"><p class="card-knowledge">${escapeHtml(card.summary)}</p>${media}<h3 class="card-source"><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">${escapeHtml(card.title)}</a></h3><p class="card-subject">${mark}${escapeHtml(presentation?.label ?? "Unclassified")}</p><div class="card-context">${classificationEditor(card)}<details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details></div><div class="preference-controls"><button class="button preference-more" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}">More like this</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Less like this</button><button class="button quiet" type="button" data-action="remove-learner-knowledge" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Remove</button></div></div></article>`;
@@ -185,20 +191,16 @@ export function createLearnerController(dependencies) {
 
   /** @param {LearningKnowledgeCard} card */
   function classificationEditor(card) {
-    const classification = card.classification;
-    /** @param {string} name @param {string} label @param {string|null|undefined} selected */
-    const select = (name, label, selected) => `<label>${label}<select name="${name}"><option value="">None / unclassified</option>${SUBJECTS.map(subject => `<option value="${subject.id}" ${subject.id === selected ? "selected" : ""}>${escapeHtml(subject.label)}</option>`).join("")}</select></label>`;
-    return `<details data-library-details-key="classification-${escapeHtml(card.knowledgeId)}"><summary>${escapeHtml(classification?.subcategory ?? "Subject details")} · Edit classification</summary><form class="classification-form" data-classification="${escapeHtml(card.knowledgeId)}" data-revision="${card.classificationRevision ?? 0}">${select("primary", "Main subject", classification?.primarySubject)}${select("secondary1", "Secondary subject", classification?.secondarySubjects[0])}${select("secondary2", "Second secondary subject", classification?.secondarySubjects[1])}<label>Subcategory<input name="subcategory" maxlength="80" value="${escapeHtml(classification?.subcategory ?? "")}"></label><button class="button secondary" type="submit">Save classification</button></form></details>`;
+    const classification = card.sourceClassification;
+    const options = SUBJECTS.map(subject => `<option value="${subject.id}" ${subject.id === classification?.mainSubject ? "selected" : ""}>${escapeHtml(subject.label)}</option>`).join("");
+    return `<details data-library-details-key="classification-${escapeHtml(card.sourceId)}"><summary>${escapeHtml(classification?.topic ?? "Source classification")} · Edit source classification</summary><form class="classification-form" data-source-classification="${escapeHtml(card.sourceId)}" data-source-revision="${card.sourceRevision}" data-revision="${card.sourceClassificationRevision}"><label>Main subject<select name="mainSubject" required><option value="" disabled ${classification === null ? "selected" : ""}>Choose a main subject</option>${options}</select></label><label>Topic<input name="topic" maxlength="120" required value="${escapeHtml(classification?.topic ?? "")}"></label><button class="button secondary" type="submit">Save source classification</button></form></details>`;
   }
 
   /** @param {HTMLFormElement} form */
   async function correctClassification(form) {
     const values = new FormData(form);
-    const classification = { version: 1, primarySubject: values.get("primary") || null, secondarySubjects: [values.get("secondary1"), values.get("secondary2")].filter(value => value !== ""), subcategory: String(values.get("subcategory") ?? "").trim() || null };
-    const parsed = parseClassification(classification);
-    if (!parsed.ok) { classificationMessage = "Choose distinct subjects and a short plain-text subcategory. Unclassified items must have no subcategory or secondary subjects."; onChange(); return; }
-    const result = await gateway.correctClassification(form.dataset.classification ?? "", Number(form.dataset.revision), parsed.value);
-    classificationMessage = result.ok ? "Classification saved." : result.error.kind === "LearningBatchGatewayRejected" && result.error.failureKind === "ClassificationConflict" ? "This classification changed elsewhere. Reload the page before editing again." : "Classification could not be saved. Your changes have not been applied.";
+    const result = await gateway.updateSourceClassification({ sourceId: form.dataset.sourceClassification ?? "", sourceRevision: Number(form.dataset.sourceRevision), expectedRevision: Number(form.dataset.revision), mainSubject: String(values.get("mainSubject") ?? ""), topic: String(values.get("topic") ?? "").trim() });
+    classificationMessage = result.ok ? "Source classification saved." : result.error.kind === "LearningBatchGatewayRejected" && result.error.failureKind === "SourceClassificationRevisionConflict" ? "This source classification changed elsewhere. Reload the page before editing again." : "Source classification could not be saved. Your changes have not been applied.";
     if (result.ok) await loadFeed(); else onChange();
   }
 
@@ -214,17 +216,20 @@ export function createLearnerController(dependencies) {
   /** @param {LearningReviewQuestion} question */
   function renderQuestion(question) {
     const answer = answers.get(question.questionId);
-    const input = question.kind === "fill-blank"
+    const attempt = attempts.get(question.questionId);
+    const input = question.pairedVariants !== null ? question.pairedVariants.map((variant) => variant.kind === "fill-blank"
+      ? `<fieldset><legend>${escapeHtml(variant.prompt)}</legend>${variant.blanks?.map((blank, index) => `<label>Blank ${index + 1}<input type="text" name="pairedBlank:${escapeHtml(blank.id)}" size="28" autocomplete="off" required value="${escapeHtml(attempt?.blanks[blank.id] ?? "")}"></label>`).join("") ?? ""}</fieldset>`
+      : `<fieldset class="quiz-options"><legend>${escapeHtml(variant.prompt)}</legend>${variant.choices?.map((choice) => `<label><input type="${variant.kind === "multiple-choice" ? "checkbox" : "radio"}" name="selectedChoiceIds" value="${escapeHtml(choice.id)}" ${attempt?.selectedChoiceIds.includes(choice.id) ? "checked" : ""} ${variant.kind === "single-choice" ? "required" : ""}><span>${escapeHtml(choice.label)}</span></label>`).join("") ?? ""}</fieldset>`).join("") : question.kind === "fill-blank"
       ? question.blanks === null ? `<label>Answer<input type="text" name="answerText" autocomplete="off" required></label>` : question.blanks.map((blank, index) => `<label>Blank ${index + 1}<input type="text" name="blank:${escapeHtml(blank.id)}" autocomplete="off" required></label>`).join("")
       : question.choices === null
       ? `<p>This question type is not answerable in the current Review batch.</p>`
       : `<fieldset class="quiz-options"><legend class="sr-only">${escapeHtml(question.prompt)}</legend>${question.choices.map((choice) => `<label><input type="${question.kind === "multiple-choice" ? "checkbox" : "radio"}" name="selectedChoiceIds" value="${escapeHtml(choice.id)}"><span>${escapeHtml(choice.label)}</span></label>`).join("")}</fieldset>`;
     const completed = review.value?.batch?.status === "completed";
     const body = answer === undefined && !completed
-      ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate>${input}<button class="button primary" type="submit" ${question.choices === null && question.kind !== "fill-blank" ? "disabled" : ""}>Check answer</button></form>`
-      : `<p class="answer-feedback ${answer === undefined ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status">${answer === undefined ? "Completed. This question has been scheduled for its next interval." : answer.correct ? "Correct." : answer.score > 0 ? `Partly correct (${Math.round(answer.score * 100)}%).` : "Not quite."}</p>`;
+      ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate>${input}<button class="button primary" data-focus-key="review-submit:${escapeHtml(question.questionId)}" type="submit" ${question.choices === null && question.kind !== "fill-blank" && question.pairedVariants === null ? "disabled" : ""}>Check both answers</button></form>`
+      : `<p class="answer-feedback ${answer === undefined ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="review-feedback:${escapeHtml(question.questionId)}">${answer === undefined ? "Completed. This question has been scheduled for its next interval." : answer.correct ? "Correct." : question.pairedVariants !== null ? "Not quite." : answer.score > 0 ? `Partly correct (${Math.round(answer.score * 100)}%).` : "Not quite."}</p>`;
     const feedback = answer === undefined ? "" : `<details class="source-details" open><summary>Answer and source explanation</summary><p><strong>Correct answer:</strong> ${escapeHtml(answer.correctAnswer)}</p>${answer.components.length > 1 ? `<ul>${answer.components.map((component, index) => `<li>${question.kind === "fill-blank" ? `Blank ${index + 1}` : escapeHtml(question.choices?.find((choice) => choice.id === component.id)?.label ?? component.id)}: ${component.correct ? "correct" : "review"}${component.correctAnswer === "" ? "" : ` · ${escapeHtml(component.correctAnswer)}`}</li>`).join("")}</ul>` : ""}<p>${escapeHtml(answer.explanation)}</p><p>Evidence anchors: ${escapeHtml(question.sourceAnchorIds.join(", "))}</p></details>`;
-    return `<article class="review-card" data-review-question="${escapeHtml(question.questionId)}"><p class="review-question-meta">Paired with ${escapeHtml(question.title)}</p><h2>${escapeHtml(question.prompt)}</h2>${body}${feedback}</article>`;
+    return `<article class="review-card" data-review-question="${escapeHtml(question.questionId)}"><p class="review-question-meta">Paired with ${escapeHtml(question.title)}</p>${question.pairedVariants === null ? `<h2>${escapeHtml(question.prompt)}</h2>` : ""}${body}${feedback}</article>`;
   }
 
   /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */
@@ -232,7 +237,7 @@ export function createLearnerController(dependencies) {
 
   /** @param {HTMLElement} root */
   function bind(root) {
-    root.querySelectorAll("form[data-classification]").forEach(form => form.addEventListener("submit", event => { event.preventDefault(); if (form instanceof HTMLFormElement) void correctClassification(form); }));
+    root.querySelectorAll("form[data-source-classification]").forEach(form => form.addEventListener("submit", event => { event.preventDefault(); if (form instanceof HTMLFormElement) void correctClassification(form); }));
     root.querySelector("[data-action='retry-learner-feed']")?.addEventListener("click", () => void loadFeed());
     root.querySelector("[data-action='retry-learner-review']")?.addEventListener("click", () => void loadReview());
     root.querySelector("[data-action='refresh-learner-feed']")?.addEventListener("click", () => void refreshFeed());

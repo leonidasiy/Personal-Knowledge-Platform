@@ -113,6 +113,14 @@ function fixture(options = {}) {
         return { ok: true, value: ["source-1"] };
       },
     },
+    sourceClassification: {
+      updateManual: async (command) => {
+        commands.push(/** @type {Record<string, unknown>} */ (command));
+        if (/** @type {Record<string, unknown>} */ (command).ownerId !== "owner-a") return { ok: false, error: { kind: "SourceClassificationSourceMissing" } };
+        return { ok: true, value: { ownerId: "owner-a", sourceId: "source-1", sourceRevision: 1, mainSubject: "music", topic: "Cadential harmony", classificationRevision: 2 } };
+      },
+    },
+    sourceClassificationBackfill: { run: async (command) => { commands.push(/** @type {Record<string, unknown>} */ (command)); return { ok: true, value: { ownerId: "owner-a", counts: { scanned: 2, classified: 1, needsReview: 0, alreadyProcessed: 1, manualPreserved: 0 } } }; } },
   });
   return { worker, commands, logs };
 }
@@ -166,6 +174,27 @@ Deno.test("knowledge search route derives owner, forwards scope, and validates k
   assertEquals(body.result[0].knowledge.knowledgeId, "knowledge-1");
   assertEquals(commands[0].scope, "knowledge");
   assertEquals(commands[0].ownerId, "owner-a");
+});
+
+Deno.test("source classification edit derives owner, forwards the source revision contract, and returns a typed conflict", async () => {
+  const { worker, commands } = fixture();
+  const response = await worker.fetch(new Request("https://worker.example/api/source-library/classification", {
+    method: "POST", headers: { origin: "https://app.example", "content-type": "application/json" },
+    body: JSON.stringify({ sourceId: "source-1", sourceRevision: 1, expectedRevision: 1, mainSubject: "music", topic: "Cadential harmony" }),
+  }));
+  assertEquals(response.status, 200);
+  assertEquals(JSON.stringify(commands.at(-1)), JSON.stringify({ sourceId: "source-1", sourceRevision: 1, expectedRevision: 1, mainSubject: "music", topic: "Cadential harmony", ownerId: "owner-a", classification: { mainSubject: "music", topic: "Cadential harmony" } }));
+  const ownerOverride = await worker.fetch(new Request("https://worker.example/api/source-library/classification", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ownerId: "owner-b", sourceId: "source-1", sourceRevision: 1, expectedRevision: 1, mainSubject: "music", topic: "Cadential harmony" }) }));
+  assertEquals(ownerOverride.status, 400);
+});
+
+Deno.test("source classification backfill derives the authenticated owner and rejects owner overrides", async () => {
+  const { worker, commands } = fixture();
+  const response = await worker.fetch(new Request("https://worker.example/api/source-library/classification/backfill", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pageSize: 25 }) }));
+  assertEquals(response.status, 200);
+  assertEquals(JSON.stringify(commands.at(-1)), JSON.stringify({ ownerId: "owner-a", pageSize: 25 }));
+  const override = await worker.fetch(new Request("https://worker.example/api/source-library/classification/backfill", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ownerId: "owner-b", pageSize: 25 }) }));
+  assertEquals(override.status, 400);
 });
 
 Deno.test("source rejection derives owner and never accepts one from the client", async () => {

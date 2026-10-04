@@ -133,7 +133,7 @@ Deno.test("extraction replans, commits cited knowledge, and preserves the agent-
   assertEquals(result.value.state, "completed");
   assertEquals(fixture.points.length, 1);
   assertEquals(fixture.points[0].evidenceAnchors[0].selector, "#a");
-  assertEquals(JSON.stringify(fixture.points[0].classification), JSON.stringify({ version: 1, primarySubject: "music", secondarySubjects: [], subcategory: "theory" }));
+  assertEquals(Object.hasOwn(fixture.points[0], "classification"), false);
   assertEquals(result.value.scratchpad.consecutiveNoveltyZero, 2);
   assertEquals(result.value.scratchpad.processedUrls.join(","), "https://example.test/a,https://example.test/b,https://example.test/c");
   assertEquals(result.value.scratchpad.discoveredUrls?.join(","), "https://example.test/a,https://example.test/b,https://example.test/c");

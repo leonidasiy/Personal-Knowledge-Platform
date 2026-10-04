@@ -93,7 +93,7 @@ function fixture(options = {}) {
       }),
       knowledgeSemanticCandidates: ({ ownerId, limit }) => Promise.resolve({
         ok: true,
-        value: { candidates: ownerId === "owner-a" ? [{ knowledge: { knowledgeId: "knowledge-cadence", sourceId: "source-2", sourceTitle: "Source source-2", summary: "A cadence resolves harmonic tension.", sourceUrl: "https://publisher.example/source-2", evidenceAnchorIds: ["anchor-cadence"], questionLocked: true }, sourceRevision: 1 }].slice(0, limit) : [], privateDerivedCount: options.privateDerivedCount ?? 0 },
+          value: { candidates: ownerId === "owner-a" ? [{ knowledge: { knowledgeId: "knowledge-cadence", sourceId: "source-2", sourceTitle: "Source source-2", summary: "A cadence resolves harmonic tension.", sourceUrl: "https://publisher.example/source-2", evidenceAnchorIds: ["anchor-cadence"], questionLocked: true }, sourceRevision: 1, sourceTopic: null }].slice(0, limit) : [], privateDerivedCount: options.privateDerivedCount ?? 0 },
       }),
       activeByIds: ({ ownerId, sourceIds }) =>
         Promise.resolve({

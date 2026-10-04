@@ -85,6 +85,28 @@ Deno.test("knowledge model names missing credentials, timeout, and malformed out
   if (!invalid.ok) assertEquals(invalid.error.kind, "KnowledgeModelResponseInvalid");
 });
 
+Deno.test("source classification rejects duplicate JSON keys at every object depth", async () => {
+  for (const content of [
+    '{"mainSubject":"music","mainSubject":"arts","topic":"Harmony"}',
+    '{"mainSubject":"music","\\u006dainSubject":"arts","topic":"Harmony"}',
+    '{"mainSubject":"music","topic":"Harmony","nested":{"x":1,"x":2}}',
+  ]) {
+    const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async () => Response.json({ id: "request-duplicate", choices: [{ finish_reason: "stop", message: { content } }] }), now: () => 1_000, logger: () => {} });
+    const result = await model.generate({ role: "knowledge-scraper", systemPrompt: "Classify source.", input: { source: { title: "Synthetic" }, points: [{ summary: "Synthetic evidence" }] }, maxOutputTokens: 256, responseSchema: { name: "source_classification_v1", schema: { type: "object" } } });
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.error.kind, "KnowledgeModelResponseDuplicateKey");
+  }
+});
+
+Deno.test("duplicate-key scanner ignores key-like text and preserves other role behavior", async () => {
+  /** @type {(role: import("../worker/knowledge-workflow-model.js").KnowledgeModelRole, schemaName?: string) => ReturnType<ReturnType<typeof createOpenRouterKnowledgeModel>["generate"]>} */
+  const response = (role, schemaName) => createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async () => Response.json({ id: "request-ordinary", choices: [{ finish_reason: "stop", message: { content: '{"text":"\\\"mainSubject\\\": \\\"one\\\" and \\\"mainSubject\\\": \\\"two\\\""}' } }] }), now: () => 1_000, logger: () => {} }).generate({ role, systemPrompt: "Respond.", input: {}, maxOutputTokens: 64, ...(schemaName === undefined ? {} : { responseSchema: { name: schemaName, schema: { type: "object" } } }) });
+  const ordinary = await response("question-generator");
+  assertEquals(ordinary.ok, true);
+  const nonClassifierScraper = await response("knowledge-scraper", "material_image_v2");
+  assertEquals(nonClassifierScraper.ok, true);
+});
+
 Deno.test("knowledge model rejects a JSON object truncated by the output-token limit", async () => {
   const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async () => Response.json({ id: "request-length", choices: [{ finish_reason: "length", message: { content: JSON.stringify({ revision: 1, frontier: [] }) } }] }), now: () => 1_000, logger: () => {} });
   const result = await model.generate(command());

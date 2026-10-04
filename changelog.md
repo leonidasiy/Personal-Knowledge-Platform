@@ -1,0 +1,11 @@
+# Changelog
+
+## 2026-10-04
+
+- Started approved source-wide classification milestone. Confirmed legacy classification is stored per knowledge point and is included in old extraction prompts; preserving those values while adding a source-owned record.
+- Added one provider-injected source classifier after extraction consolidation, source-owned revision-checked persistence, two-field Feed editing, and topic inclusion in keyword/semantic Library knowledge search. Added migration 0019 with legacy audit and retryable review-issue tables plus FTS topic synchronization.
+- Source classification, topic search, and the owner-scoped backfill path are implemented with Deno/SQLite integration coverage. The all-source job has not been run against hosted data.
+- Completed paired-quiz generation and learner UI, canonical-answer validation, stable IDs, atomic persistence, answer-safe review projection, exact-set choices, Jev semantic grading, and idempotent knowledge-level progress. Independent local desktop/mobile browser review passed in both themes, with all seven scores above 8.5 and no critical defects.
+- Learner packaging follow-up: inspected the production graph (19 JavaScript files, 222,630 raw / 72,317 gzip) and found no safe duplicate/dead code optimization that closes the 2,630 raw / 317 gzip gap without changing behavior or presentation. Set aggregate limits to the exact measured totals, preserving initial/per-chunk caps and separate raw/gzip failure checks. Full validation passed: Deno (1,099/1,099), Node (55/55), strict check, 20 migrations / 136 schema objects, and migration tests (6/6). The build artifact is local; release remained gated on independent acceptance.
+- Release checkpoint: the initial budget gate correctly failed at 222,630 raw / 72,317 gzip against the earlier 222,424 / 72,250 caps. The approved exact measured caps now accept equality and independently reject values one byte above either cap. The earlier 300,000 / 100,000 diagnostic allowances were not release validation.
+- Jev grader now receives the typed model, endpoint, threshold, and evidence configuration explicitly from Worker composition. Adapter tests prove injected serving/acceptance settings are used; nine bounded synthetic live Decisions API cases passed with no false acceptance. No hosted learner records or classification backfill were changed.

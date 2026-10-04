@@ -9,7 +9,7 @@
 /** @typedef {{ readonly role: KnowledgeAgentRole, readonly systemPrompt: string, readonly input: unknown, readonly maxOutputTokens: number, readonly timeoutMs?: number, readonly attachments?: readonly KnowledgeModelAttachment[], readonly responseSchema?: KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput" }} KnowledgeModelCommand */
 /** @typedef {{ readonly role: KnowledgeModelRole, readonly systemPrompt: string, readonly input: unknown, readonly maxOutputTokens: number, readonly timeoutMs?: number, readonly attachments?: readonly KnowledgeModelAttachment[], readonly responseSchema?: KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput" }} KnowledgeModelTransportCommand */
 /** @typedef {{ readonly output: Record<string, unknown>, readonly requestId: string, readonly inputTokens: number | null, readonly outputTokens: number | null, readonly reasoningTrace: { readonly provider: string, readonly fields: readonly unknown[] } | null }} KnowledgeModelResult */
-/** @typedef {{ readonly kind: "KnowledgeModelCommandInvalid", readonly field: string } | { readonly kind: "KnowledgeModelCredentialMissing" } | { readonly kind: "KnowledgeModelTimeout" } | { readonly kind: "KnowledgeModelUnavailable" } | { readonly kind: "KnowledgeModelRejected", readonly status: number } | { readonly kind: "KnowledgeModelResponseInvalid", readonly field: string }} KnowledgeModelFailure */
+/** @typedef {{ readonly kind: "KnowledgeModelCommandInvalid", readonly field: string } | { readonly kind: "KnowledgeModelCredentialMissing" } | { readonly kind: "KnowledgeModelTimeout" } | { readonly kind: "KnowledgeModelUnavailable" } | { readonly kind: "KnowledgeModelRejected", readonly status: number } | { readonly kind: "KnowledgeModelResponseDuplicateKey" } | { readonly kind: "KnowledgeModelResponseInvalid", readonly field: string }} KnowledgeModelFailure */
 /** @typedef {{ readonly apiKey: string | null, readonly endpoint: string, readonly model: string, readonly timeoutMs: number, readonly maximumInputCharacters: number, readonly fetch: typeof fetch, readonly now: () => number, readonly logger: (entry: { readonly event: string, readonly role?: KnowledgeModelRole, readonly failureKind?: string, readonly diagnosticToken?: string, readonly durationMs?: number, readonly requestId?: string, readonly inputTokens?: number | null, readonly outputTokens?: number | null }) => void }} KnowledgeModelDependencies */
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
@@ -20,6 +20,65 @@ function text(value) { return typeof value === "string" && value.trim() !== ""; 
 function positiveInteger(value) { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
 /** @param {unknown} value @returns {value is number} */
 function nonNegativeInteger(value) { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
+
+/**
+ * JSON.parse accepts duplicate object names and keeps only the last value. Scan already-valid JSON
+ * text before parsing to reject that ambiguity without applying a JSON-like regular expression.
+ * Property names are decoded as JSON strings before comparison, so escaped-equivalent names match.
+ * @param {string} source
+ * @returns {boolean}
+ */
+function hasDuplicateJsonObjectKey(source) {
+  let index = 0;
+  /** @returns {string} */
+  function readString() {
+    const start = index++;
+    while (index < source.length) {
+      if (source[index] === "\\") { index += 2; continue; }
+      if (source[index++] === '"') return /** @type {string} */ (JSON.parse(source.slice(start, index)));
+    }
+    throw new SyntaxError("Validated JSON string ended unexpectedly.");
+  }
+  function whitespace() { while (index < source.length && /[\t\n\r ]/u.test(source[index])) index++; }
+  /** @returns {boolean} */
+  function readValue() {
+    whitespace();
+    if (source[index] === '"') { readString(); return false; }
+    if (source[index] === "{") {
+      index++;
+      whitespace();
+      const names = new Set();
+      if (source[index] === "}") { index++; return false; }
+      while (index < source.length) {
+        whitespace();
+        const name = readString();
+        if (names.has(name)) return true;
+        names.add(name);
+        whitespace(); index++; // validated colon
+        if (readValue()) return true;
+        whitespace();
+        if (source[index] === "}") { index++; return false; }
+        index++; // validated comma
+      }
+      throw new SyntaxError("Validated JSON object ended unexpectedly.");
+    }
+    if (source[index] === "[") {
+      index++;
+      whitespace();
+      if (source[index] === "]") { index++; return false; }
+      while (index < source.length) {
+        if (readValue()) return true;
+        whitespace();
+        if (source[index] === "]") { index++; return false; }
+        index++; // validated comma
+      }
+      throw new SyntaxError("Validated JSON array ended unexpectedly.");
+    }
+    while (index < source.length && !/[\s,}\]]/u.test(source[index])) index++;
+    return false;
+  }
+  return readValue();
+}
 const MAXIMUM_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAXIMUM_ATTACHMENT_TOTAL_BYTES = 32 * 1024 * 1024;
 /** @param {unknown} value @returns {value is KnowledgeModelAttachment} */
@@ -104,6 +163,15 @@ export function createOpenRouterKnowledgeModel(dependencies) {
       if (choice.finish_reason !== "stop") return fail({ kind: "KnowledgeModelResponseInvalid", field: "finish_reason" }, dependencies, command.role, startedAt, "finish-reason");
       if (!record(choice.message) || !text(choice.message.content)) return fail({ kind: "KnowledgeModelResponseInvalid", field: "message.content" }, dependencies, command.role, startedAt, "message-content-empty");
       let output;
+      if (command.responseSchema?.name === "source_classification_v1") {
+        try {
+          JSON.parse(choice.message.content);
+          if (hasDuplicateJsonObjectKey(choice.message.content)) return fail({ kind: "KnowledgeModelResponseDuplicateKey" }, dependencies, command.role, startedAt, "message-content-duplicate-key");
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error;
+          return fail({ kind: "KnowledgeModelResponseInvalid", field: "message.content.json" }, dependencies, command.role, startedAt, "message-content-json");
+        }
+      }
       try { output = JSON.parse(choice.message.content); } catch (error) {
         if (error instanceof SyntaxError) return fail({ kind: "KnowledgeModelResponseInvalid", field: "message.content.json" }, dependencies, command.role, startedAt, "message-content-json");
         throw error;

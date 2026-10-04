@@ -18,7 +18,7 @@ const WORKFLOW_STATUS_REFRESH_MS = 5_000;
 
 /** @typedef {{ readonly observe: (element: Element) => void, readonly disconnect: () => void }} PageObserver */
 /** @typedef {{ readonly batchId: string, readonly learningDay: string, readonly status: "open" | "completed", readonly itemIds: readonly string[], readonly revision: number, readonly createdAt: string, readonly completedAt: string | null }} LibraryBatchModel */
-/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly summary: string, readonly questionLocked: boolean, readonly primarySubject: string|null }} LibraryKnowledgeCard */
+/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly summary: string, readonly questionLocked: boolean, readonly primarySubject: string|null, readonly sourceTopic: string|null }} LibraryKnowledgeCard */
 /** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly sourceTitle: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly questionLocked: boolean, readonly score: number, readonly matchedBy: "exact" | "semantic" | "combined" }} LibraryKnowledgeSearchCard */
 
 /**
@@ -92,7 +92,7 @@ export function createLibraryPage(dependencies) {
     if (!(error instanceof Error)) throw error;
     onError("Your Library subject preference could not be restored. You can still choose a shelf.");
   }
-  /** @type {SourceSearchScope} */ let searchScope = "sources";
+  /** @type {SourceSearchScope} */ let searchScope = "knowledge";
   /** @type {string | null} */ let message = null;
   /** @type {string | null} */ let pendingSourceId = null;
   /** @type {LibraryKnowledgeCard[]} */ let knowledge = [];
@@ -124,6 +124,7 @@ export function createLibraryPage(dependencies) {
         summary: card.summary,
         questionLocked: card.questionLocked,
         primarySubject: card.primarySubject,
+        sourceTopic: card.sourceTopic,
       }))),
     });
 
@@ -136,7 +137,7 @@ export function createLibraryPage(dependencies) {
         items = [];
         knowledge = [];
         nextCursor = null;
-        searchScope = "sources";
+        searchScope = "knowledge";
         knowledgeSearchResults = [];
         message = null;
         workflowStatuses = [];
@@ -181,7 +182,7 @@ export function createLibraryPage(dependencies) {
     stopWorkflowStatusPolling();
     query = rawQuery.trim();
     const rawScope = data.get("searchScope");
-    searchScope = rawScope === "knowledge" ? "knowledge" : "sources";
+    searchScope = rawScope === "sources" ? "sources" : "knowledge";
     if (query === "") return await load(true);
     state = "loading";
     message = null;
@@ -251,7 +252,8 @@ export function createLibraryPage(dependencies) {
         sourceId: card.sourceId,
         summary: card.summary,
         questionLocked: card.questionLocked,
-        primarySubject: card.classification?.primarySubject ?? null,
+        primarySubject: card.sourceClassification?.mainSubject ?? null,
+        sourceTopic: card.sourceClassification?.topic ?? null,
       }));
       const newest = [...items].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt) || b.id.localeCompare(a.id))[0];
       if (subject === null && newest) subject = librarySourceSubjects(newest.id, knowledge)[0];

@@ -24,7 +24,7 @@ import { SUBJECTS, isSubjectId } from "../features/knowledge-subjects/public.js"
 /**
  * @typedef {{
  *   readonly collection: SourceCollectionModel,
- *   readonly knowledge?: readonly { readonly knowledgeId: string, readonly sourceId: string, readonly summary: string, readonly questionLocked: boolean, readonly primarySubject?: string | null }[],
+ *   readonly knowledge?: readonly { readonly knowledgeId: string, readonly sourceId: string, readonly summary: string, readonly questionLocked: boolean, readonly primarySubject?: string | null, readonly sourceTopic?: string | null }[],
  *   readonly knowledgeSearchResults?: readonly { readonly knowledgeId: string, readonly sourceId: string, readonly sourceTitle: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds?: readonly string[], readonly questionLocked: boolean, readonly score: number, readonly matchedBy: "exact" | "semantic" | "combined" }[],
  *   readonly workflowStatuses?: readonly WorkflowSourceStatus[],
  *   readonly escapeHtml: (value: string) => string,
@@ -54,9 +54,9 @@ function renderProcessingStatus(model) {
 function renderCollection(model) {
   const collection = model.collection;
   const escapeHtml = model.escapeHtml;
-  const searchScope = collection.searchScope ?? "sources";
-  const searchingKnowledge = searchScope === "knowledge";
-  const search = shellMarkup(2, searchingKnowledge ? "" : "selected", searchingKnowledge ? "selected" : "", escapeHtml(collection.query), searchingKnowledge ? shellMarkup(21) : shellMarkup(22));
+  const searchScope = collection.searchScope ?? "knowledge";
+  const searchingKnowledge = searchScope === "knowledge" && collection.query.trim() !== "";
+  const search = shellMarkup(2, searchScope === "sources" ? "selected" : "", searchScope === "knowledge" ? "selected" : "", escapeHtml(collection.query), searchScope === "knowledge" ? shellMarkup(21) : shellMarkup(22));
   if (collection.state === "loading" && collection.items.length === 0) {
     return shellMarkup(3, search, searchingKnowledge ? shellMarkup(23) : "Opening sources", searchingKnowledge ? shellMarkup(24) : shellMarkup(25));
   }
@@ -145,13 +145,11 @@ function renderSource(model, source) {
   return shellMarkup(20, sourceId, sourceId, escapeHtml(source.adapter.id), escapeHtml(source.title), escapeHtml(source.description), escapeHtml(source.adapter.granularity), capabilities === "" ? "" : ` · ${escapeHtml(capabilities)}`, formatDate(source.approvedAt), workflowNotice, upload, workflowRetry, escapeHtml(source.canonicalUrl), related, sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
 }
 
-/** @param {readonly { readonly summary: string }[]} knowledge @returns {string} */
+/** @param {readonly { readonly summary: string, readonly sourceTopic?: string|null }[]} knowledge @returns {string} */
 function knowledgeOverview(knowledge) {
-  // ponytail: first-sentence heuristic keeps this overview local and bounded; use persisted source summaries if topic quality becomes inadequate.
-  const topics = [...new Set(knowledge.map(({ summary }) => summary.replace(/^(?:this|the)\s+\w+\s+(?:introduces|explains|covers)\s+/iu, "").split(/[.!?]/u, 1)[0].trim()))].filter(Boolean);
-  const lead = `Contains ${knowledge.length} retained knowledge ${knowledge.length === 1 ? "point" : "points"} covering`;
-  const text = topics.length === 0 ? "broad concepts from this source" : topics.join("; ");
-  return `${lead} ${text.slice(0, 240 - lead.length - 1)}.`;
+  const sourceTopic = [...new Set(knowledge.map(({ sourceTopic }) => sourceTopic?.trim() ?? "").filter(Boolean))][0];
+  const lead = `Contains ${knowledge.length} retained knowledge ${knowledge.length === 1 ? "point" : "points"}`;
+  return sourceTopic === undefined ? `${lead}.` : `${lead} · Source topic: ${sourceTopic.slice(0, 240 - lead.length - 18)}.`;
 }
 
 /** @param {LibrarySource} source @param {WorkflowSourceStatus | null} status @returns {string | null} */

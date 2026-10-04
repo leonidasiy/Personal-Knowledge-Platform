@@ -150,7 +150,7 @@ Deno.test("Library restores subject selection and reports unavailable or invalid
       fetch: async input => {
         const path = new URL(String(input)).pathname;
         if (path.endsWith("/source-library")) return Response.json({ result: { items: [source, sourceB], interestAreas: [], nextCursor: null } });
-        if (path.endsWith("/library-knowledge")) return Response.json({ result: { items: [source, sourceB].map((item, i) => ({ knowledgeId: `k${i}`, sourceId: item.id, questionId: `q${i}`, title: item.title, summary: "A useful idea.", sourceUrl: item.canonicalUrl, evidenceAnchorIds: ["anchor"], media: null, questionLocked: true, classification: { version: 1, primarySubject: SUBJECTS[i].id, secondarySubjects: [], subcategory: "Source context" }, classificationRevision: 0 })) } });
+        if (path.endsWith("/library-knowledge")) return Response.json({ result: { items: [source, sourceB].map((item, i) => ({ knowledgeId: `k${i}`, sourceId: item.id, sourceRevision: item.revision, questionId: `q${i}`, title: item.title, summary: "A useful idea.", sourceUrl: item.canonicalUrl, evidenceAnchorIds: ["anchor"], media: null, questionLocked: true, sourceClassification: { mainSubject: SUBJECTS[i].id, topic: "Source context" }, sourceClassificationRevision: 0 })) } });
         if (path.endsWith("/source-status")) return Response.json({ result: { sourceId: new URL(String(input)).searchParams.get("sourceId"), run: null, reasonCode: null, message: null } });
         throw new Error(`Unexpected fixture path: ${path}`);
       },
@@ -329,7 +329,6 @@ Deno.test("Library is source-only and renders a broad related-knowledge overview
     "Processing is automatic",
     "Related knowledge",
     "1 retained knowledge point",
-    "harmonic motion, cadences",
   ]) assert(html.includes(expected), `Missing ${expected}.`);
   assert(!html.includes("data-library-knowledge-remove"), "Source cards must not expose individual knowledge controls.");
   assert(!html.includes("Question unlocks after Feed study"), "Source overviews must not expose quiz state for individual points.");
@@ -373,27 +372,26 @@ Deno.test("Library source search renders source cards with only a broad knowledg
   assert(html.includes("Harmony source"), "Source search must render the matching source card.");
   assert(html.includes("Related knowledge"), "Source search must retain the broad related-knowledge overview.");
   assert(html.includes("2 retained knowledge points"), "The overview must include the retained knowledge count.");
-  assert(html.includes("piano keyboard and grand staff"), "The overview must expose broad topics.");
-  assert(html.includes("half steps, whole steps, and accidentals"), "The overview must combine broad topics across points.");
+  assert(!html.includes("piano keyboard and grand staff"), "The overview must not guess source-owned topics from point summaries.");
   assert(!html.includes(knowledge[0].summary) && !html.includes(knowledge[1].summary), "Source search must not render individual knowledge summaries.");
   assert(!html.includes("data-library-knowledge-remove"), "Source search must not expose individual knowledge controls.");
   assert(html.includes("Open original source"), "Source search must retain the source link.");
 });
 
-Deno.test("Library related-knowledge overview is bounded, deduplicated, and escaped", () => {
+Deno.test("Library related-knowledge overview displays the source-owned topic", () => {
   const repeated = "This lesson covers scales, modes, and tonal centers in music theory.";
   const html = renderLibraryRoute({
     ...baseModel(),
     knowledge: [
-      { knowledgeId: "knowledge-a", sourceId: "source-a", summary: repeated, questionLocked: true },
-      { knowledgeId: "knowledge-b", sourceId: "source-a", summary: repeated, questionLocked: false },
-      { knowledgeId: "knowledge-c", sourceId: "source-a", summary: `${repeated} <script>alert(1)</script>`, questionLocked: true },
+      { knowledgeId: "knowledge-a", sourceId: "source-a", summary: repeated, sourceTopic: "Cadential harmony", questionLocked: true },
+      { knowledgeId: "knowledge-b", sourceId: "source-a", summary: repeated, sourceTopic: "Cadential harmony", questionLocked: false },
+      { knowledgeId: "knowledge-c", sourceId: "source-a", summary: `${repeated} <script>alert(1)</script>`, sourceTopic: "Cadential harmony", questionLocked: true },
     ],
   });
   assert(html.includes("3 retained knowledge points"), "The overview count must include every retained point.");
-  assert(html.includes("scales, modes, and tonal centers"), "The overview must retain a useful broad topic.");
+  assert(html.includes("Source topic: Cadential harmony"), "The overview must display the persisted source topic.");
   assert(!html.includes("<script>alert(1)</script>"), "Overview text must be escaped.");
-  assert(html.match(/scales, modes, and tonal centers/g)?.length === 1, "Repeated topics must appear once in the overview.");
+  assert(!html.includes("scales, modes, and tonal centers"), "Point summaries must not be treated as source topics.");
   const overview = html.match(/<p class="library-knowledge-overview">([\s\S]*?)<\/p>/)?.[1] ?? "";
   assert(overview.length <= 300, "The related-knowledge overview must remain bounded.");
 });
@@ -588,7 +586,7 @@ Deno.test("Library controller loads source knowledge and removes one knowledge p
       const url = new URL(String(input));
       requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
       if (url.pathname.endsWith("/source-library")) return Promise.resolve(Response.json({ result: { items: [source], interestAreas: [], nextCursor: null } }));
-      if (url.pathname.endsWith("/library-knowledge")) return Promise.resolve(Response.json({ result: { items: [{ knowledgeId: "knowledge-a", sourceId: "source-a", questionId: "question-a", title: "Harmony source", summary: "A cadence resolves musical tension.", sourceUrl: source.canonicalUrl, evidenceAnchorIds: ["anchor-a"], media: null, questionLocked: false }] } }));
+      if (url.pathname.endsWith("/library-knowledge")) return Promise.resolve(Response.json({ result: { items: [{ knowledgeId: "knowledge-a", sourceId: "source-a", sourceRevision: source.revision, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-a", title: "Harmony source", summary: "A cadence resolves musical tension.", sourceUrl: source.canonicalUrl, evidenceAnchorIds: ["anchor-a"], media: null, questionLocked: false }] } }));
       if (url.pathname.endsWith("/knowledge-remove")) return Promise.resolve(Response.json({ result: { knowledgeId: "knowledge-a", removed: true } }));
       return Promise.resolve(Response.json({ error: "Not found" }, { status: 404 }));
     },
@@ -606,7 +604,7 @@ Deno.test("Library controller loads source knowledge and removes one knowledge p
   });
   await page.load();
   const initial = page.render({});
-  assert(initial.includes("A cadence resolves musical tension."), "Library must show loaded knowledge.");
+  assert(initial.includes("Related knowledge"), "Library must show source-level knowledge context.");
   page.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({
     querySelector: () => null,
     querySelectorAll: (/** @type {string} */ selector) => {
@@ -621,7 +619,7 @@ Deno.test("Library controller loads source knowledge and removes one knowledge p
   action();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert(requests.some((request) => request.includes("POST /api/learning-generation/knowledge-remove")), "Library must call the paired knowledge removal endpoint.");
-  assert(!page.render({}).includes("A cadence resolves musical tension."), "Removed knowledge must disappear from the current Library projection.");
+  assert(!page.render({}).includes("1 retained knowledge point"), "Removed knowledge must disappear from the current Library projection.");
 });
 
 Deno.test("Library controller searches retained knowledge across sources", async () => {
@@ -631,7 +629,10 @@ Deno.test("Library controller searches retained knowledge across sources", async
       if (url.pathname.endsWith("/source-library")) return Promise.resolve(Response.json({ result: { items: [source], interestAreas: [], nextCursor: null } }));
       if (url.pathname.endsWith("/library-knowledge")) return Promise.resolve(Response.json({ result: { items: [] } }));
       if (url.pathname.endsWith("/source-status")) return Promise.resolve(Response.json({ result: { sourceId: source.id, run: null, reasonCode: null, message: null } }));
-      if (url.pathname.endsWith("/source-library/search")) return Promise.resolve(Response.json({ result: [{ knowledge: { knowledgeId: "knowledge-cadence", sourceId: source.id, sourceTitle: source.title, summary: "A cadence resolves harmonic tension.", sourceUrl: source.canonicalUrl, evidenceAnchorIds: ["anchor-cadence"], questionLocked: true }, score: 0.84, matchedBy: "semantic" }] }));
+      if (url.pathname.endsWith("/source-library/search")) {
+        assert(url.searchParams.get("scope") === "knowledge", "A query without a scope must search knowledge.");
+        return Promise.resolve(Response.json({ result: [{ knowledge: { knowledgeId: "knowledge-cadence", sourceId: source.id, sourceTitle: source.title, summary: "A cadence resolves harmonic tension.", sourceUrl: source.canonicalUrl, evidenceAnchorIds: ["anchor-cadence"], questionLocked: true }, score: 0.84, matchedBy: "semantic" }] }));
+      }
       return Promise.resolve(Response.json({ error: "Not found" }, { status: 404 }));
     },
     gatewayBaseUrl: "https://app.example/",
@@ -649,12 +650,36 @@ Deno.test("Library controller searches retained knowledge across sources", async
   await page.load();
   const form = new FormData();
   form.set("query", "cadence");
-  form.set("searchScope", "knowledge");
   await page.search(form);
   const html = page.render({});
   assert(html.includes("A cadence resolves harmonic tension."), "Knowledge search must replace source cards with retained knowledge matches.");
   assert(html.includes('<a href="https://publisher.example/learn" target="_blank" rel="noopener noreferrer">Harmony source</a>'), "Knowledge search must preserve linked source provenance.");
   assert(html.includes("semantic match"), "Knowledge search must preserve the match type.");
+});
+
+Deno.test("Library defaults to knowledge search and preserves source topic from classification", async () => {
+  let requestedScope = null;
+  const page = createLibraryPage({
+    fetch: (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/source-library")) return Promise.resolve(Response.json({ result: { items: [source], interestAreas: [], nextCursor: null } }));
+      if (url.pathname.endsWith("/library-knowledge")) return Promise.resolve(Response.json({ result: { items: [{ knowledgeId: "k-topic", sourceId: source.id, sourceRevision: source.revision, questionId: "q-topic", title: "Point", summary: "A summary without the rare phrase.", sourceUrl: source.canonicalUrl, evidenceAnchorIds: ["anchor"], media: null, questionLocked: true, sourceClassification: { mainSubject: "music", topic: "Xylophone archival taxonomy" }, sourceClassificationRevision: 2 }] } }));
+      if (url.pathname.endsWith("/source-status")) return Promise.resolve(Response.json({ result: { sourceId: source.id, run: null, reasonCode: null, message: null } }));
+      if (url.pathname.endsWith("/source-library/search")) {
+        requestedScope = url.searchParams.get("scope");
+        return Promise.resolve(Response.json({ result: [{ knowledge: { knowledgeId: "k-topic", sourceId: source.id, sourceTitle: source.title, summary: "A summary without the rare phrase.", sourceUrl: source.canonicalUrl, evidenceAnchorIds: ["anchor"], questionLocked: true }, score: 1, matchedBy: "exact" }] }));
+      }
+      return Promise.resolve(Response.json({ error: "Not found" }, { status: 404 }));
+    },
+    gatewayBaseUrl: "https://app.example/", escapeHtml: (value) => value, formatDate: (value) => value,
+    createId: () => "id-topic", confirmDisable: () => true, createObserver: () => null, schedule: () => 1, cancel: () => {}, onNotice: () => {}, onError: () => {}, rerender: () => {},
+  });
+  await page.load();
+  const form = new FormData();
+  form.set("query", "Xylophone archival taxonomy");
+  await page.search(form);
+  assert(requestedScope === "knowledge", "Default Library query searches retained knowledge.");
+  assert(page.render({}).includes("A summary without the rare phrase."), "Topic-only hit renders without selecting a scope.");
 });
 
 Deno.test("Library renders source cards before secondary knowledge requests finish", async () => {
@@ -898,12 +923,12 @@ Deno.test("Upload material failure retains inline retry context without a global
 Deno.test("Library refresh invalidates previously loaded knowledge before replacement arrives", async () => {
   let reads = 0;
   const page = createLibraryPage({fetch:async url=>{
-    if(String(url).includes("library-knowledge")) return ++reads === 1 ? Response.json({result:{items:[{knowledgeId:"k",sourceId:source.id,questionId:"q",title:source.title,summary:"Previously retained idea",sourceUrl:source.canonicalUrl,evidenceAnchorIds:["a"],media:null,questionLocked:true}]}}) : Response.json({error:"Unavailable"},{status:503});
+    if(String(url).includes("library-knowledge")) return ++reads === 1 ? Response.json({result:{items:[{knowledgeId:"k",sourceId:source.id,sourceRevision:source.revision,sourceClassification:{mainSubject:"music",topic:"Previously retained idea"},sourceClassificationRevision:0,questionId:"q",title:source.title,summary:"A point summary",sourceUrl:source.canonicalUrl,evidenceAnchorIds:["a"],media:null,questionLocked:true}]}}) : Response.json({error:"Unavailable"},{status:503});
     if(String(url).includes("source-status")) return Response.json({result:{sourceId:source.id,run:null,reasonCode:null,message:null}});
     return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});
   },gatewayBaseUrl:"https://app.example/",escapeHtml:value=>value,formatDate:value=>value,createId:()=>"id",confirmDisable:()=>true,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
-  await page.load(); assert(page.render({}).includes("Previously retained idea"),"Initial eligible knowledge is shown.");
-  await page.load(); assert(!page.render({}).includes("Previously retained idea"),"Failed refresh cannot leave stale knowledge visible.");
+  await page.load(); assert(page.render({}).includes("Source topic: Previously retained idea"),"Initial source-owned topic is shown.");
+  await page.load(); assert(!page.render({}).includes("Source topic: Previously retained idea"),"Failed refresh cannot leave stale knowledge visible.");
 });
 Deno.test("Source search invalidates old knowledge when the source revision changes", async () => {
  let reads=0;
