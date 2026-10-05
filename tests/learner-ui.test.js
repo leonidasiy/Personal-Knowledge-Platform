@@ -75,6 +75,23 @@ Deno.test("Feed source editor exposes only main subject dropdown and free-text t
   assert(!/name="(?:secondary|subcategory|primarySubject)"/iu.test(editor), "Per-point taxonomy fields are absent.");
 });
 
+Deno.test("Feed displays topic beneath subject separately from the classification editor", async () => {
+  const items = [
+    { knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 3, sourceClassificationRevision: 2, sourceClassification: { mainSubject: "music", topic: "Cadential harmony" }, questionId: "question-1", title: "Classified source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: true },
+    { knowledgeId: "knowledge-2", sourceId: "source-2", sourceRevision: 1, sourceClassificationRevision: 0, sourceClassification: null, questionId: "question-2", title: "Unclassified source", summary: "Another relationship.", sourceUrl: "https://example.test/other", evidenceAnchorIds: ["page:2"], media: null, questionLocked: true },
+  ];
+  const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:classification", itemIds: items.map((item) => item.knowledgeId) }, items } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
+  await controller.loadFeed();
+  const html = controller.renderFeed();
+  const classified = html.slice(html.indexOf('data-knowledge-id="knowledge-1"'), html.indexOf("</article>"));
+  assert(classified.indexOf('class="card-subject"') < classified.indexOf("<p>Cadential harmony</p>") && classified.indexOf("<p>Cadential harmony</p>") < classified.indexOf('Edit source classification'), "Classified card order must be subject, separate topic, then editor action.");
+  assert(classified.includes("<p>Cadential harmony</p>"), "The existing topic must display as its own card field.");
+  assert(classified.includes("<summary>Edit source classification</summary>"), "The disclosure summary must be an action, not the topic.");
+  const unclassified = html.slice(html.indexOf('data-knowledge-id="knowledge-2"'), html.indexOf("</article>", html.indexOf('data-knowledge-id="knowledge-2"')));
+  assert(unclassified.includes("Unclassified") && !unclassified.includes("Cadential harmony") && unclassified.includes("</p><div class=\"card-context\">"), "An unclassified card keeps its subject label without a standalone topic.");
+  assert(unclassified.includes('name="topic"'), "Topic remains editable in the existing editor.");
+});
+
 Deno.test("completed Feed replaces study action with one Review continuation", async () => {
   const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:done", status: "completed", completedAt: "2026-09-01T12:00:00.000Z", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: false }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
   await controller.loadFeed();

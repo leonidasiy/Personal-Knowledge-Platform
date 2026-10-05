@@ -24,9 +24,9 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   }),
   stylesheet: Object.freeze({
     label: "CSS",
-    // Full structural showcase revamp approved 2026-09-19; gzip unchanged.
-    rawBytes: 30_000,
-    gzipBytes: 7_000,
+    // All 22 subject identities: owner-approved CSS allowance 2026-10-05.
+    rawBytes: 37_000,
+    gzipBytes: 8_000,
   }),
   pdfRenderer: Object.freeze({
     label: "On-demand PDF renderer",

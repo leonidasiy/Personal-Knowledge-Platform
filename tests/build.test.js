@@ -194,10 +194,10 @@ Deno.test("artifact budgets accept exact boundaries", () => {
   );
   assertEquals(javascript.ok, true);
   assertEquals(stylesheet.ok, true);
-  assertEquals(ARTIFACT_BUDGETS.stylesheet.rawBytes, 30_000);
-  assertEquals(ARTIFACT_BUDGETS.stylesheet.gzipBytes, 7_000);
+  assertEquals(ARTIFACT_BUDGETS.stylesheet.rawBytes, 37_000);
+  assertEquals(ARTIFACT_BUDGETS.stylesheet.gzipBytes, 8_000);
   const oversizedStylesheet = validateArtifactBudget(
-    { path: "src/styles.css", rawBytes: 30_001, gzipBytes: 1 },
+    { path: "src/styles.css", rawBytes: 37_001, gzipBytes: 1 },
     ARTIFACT_BUDGETS.stylesheet,
   );
   assertEquals(oversizedStylesheet.ok, false);
@@ -389,7 +389,7 @@ Deno.test("artifact budgets return distinct raw and gzip failures", () => {
     ARTIFACT_BUDGETS.javascript,
   );
   const gzipFailure = validateArtifactBudget(
-    { path: "src/styles.css", rawBytes: 1, gzipBytes: 7_001 },
+    { path: "src/styles.css", rawBytes: 1, gzipBytes: 8_001 },
     ARTIFACT_BUDGETS.stylesheet,
   );
   assertEquals(rawFailure.ok, false);
