@@ -1,8 +1,9 @@
 role: rights-assessor
-version: rights-assessor-v3
+version: rights-assessor-v4
 model:
   provider: openrouter
   name: z-ai/glm-5.3-flash
+  reasoningEffort: high
 procedureVersion: rights-procedure-v1
 promptVersion: rights-prompt-v1
 inputSchema: rights-assessment-command-v1

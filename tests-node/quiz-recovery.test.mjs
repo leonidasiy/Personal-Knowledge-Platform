@@ -8,8 +8,9 @@ import {
 } from "../worker/knowledge-workflow-content-d1.js";
 import { D1KnowledgeWorkflowRepository } from "../worker/knowledge-workflow-d1.js";
 import { createKnowledgeWorkflowService } from "../src/features/knowledge-workflows/workflow.js";
-import { createQuizActorCritic } from "../src/features/knowledge-workflows/quiz.js";
-import { assembleQuizPair } from "../src/features/knowledge-workflows/quiz-pair.js";
+import { createQuizActorCritic, isKnowledgeQuizEvaluation, normalizeKnowledgeQuizEvaluation } from "../src/features/knowledge-workflows/quiz.js";
+import { assembleQuizPair, isQuizPairDraft, quizPairDraftValidationIssues, quizPairSchema } from "../src/features/knowledge-workflows/quiz-pair.js";
+import { questionGeneratorPrompt, questionEvaluatorPrompt, questionEvaluationSchema } from "../worker/knowledge-workflow-runtime.js";
 import { createLearningBatchService } from "../worker/learning-batches-d1.js";
 
 async function fixture() {
@@ -178,6 +179,7 @@ test("publication failure retries retain old attempts, publish once and cascade 
     assert.deepEqual(await actor.run(command), {
       ok: true,
       value: {
+        statistics:{inputPoints:1,attemptedPoints:1,retriedPoints:0,extraAttempts:0,retryRate:0,quizDroppedPoints:0,quizDropRate:0,exhaustedDropPoints:0,preferenceDroppedPoints:0},
         dispositions: [{
           knowledgeId: "point",
           status: "accepted",
@@ -206,6 +208,7 @@ test("publication failure retries retain old attempts, publish once and cascade 
     assert.deepEqual(await actor.run(command), {
       ok: true,
       value: {
+        statistics:{inputPoints:1,attemptedPoints:1,retriedPoints:0,extraAttempts:0,retryRate:0,quizDroppedPoints:0,quizDropRate:0,exhaustedDropPoints:0,preferenceDroppedPoints:0},
         dispositions: [{
           knowledgeId: "point",
           status: "accepted",
@@ -361,4 +364,139 @@ test("retry audit failure rolls back its legacy parent and reports persistence f
   } finally {
     f.db.close();
   }
+});
+
+
+// Synthetic contract checks do not establish model quality or source-derived learning results.
+test("paired quiz canonical-only answers are valid; optional synonyms cannot be cosmetic aliases", () => {
+  const draft = {
+    knowledgeId: "synthetic-point", knowledgeRevision: 1,
+    canonicalAnswers: ["L2"], citedEvidenceUrls: ["https://example.test/source"],
+    multipleChoice: { prompt: "Which synthetic label completes the mapping?", options: [{key:"choice-a",text:"Second label"},{key:"choice-b",text:"First label"}], correctOptionKeys:["choice-a"],correctOptionAnswers:[{key:"choice-a",canonicalAnswer:"L2"}],explanation:"Synthetic mapping." },
+    fillBlank: { prompt:"The synthetic mapping uses ____.",blanks:[{id:"blank-1",canonicalAnswer:"L2",acceptedAnswers:["L2"]}],explanation:"Synthetic mapping." },
+  };
+  assert.equal(isQuizPairDraft(draft), true);
+  const synonym = structuredClone(draft); synonym.fillBlank.blanks[0].acceptedAnswers.push("second label");
+  assert.equal(isQuizPairDraft(synonym), true);
+  for (const cosmetic of ["L₂", "Ｌ２", "l2", " L2 "]) {
+    const duplicate = structuredClone(draft); duplicate.fillBlank.blanks[0].acceptedAnswers.push(cosmetic);
+    assert.equal(isQuizPairDraft(duplicate), false);
+    assert.throws(() => assembleQuizPair(duplicate, "quiz:synthetic"), /invalid/);
+  }
+  assert.match(questionGeneratorPrompt, /paired-question-generator-v6/);
+  for (const guidance of [questionGeneratorPrompt, quizPairSchema(true).schema.properties.fillBlank.properties.blanks.items.properties.acceptedAnswers.description]) {
+    assert.match(guidance, /exact canonical answer alone is sufficient/);
+    assert.match(guidance, /Synonyms are optional/);
+    assert.match(guidance, /never cosmetic glyph or Unicode variants/);
+    assert.match(guidance, /NFKC/);
+  }
+  assert.equal(quizPairSchema(true).schema.properties.fillBlank.properties.blanks.items.properties.acceptedAnswers.minItems, 1);
+});
+
+for (const branch of ["typed-schema-failure", "invalid-draft", "legacy-thrown-generator"]) {
+  test(`invalid quiz feedback keeps aliases optional without extending ${branch} attempts`, async () => {
+    const inputs = [], attempts = []; let discarded = 0, evaluated = 0;
+    const point = {id:"synthetic-point",sourceId:"source",sourceRevision:1,summary:"A synthetic mapping.",evidenceAnchors:[{url:"https://example.test/source",selector:"main"}]};
+    const maxAttempts = branch === "legacy-thrown-generator" ? 3 : 2;
+    const actor = createQuizActorCritic({
+      maxAttempts, now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},
+      repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async()=>{throw Error("Invalid draft must not publish.");},discard:async()=>{discarded++;return {ok:true,value:null};},purge:async()=>({ok:true,value:null})},
+      generator:{generate:async input=>{inputs.push(input);if(branch==="legacy-thrown-generator")throw Error("Synthetic invalid provider envelope.");return branch==="typed-schema-failure"?{ok:false,error:{kind:"QuizDraftSchemaInvalid"}}:{ok:true,value:{}};}},
+      evaluator:{evaluate:async()=>{evaluated++;throw Error("Invalid draft must not reach critic.");}},
+    });
+    const result = await actor.run({ownerId:"owner",runId:"run",points:[point]});
+    if(maxAttempts===2)assert.deepEqual(result,{ok:false,error:{kind:"QuizGeneratorFailed",causeKind:"QuizDraftSchemaInvalid"}});
+    else {assert.equal(result.ok,true);assert.equal(result.value.dispositions[0].status,"abandoned");assert.equal(result.value.dispositions[0].attempts,maxAttempts);}
+    assert.equal(inputs.length,maxAttempts);assert.equal(attempts.length,maxAttempts);
+    assert.equal(inputs[0].feedback,null);
+    for (const input of inputs.slice(1)) {
+      assert.match(input.feedback,/exact canonical answer alone is sufficient/);
+      assert.match(input.feedback,/Synonyms are optional/);
+      assert.match(input.feedback,/never cosmetic glyph or Unicode variants/);
+      assert.match(input.feedback,/NFKC/);
+    }
+    assert.equal(evaluated,0);assert.equal(discarded,1);
+  });
+}
+
+
+test("fresh native quiz criticism requires typed knowledge grounding while legacy evaluation remains readable", () => {
+  const legacy={score:9,reasons:["Synthetic support."],feedback:"Keep.",groundingProblems:[]};
+  assert.equal(isKnowledgeQuizEvaluation(legacy,{summary:"Synthetic support."}),false);
+  assert.equal(isKnowledgeQuizEvaluation({...legacy,knowledgeGroundingProblems:[]},{summary:"Synthetic support."}),true);
+  for(const invalid of [null,"safe",{},[null],[""]])assert.equal(isKnowledgeQuizEvaluation({...legacy,knowledgeGroundingProblems:invalid},{summary:"Synthetic support."}),false);
+  assert.equal(questionEvaluationSchema.name,"quiz_evaluation_v3");
+  assert(questionEvaluationSchema.schema.required.includes("knowledgeGroundingProblems"));
+  assert.match(questionEvaluatorPrompt,/paired-question-evaluator-v8/);
+  assert.match(questionEvaluatorPrompt,/Quiz regeneration changes only the quiz, never that retained summary/);
+});
+
+for(const fault of ["knowledge","draft-only","legacy"])test(`quiz critic ${fault} grounding preserves the correct point or draft boundary`, async()=>{
+  const evaluations=[],generations=[],attempts=[],publications=[],discards=[];
+  const point={id:"synthetic-point",sourceId:"source",sourceRevision:1,summary:"A synthetic supported relation with a disputed qualifier.",evidenceAnchors:[{url:"https://example.test/source",selector:"main"}]};
+  const draft={id:"synthetic-draft",knowledgeId:point.id,knowledgeRevision:1,kind:"single-choice",prompt:"Which synthetic relation?",options:["Relation","Alternative"],answer:"Relation",explanation:"Synthetic support.",citedEvidenceUrls:["https://example.test/source"]};
+  const valid={score:9,reasons:["Supported revised draft."],feedback:"Keep supported draft.",groundingProblems:[],knowledgeGroundingProblems:[]};
+  const first=fault==="knowledge"?{...valid,knowledgeGroundingProblems:["The retained summary qualifier conflicts with supplied evidence."],feedback:"Omitting this qualifier from a quiz cannot repair its retained knowledge."}:fault==="draft-only"?{...valid,groundingProblems:["This draft tests an unsupported extra relation."],feedback:"Remove the extra tested relation."}:(({knowledgeGroundingProblems,...legacy})=>legacy)(valid);
+  const actor=createQuizActorCritic({maxAttempts:2,now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async x=>{publications.push(x);return {ok:true,value:null};},discard:async x=>{discards.push(x);return {ok:true,value:null};},purge:async()=>({ok:true,value:null})},generator:{generate:async input=>{generations.push(structuredClone(input));return {ok:true,value:draft};}},evaluator:{evaluate:async input=>{evaluations.push(input);return {ok:true,value:evaluations.length===1?first:valid};}}});
+  const result=await actor.run({ownerId:"owner",runId:"run",points:[point]});assert.equal(result.ok,true);assert.deepEqual(point.summary,generations[0].knowledge.summary);
+  if(fault==="knowledge"){
+    assert.equal(result.value.dispositions[0].status,"abandoned");assert.equal(result.value.dispositions[0].failureKind,"QuizKnowledgeUngrounded");assert.equal(result.value.dispositions[0].attempts,1);
+    assert.equal(generations.length,1);assert.equal(evaluations.length,1);assert.equal(publications.length,0);assert.equal(discards.length,1);assert.equal(attempts[0].failureKind,"QuizKnowledgeUngrounded");assert.equal(attempts[0].score,9);
+  }else{
+    assert.equal(result.value.dispositions[0].status,"accepted");assert.equal(publications.length,1);assert.equal(discards.length,0);assert.equal(generations.length,fault==="draft-only"?2:1);assert.equal(evaluations.length,generations.length);
+    if(fault==="draft-only"){assert.equal(attempts[0].failureKind,"QuizDraftUngrounded");assert.equal(generations[1].feedback,first.feedback);assert.deepEqual(generations[0].knowledge,generations[1].knowledge);}
+  }
+});
+
+
+test("paired draft reports all alignment and normalized-alias faults to the existing second draft", async () => {
+ const draft={knowledgeId:"synthetic-point",knowledgeRevision:1,canonicalAnswers:["L2 checkpoint"],citedEvidenceUrls:["https://example.test/source"],multipleChoice:{prompt:"Select the synthetic checkpoint.",options:[{key:"a",text:"L2 checkpoint"},{key:"b",text:"Alternative"}],correctOptionKeys:["a"],correctOptionAnswers:[{key:"a",canonicalAnswer:"L2 checkpoint"}],explanation:"Synthetic source."},fillBlank:{prompt:"The checkpoint is ____.",blanks:[{id:"blank-1",canonicalAnswer:"L2",acceptedAnswers:["L₂","L2"]}],explanation:"Synthetic source."}};
+ const issues=quizPairDraftValidationIssues(draft);
+ assert.equal(isQuizPairDraft(draft),false);assert.equal(issues.length,3);
+ assert(issues.some(x=>x.includes("canonicalAnswer:")));assert(issues.some(x=>x.includes("acceptedAnswers[0]:")));assert(issues.some(x=>x.includes("NFKC-equivalent")));
+ const corrected=structuredClone(draft);corrected.fillBlank.blanks[0]={id:"blank-1",canonicalAnswer:"L2 checkpoint",acceptedAnswers:["L2 checkpoint"]};
+ assert.equal(isQuizPairDraft(corrected),true);assert.deepEqual(quizPairDraftValidationIssues(corrected),[]);
+ const point={id:"synthetic-point",sourceId:"source",sourceRevision:1,summary:"Synthetic checkpoint relationship.",evidenceAnchors:[{url:"https://example.test/source",selector:"main"}]};
+ const inputs=[],attempts=[];let discarded=0,evaluated=0;
+ const actor=createQuizActorCritic({maxAttempts:2,now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},generator:{generate:async input=>{inputs.push(input);return {ok:false,error:{kind:"QuizDraftSchemaInvalid",validationIssues:issues}};}},evaluator:{evaluate:async()=>{evaluated++;throw Error("Invalid paired draft must not reach critic.");}},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async()=>{throw Error("Invalid draft must not publish.");},discard:async()=>{discarded++;return {ok:true,value:null};},purge:async()=>({ok:true,value:null})}});
+ const result=await actor.run({ownerId:"owner",runId:"run",points:[point]});assert.deepEqual(result,{ok:false,error:{kind:"QuizGeneratorFailed",causeKind:"QuizDraftSchemaInvalid"}});assert.equal(inputs.length,2);assert.equal(attempts.length,2);assert.equal(evaluated,0);assert.equal(discarded,1);for(const issue of issues)assert(inputs[1].feedback.includes(issue));assert.deepEqual(draft.fillBlank.blanks[0].acceptedAnswers,["L₂","L2"]);
+});
+
+// Prompt contract and supplied verdict fixtures; these do not predict real model accuracy.
+test('quiz scope permits supported narrowing while retaining necessary conditions and full-summary safety',()=>{
+ assert.match(questionEvaluatorPrompt,/Assess the current taught relationship, not whether it repeats every statement in a longer retained quotation/);
+ assert.match(questionEvaluatorPrompt,/A faithful narrower relationship need not restore an unrelated or nonessential removed qualifier/);
+ assert.match(questionEvaluatorPrompt,/Conditions, negations, units and causal qualifications necessary to preserve that relationship remain required/);
+ assert.match(questionEvaluatorPrompt,/narrowing must still be supported by retained evidence and attached pixels/);
+ assert.match(questionEvaluatorPrompt,/Report unsupported, source-conflicting or unpictured summary claims in knowledgeGroundingProblems/);
+ assert.match(questionEvaluatorPrompt,/Do not invent corrections from outside knowledge/);
+});
+
+// Typed source-fault fixtures test boundary behavior, not model semantic accuracy.
+for (const kind of ["unsupported", "source-conflicting", "unpictured"]) test(`fresh ${kind} issue preserves its exact retained claim and raw evidence`, () => {
+ const knowledge={summary:"A supported relationship with an unsafe qualifier."};
+ const raw={score:9,reasons:["Synthetic assessment."],feedback:"Remove the unsupported qualifier.",groundingProblems:[],knowledgeGroundingProblems:[{claim:"unsafe qualifier",kind,reason:"The captured source or image does not establish this qualifier."}]};
+ const before=JSON.stringify(raw),result=normalizeKnowledgeQuizEvaluation(raw,knowledge);
+ assert(result.ok);assert.equal(result.value.knowledgeGroundingProblems.length,1);assert(result.value.knowledgeGroundingProblems[0].includes('"unsafe qualifier"'));assert.equal(JSON.stringify(raw),before);
+});
+test("fresh issue cannot cite a removed qualifier, arbitrary kind, unknown field or legacy string",()=>{
+ const knowledge={summary:"A retained supported relationship."};
+ const base={score:9,reasons:["Synthetic assessment."],feedback:"Keep.",groundingProblems:[]};
+ for(const issue of [{claim:"removed location",kind:"unpictured",reason:"Not depicted."},{claim:"retained",kind:"usefulness",reason:"Too descriptive."},{claim:"retained",kind:"unsupported",reason:"Conflict.",extra:true},{claim:"",kind:"unsupported",reason:"Conflict."},"Legacy semantic fault"]){
+  assert.deepEqual(normalizeKnowledgeQuizEvaluation({...base,knowledgeGroundingProblems:[issue]},knowledge),{ok:false,error:{kind:"QuizEvaluatorOutputInvalid"}});
+ }
+ assert.equal(normalizeKnowledgeQuizEvaluation({...base,knowledgeGroundingProblems:[],extra:true},knowledge).ok,false);
+});
+test("entire current summary can anchor an unsafe image association or a necessary-condition fault",()=>{
+ const summary="The process produces the outcome.";
+ for(const issue of [{claim:summary,kind:"unpictured",reason:"The associated pixels depict a different relationship."},{claim:summary,kind:"source-conflicting",reason:"The supplied source requires a condition for this outcome; the retained unconditional claim omits it."}]){
+  assert(normalizeKnowledgeQuizEvaluation({score:9,reasons:["Synthetic assessment."],feedback:"Resolve the source fault.",groundingProblems:[],knowledgeGroundingProblems:[issue]},{summary}).ok);
+ }
+ assert.match(questionEvaluatorPrompt,/actual overbroad retained claim/);assert.match(questionEvaluatorPrompt,/inspect retained unsafe clauses even when the quiz does not test them/);
+});
+test("claim binding does not silently reinterpret or clear a present-claim semantic negative",()=>{
+ const summary="A supported spatial relationship.";
+ const raw={score:9,reasons:["Synthetic model assessment."],feedback:"Revise the point.",groundingProblems:[],knowledgeGroundingProblems:[{claim:summary,kind:"unsupported",reason:"The model calls this descriptive rather than educational."}]};
+ const result=normalizeKnowledgeQuizEvaluation(raw,{summary});assert(result.ok);assert.equal(result.value.knowledgeGroundingProblems.length,1);assert.match(result.value.knowledgeGroundingProblems[0],/descriptive/);
+ // Semantic correctness still belongs to the critic. The boundary cannot infer source truth from prose.
 });

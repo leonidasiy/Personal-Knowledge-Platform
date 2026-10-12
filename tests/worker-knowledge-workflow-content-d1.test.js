@@ -118,11 +118,11 @@ Deno.test("D1 published quiz lookup is owner/run/point scoped and rejects corrup
   const repository=new D1QuizRepository({database:fixture,logger:()=>{},now:()=>"2026-10-02T00:00:00.000Z"});
   const scope={ownerId:"owner-a",runId:"run-a",knowledgeId:"knowledge-a"};
   assertEquals(JSON.stringify(await repository.findPublished(scope)),JSON.stringify({ok:true,value:null}));
-  row={status:"published",attempt_number:2};
-  assertEquals(JSON.stringify(await repository.findPublished(scope)),JSON.stringify({ok:true,value:{status:"published",attempt:2}}));
+  row={status:"published",attempt_number:4};
+  assertEquals(JSON.stringify(await repository.findPublished(scope)),JSON.stringify({ok:true,value:{status:"published",attempt:4}}));
   assertEquals(fixture.preparedQueries.every(query=>query.includes("WHERE owner_id=? AND run_id=? AND knowledge_id=?")),true);
   assertEquals(JSON.stringify(fixture.queries[0]),JSON.stringify(["owner-a","run-a","knowledge-a"]));
-  for (const invalid of [{status:"unknown",attempt_number:1},{status:"published",attempt_number:4}]){row=invalid;assertEquals((await repository.findPublished(scope)).ok,false);}
+  for (const invalid of [{status:"unknown",attempt_number:1},{status:"published",attempt_number:5}]){row=invalid;assertEquals((await repository.findPublished(scope)).ok,false);}
   broken=true;
   assertEquals((await repository.findPublished(scope)).ok,false);
 });

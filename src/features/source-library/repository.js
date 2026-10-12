@@ -1,9 +1,31 @@
 // @ts-check
 
+import { isRecord, isNonEmptyText, isIsoDateTime } from "./contracts.js";
+
 /** @import { LibrarySource, LibrarySourceEvent, Result, SourceIngestionJob, SourceLibraryFailure, LibrarySourceState, SourceSuppression } from "./contracts.js" */
 /** @import { SourceItemVersion } from "./ingestion-contracts.js" */
 
 const freeze = Object.freeze;
+
+/** Submitted Link observation time is server provenance, not request identity.
+ * Normalizing stored fingerprints also preserves replay of earlier approvals.
+ * @param {string} fingerprint @param {string} adapterId @returns {string}
+ */
+export function sourceApprovalFingerprint(fingerprint, adapterId) {
+  if (typeof fingerprint !== "string" || !isNonEmptyText(adapterId)) throw new TypeError("Source approval fingerprint input is invalid.");
+  if (adapterId !== "submitted-link") return fingerprint;
+  let value;
+  try { value = JSON.parse(fingerprint); }
+  catch (error) { if (error instanceof SyntaxError) throw new TypeError("Source approval fingerprint is invalid JSON.", { cause: error }); throw error; }
+  if (!isRecord(value) || !isRecord(value.adapter) || value.adapter.id !== "submitted-link" || value.adapter.version !== "v1" ||
+    !Array.isArray(value.identityEvidence) || value.identityEvidence.length !== 1) return fingerprint;
+  const evidence = value.identityEvidence[0];
+  if (!isRecord(evidence) || evidence.attribute !== "user-submitted-url" || evidence.value !== value.submittedUrl ||
+    evidence.provenanceUrl !== value.submittedUrl || !Object.hasOwn(evidence, "observedAt")) return fingerprint;
+  if (!isIsoDateTime(evidence.observedAt)) throw new TypeError("Submitted Link observation time is invalid.");
+  const { observedAt: _observation, ...identity } = evidence;
+  return JSON.stringify({ ...value, identityEvidence: [identity] });
+}
 
 /**
  * @typedef {{
@@ -11,9 +33,32 @@ const freeze = Object.freeze;
  *   readonly event: LibrarySourceEvent,
  *   readonly job: SourceIngestionJob | null,
  *   readonly initialItem?: SourceItemVersion | null,
- *   readonly fingerprint: string
+ *   readonly fingerprint: string,
+ *   readonly ownerUploadAuthorization?: true
  * }} ApprovalCommit
  */
+
+/** @param {ApprovalCommit} commit @param {string} fingerprint @param {LibrarySource} source @returns {boolean} */
+export function matchesPrivateDocumentReplay(commit, fingerprint, source) {
+  if (commit.ownerUploadAuthorization !== true || commit.source.origin !== "private-document" || source.origin !== "private-document" || source.ownerId !== commit.source.ownerId) return false;
+  let previous, current;
+  try { previous = JSON.parse(fingerprint); current = JSON.parse(commit.fingerprint); }
+  catch (error) { if (error instanceof SyntaxError) return false; throw error; }
+  if (!isRecord(previous) || !isRecord(current) || [previous, current].some(record => Object.keys(record).length !== 7) ||
+    !isNonEmptyText(previous.basis) || !isNonEmptyText(previous.reference) || current.basis !== "user-owned upload authorization" || current.reference !== `user-upload:${commit.event.idempotencyKey}`) return false;
+  const origin = previous.applicationOrigin;
+  if (typeof origin !== "string") return false;
+  for (const field of ["ownerId", "title", "fileName", "idempotencyKey", "applicationOrigin"]) {
+    if (!isNonEmptyText(previous[field]) || previous[field] !== current[field]) return false;
+  }
+  if (previous.ownerId !== source.ownerId || previous.idempotencyKey !== commit.event.idempotencyKey || source.adapter.id !== "private-document" ||
+    source.submittedUrl !== source.canonicalUrl || source.canonicalUrl !== new URL(`api/private-documents/${encodeURIComponent(source.id)}`, origin).href ||
+    !source.adapter.capabilities.includes("processing-attested")) return false;
+  return [["owner-attested-processing", "storage, transformation, and processing allowed"], ["processing-basis", previous.basis], ["processing-reference", previous.reference], ["file-name", previous.fileName]].every(([attribute, value]) => {
+    const evidence = source.identityEvidence.filter(entry => entry.attribute === attribute);
+    return evidence.length === 1 && evidence[0].value === value && evidence[0].provenanceUrl === source.canonicalUrl && isIsoDateTime(evidence[0].observedAt);
+  });
+}
 
 /**
  * @typedef {{
@@ -127,7 +172,9 @@ export class SourceLibraryRepository {
       this.#idempotencyKey(commit.source.ownerId, commit.event.idempotencyKey),
     );
     if (idempotency !== undefined) {
-      if (idempotency.fingerprint !== commit.fingerprint) {
+      const source = this.#sources.get(this.#sourceKey(commit.source.ownerId, idempotency.sourceId));
+      if (source === undefined) throw new TypeError("Source idempotency invariant is broken.");
+      if (sourceApprovalFingerprint(idempotency.fingerprint, commit.source.adapter.id) !== commit.fingerprint && !matchesPrivateDocumentReplay(commit, idempotency.fingerprint, source)) {
         return {
           ok: false,
           error: {
@@ -135,12 +182,6 @@ export class SourceLibraryRepository {
             idempotencyKey: commit.event.idempotencyKey,
           },
         };
-      }
-      const source = this.#sources.get(
-        this.#sourceKey(commit.source.ownerId, idempotency.sourceId),
-      );
-      if (source === undefined) {
-        throw new TypeError("Source idempotency invariant is broken.");
       }
       const job = idempotency.jobId === null
         ? null

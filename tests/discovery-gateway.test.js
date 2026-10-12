@@ -41,8 +41,8 @@ const searchResult = Object.freeze({
     })]),
     providerFailures: Object.freeze([]),
     submittedQuery: "harmony",
-    providerQuery: "harmony tutorial lesson course educational",
-    policyVersion: "educational-v1",
+    providerQuery: "harmony",
+    policyVersion: "source-quality-v1",
   }),
 });
 
@@ -92,7 +92,7 @@ Deno.test("central discovery gateway submits one bounded provider-filtered comma
     JSON.stringify({ query: " harmony ", providerIds: ["web", "youtube"], limit: 10 }),
   );
   equal(result.value.items[0].description, "An educational tutorial in functional harmony.");
-  equal(result.value.policyVersion, "educational-v1");
+  equal(result.value.policyVersion, "source-quality-v1");
 });
 
 Deno.test("central discovery gateway rejects malformed commands and responses", async () => {
@@ -203,4 +203,12 @@ Deno.test("gateway rejects YouTube transcript URLs before outbound work", async 
   });
   equal(result.ok, false);
   equal(calls, 0);
+});
+
+Deno.test("raw gateway accepts empty results and rejects superseded assessment fields", async () => {
+  const empty = {...searchResult.result,items:[]};
+  for (const [value,expected] of [[empty,true],[{...empty,assessments:[]},false],[{...empty,selectionOutcome:"NoEligibleCoreSources"},false],[{...empty,items:[{...searchResult.result.items[0],canonicalUrl:"https://secret@host.example/"}]},false]]) {
+    const client=new DiscoveryGatewayClient({fetch:async()=>Response.json({result:value}),baseUrl:"https://app.example/",timeoutMs:1000});
+    equal((await client.search({query:"harmony",providerIds:["web"],limit:1})).ok,expected);
+  }
 });

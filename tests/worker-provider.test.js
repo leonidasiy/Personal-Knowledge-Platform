@@ -150,7 +150,7 @@ Deno.test("YouTube quota ledgers keep search queries and general reads distinct"
   }
 });
 
-Deno.test("YouTube search keeps only official link/embed metadata and refresh deadline", async () => {
+Deno.test("YouTube search preserves descriptive evidence with official link/embed metadata and refresh deadline", async () => {
   const responses = [
     new Response(
       JSON.stringify({
@@ -160,7 +160,8 @@ Deno.test("YouTube search keeps only official link/embed metadata and refresh de
             title: "Harmony",
             channelTitle: "Publisher",
             publishedAt: "2026-07-01T00:00:00Z",
-            description: "must be discarded",
+            description: "Provider supplied explanation of harmonic motion",
+            channelId: "channel-1",
           },
         }],
       }),
@@ -225,7 +226,8 @@ Deno.test("YouTube search keeps only official link/embed metadata and refresh de
       "https://www.youtube.com/watch?v=video-1",
     );
     assertEquals(result.value[0].refreshBy, "2026-08-20T00:00:00.000Z");
-    assertEquals("description" in result.value[0], false);
+    assertEquals(result.value[0].description, "Provider supplied explanation of harmonic motion");
+    assertEquals(result.value[0].channelId, "channel-1");
     assertEquals("statistics" in result.value[0], false);
   }
 });
@@ -283,13 +285,14 @@ Deno.test("YouTube search omits ineligible videos and preserves eligible provide
   assertEquals(result.ok, true);
   assertEquals(requests, 2);
   if (result.ok) {
-    assertEquals(result.value.length, 2);
+    assertEquals(result.value.length, 3);
     assertEquals(result.value[0].videoId, "eligible-a");
-    assertEquals(result.value[1].videoId, "eligible-b");
+    assertEquals(result.value[1].videoId, "disabled");
+    assertEquals(result.value[2].videoId, "eligible-b");
   }
 });
 
-Deno.test("YouTube search returns an empty result when every video is ineligible", async () => {
+Deno.test("YouTube link-only search retains non-embeddable video", async () => {
   const adapter = new YouTubeDiscoveryAdapter(
     { maximumResults: 10, quotaTimeZone: "America/Los_Angeles" },
     {
@@ -320,7 +323,7 @@ Deno.test("YouTube search returns an empty result when every video is ineligible
   );
   const result = await adapter.search({ query: "vocaloid" });
   assertEquals(result.ok, true);
-  if (result.ok) assertEquals(result.value.length, 0);
+  if (result.ok) assertEquals(result.value.length, 1);
 });
 
 Deno.test("Empty YouTube search consumes no general-read quota", async () => {
@@ -587,8 +590,8 @@ Deno.test("Worker exposes one authenticated central search and provider capabili
               items: Object.freeze([]),
               providerFailures: Object.freeze([]),
               submittedQuery: "harmony",
-              providerQuery: "harmony tutorial lesson course educational",
-              policyVersion: "educational-v1",
+              providerQuery: "harmony",
+              policyVersion: "raw-provider-v1"
             }),
           };
         },

@@ -62,16 +62,16 @@ export class D1SourceClassificationRepository {
   }
 
   /** Inserts an agent result once. Retries return the existing value and never overwrite it.
-   * @param {{ readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly classification: SourceClassification, readonly legacyAudit: readonly unknown[] }} command
+   * @param {{ readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly runId?: string, readonly classification: SourceClassification, readonly legacyAudit: readonly unknown[] }} command
    * @returns {Promise<Result<{ readonly value: StoredSourceClassification, readonly inserted: boolean }, SourceClassificationRepositoryFailure>>}
    */
   async persistAgent(command) {
-    if (!validClassificationInput(command) || !Array.isArray(command.legacyAudit)) return { ok: false, error: { kind: "SourceClassificationCommandInvalid" } };
+    if (!validClassificationInput(command) || (command.runId !== undefined && !nonEmpty(command.runId)) || !Array.isArray(command.legacyAudit)) return { ok: false, error: { kind: "SourceClassificationCommandInvalid" } };
     const now = this.#now();
     if (!Number.isFinite(Date.parse(now))) return { ok: false, error: { kind: "SourceClassificationPersistenceFailed" } };
     this.#logger({ event: "source-classification-write-entry", ownerId: command.ownerId, sourceId: command.sourceId });
     try {
-      const written = await this.#database.prepare("INSERT INTO source_classifications (owner_id, source_id, source_revision, main_subject, topic, classification_revision, origin, status, legacy_audit_json, updated_at) SELECT ?, ?, ?, ?, ?, 1, 'agent', 'classified', ?, ? WHERE EXISTS (SELECT 1 FROM library_sources WHERE owner_id = ? AND source_id = ? AND revision = ? AND state = 'active') ON CONFLICT(owner_id, source_id) DO NOTHING").bind(command.ownerId, command.sourceId, command.sourceRevision, command.classification.mainSubject, command.classification.topic, JSON.stringify(command.legacyAudit), now, command.ownerId, command.sourceId, command.sourceRevision).run();
+      const written = await this.#database.prepare("INSERT INTO source_classifications (owner_id, source_id, source_revision, main_subject, topic, classification_revision, origin, status, legacy_audit_json, updated_at, run_id) SELECT ?, ?, ?, ?, ?, 1, 'agent', 'classified', ?, ?, ? WHERE EXISTS (SELECT 1 FROM library_sources WHERE owner_id = ? AND source_id = ? AND revision = ? AND state = 'active') ON CONFLICT(owner_id, source_id) DO NOTHING").bind(command.ownerId, command.sourceId, command.sourceRevision, command.classification.mainSubject, command.classification.topic, JSON.stringify(command.legacyAudit), now, command.runId ?? null, command.ownerId, command.sourceId, command.sourceRevision).run();
       if (!written.success) return { ok: false, error: { kind: "SourceClassificationPersistenceFailed" } };
       const current = await this.get({ ownerId: command.ownerId, sourceId: command.sourceId });
       if (!current.ok) return current;
@@ -95,7 +95,7 @@ export class D1SourceClassificationRepository {
     try {
       const written = command.expectedRevision === 0
         ? await this.#database.prepare("INSERT INTO source_classifications (owner_id, source_id, source_revision, main_subject, topic, classification_revision, origin, status, legacy_audit_json, updated_at) SELECT ?, ?, ?, ?, ?, 1, 'manual', 'classified', '[]', ? WHERE EXISTS (SELECT 1 FROM library_sources WHERE owner_id = ? AND source_id = ? AND revision = ? AND state = 'active') ON CONFLICT(owner_id, source_id) DO NOTHING").bind(command.ownerId, command.sourceId, command.sourceRevision, command.classification.mainSubject, command.classification.topic, now, command.ownerId, command.sourceId, command.sourceRevision).run()
-        : await this.#database.prepare("UPDATE source_classifications SET source_revision = ?, main_subject = ?, topic = ?, classification_revision = classification_revision + 1, origin = 'manual', status = 'classified', updated_at = ? WHERE owner_id = ? AND source_id = ? AND classification_revision = ? AND EXISTS (SELECT 1 FROM library_sources WHERE owner_id = ? AND source_id = ? AND revision = ? AND state = 'active')").bind(command.sourceRevision, command.classification.mainSubject, command.classification.topic, now, command.ownerId, command.sourceId, command.expectedRevision, command.ownerId, command.sourceId, command.sourceRevision).run();
+        : await this.#database.prepare("UPDATE source_classifications SET source_revision = ?, main_subject = ?, topic = ?, classification_revision = classification_revision + 1, origin = 'manual', status = 'classified', run_id = NULL, updated_at = ? WHERE owner_id = ? AND source_id = ? AND classification_revision = ? AND EXISTS (SELECT 1 FROM library_sources WHERE owner_id = ? AND source_id = ? AND revision = ? AND state = 'active')").bind(command.sourceRevision, command.classification.mainSubject, command.classification.topic, now, command.ownerId, command.sourceId, command.expectedRevision, command.ownerId, command.sourceId, command.sourceRevision).run();
       if (!written.success) return { ok: false, error: { kind: "SourceClassificationPersistenceFailed" } };
       if ((written.meta?.changes ?? 0) !== 1) {
         const source = await this.#database.prepare("SELECT revision FROM library_sources WHERE owner_id = ? AND source_id = ? AND state = 'active' LIMIT 1").bind(command.ownerId, command.sourceId).first();
@@ -113,17 +113,21 @@ export class D1SourceClassificationRepository {
   }
 
   /** Records a durable retryable backfill issue without changing classification data.
-   * @param {{ readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly issueKind: "inference-failed" | "legacy-conflict" | "legacy-unclassified" }} command
+   * @param {{ readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly runId?: string, readonly issueKind: "inference-failed" | "legacy-conflict" | "legacy-unclassified" }} command
    * @returns {Promise<Result<null, SourceClassificationRepositoryFailure>>}
    */
   async recordReviewIssue(command) {
-    if (!record(command) || !nonEmpty(command.ownerId) || !nonEmpty(command.sourceId) || !Number.isSafeInteger(command.sourceRevision) || command.sourceRevision < 1 || !["inference-failed", "legacy-conflict", "legacy-unclassified"].includes(command.issueKind)) return { ok: false, error: { kind: "SourceClassificationCommandInvalid" } };
+    if (!record(command) || !nonEmpty(command.ownerId) || !nonEmpty(command.sourceId) || !Number.isSafeInteger(command.sourceRevision) || command.sourceRevision < 1 || (command.runId !== undefined && !nonEmpty(command.runId)) || !["inference-failed", "legacy-conflict", "legacy-unclassified"].includes(command.issueKind)) return { ok: false, error: { kind: "SourceClassificationCommandInvalid" } };
     const now = this.#now();
     if (!Number.isFinite(Date.parse(now))) return { ok: false, error: { kind: "SourceClassificationPersistenceFailed" } };
     this.#logger({ event: "source-classification-review-entry", ownerId: command.ownerId, sourceId: command.sourceId });
     try {
-      const written = await this.#database.prepare("INSERT INTO source_classification_review_issues (owner_id, source_id, source_revision, issue_kind, attempts, created_at, updated_at) SELECT ?, ?, ?, ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM library_sources WHERE owner_id = ? AND source_id = ? AND revision = ? AND state = 'active') ON CONFLICT(owner_id, source_id, source_revision) DO UPDATE SET issue_kind = excluded.issue_kind, attempts = source_classification_review_issues.attempts + 1, updated_at = excluded.updated_at").bind(command.ownerId, command.sourceId, command.sourceRevision, command.issueKind, now, now, command.ownerId, command.sourceId, command.sourceRevision).run();
-      if (!written.success || (written.meta?.changes ?? 0) < 1) return { ok: false, error: { kind: "SourceClassificationSourceMissing" } };
+      const written = await this.#database.prepare("INSERT INTO source_classification_review_issues (owner_id, source_id, source_revision, issue_kind, attempts, created_at, updated_at, run_id) SELECT ?, ?, ?, ?, 1, ?, ?, ? WHERE EXISTS (SELECT 1 FROM library_sources WHERE owner_id = ? AND source_id = ? AND revision = ? AND state = 'active') ON CONFLICT(owner_id, source_id, source_revision) DO UPDATE SET issue_kind = excluded.issue_kind, attempts = source_classification_review_issues.attempts + 1, updated_at = excluded.updated_at WHERE excluded.run_id IS NULL").bind(command.ownerId, command.sourceId, command.sourceRevision, command.issueKind, now, now, command.runId ?? null, command.ownerId, command.sourceId, command.sourceRevision).run();
+      if (!written.success) return {ok:false,error:{kind:"SourceClassificationPersistenceFailed"}};
+      if ((written.meta?.changes ?? 0) < 1) {
+        const prior=command.runId === undefined ? null : await this.#database.prepare("SELECT owner_id FROM source_classification_review_issues WHERE owner_id = ? AND source_id = ? AND source_revision = ?").bind(command.ownerId,command.sourceId,command.sourceRevision).first();
+        if(prior===null)return {ok:false,error:{kind:"SourceClassificationSourceMissing"}};
+      }
       this.#logger({ event: "source-classification-review-success", ownerId: command.ownerId, sourceId: command.sourceId });
       return { ok: true, value: null };
     } catch (error) {

@@ -1,3 +1,4 @@
+import { D1KnowledgeContentRepository } from "./knowledge-workflow-content-d1.js";
 import { D1SourceRenameRepository } from "./source-rename-d1.js";
 import { createSourceRenameService } from "../src/features/source-library/rename.js";
 // @ts-check
@@ -36,7 +37,9 @@ import { D1SourceIngestionRepository } from "./source-ingestion-d1.js";
 import { D1SourceRightsRegistry } from "./source-rights-registry-d1.js";
 import { D1BrowserRunCapacityLedger } from "./browser-run-capacity-d1.js";
 import { D1R2CapacityLedger } from "./r2-capacity-d1.js";
-import { BrowserRunPageAcquirer } from "./browser-run-page-acquirer.js";
+import { PublicPageAcquirer } from "./public-page-acquirer.js";
+import { createAcquisitionClient } from "./acquisition-client.js";
+import { ACQUISITION_POLICY } from "./acquisition-policy.js";
 import { SourceIngestionRunner } from "./source-ingestion-runner.js";
 import { ManualMaterialService } from "../src/features/source-library/manual-material.js";
 import { createSourceCursorCodec } from "./source-cursor.js";
@@ -59,7 +62,7 @@ import { createLearningCostModel } from "./learning-generation-cost.js";
 import { D1KnowledgeWorkflowRepository } from "./knowledge-workflow-d1.js";
 import { createKnowledgeWorkflowService } from "../src/features/knowledge-workflows/workflow.js";
 import { D1KnowledgeMediaRepository } from "./knowledge-workflow-media-d1.js";
-import { createMediaPipeline } from "../src/features/knowledge-workflows/media.js";
+import { createMediaPipeline, createMediaPublicEgress } from "../src/features/knowledge-workflows/media.js";
 import { createCloudflareImageDerivative, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
 import { resolvePublicAddresses } from "./knowledge-workflow-network.js";
 import { createKnowledgeWorkflowCleanup } from "./knowledge-workflow-cleanup.js";
@@ -120,6 +123,9 @@ import { createReminderRuntime } from "./reminders/runtime.js";
  *   readonly SOURCE_R2_CLASS_A_MONTHLY_LIMIT?: unknown,
  *   readonly SOURCE_R2_CLASS_B_MONTHLY_LIMIT?: unknown,
  *   readonly SOURCE_R2_OBSERVATION_MAX_AGE_MS?: unknown,
+ *   readonly PUBLIC_ACQUISITION?: unknown,
+ *   readonly PUBLIC_ACQUISITION_ENDPOINT?: unknown,
+ *   readonly PUBLIC_ACQUISITION_TOKEN?: unknown,
  *   readonly SOURCE_BROWSER?: unknown,
  *   readonly SOURCE_BROWSER_ACCOUNT_SCOPE?: unknown,
  *   readonly KNOWLEDGE_WORKFLOW?: unknown,
@@ -572,9 +578,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
   const learningReview = learningRepository === null ? null : new LearningReviewService({ repository: learningRepository, now: () => platform.now().toISOString(), logger: learningLogger });
   const learningReviewQueue = learningRepository === null ? null : new LearningReviewQueueService({ repository: learningRepository, logger: learningLogger });
   const learningRevocation = learningRepository === null ? null : new LearningRevocationService({ repository: learningRepository, now: () => platform.now().toISOString(), logger: learningLogger });
+  const acquisition = createAcquisitionClient({ binding: environment.PUBLIC_ACQUISITION, endpoint: environment.PUBLIC_ACQUISITION_ENDPOINT, token: environment.PUBLIC_ACQUISITION_TOKEN, policy: ACQUISITION_POLICY, createId: () => hex(/** @type {(length:number)=>Uint8Array} */ (platform.randomBytes)(16)) });
   const browserConfiguration = configuration.value.browserRun;
   const sourceIngestion = sourceRepository === null || sourceRightsRegistry === null || manualContentStore === null ||
-      browserConfiguration === null || platform.browserLauncher === undefined
+      browserConfiguration === null
     ? null
     : new SourceIngestionRunner({
       policy: new SourcePolicyEvaluator({
@@ -589,13 +596,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         createId: () => hex(/** @type {(length: number) => Uint8Array} */ (platform.randomBytes)(16)),
         policy: browserRunCapacityPolicy(browserConfiguration.accountScope),
       }),
-      acquirer: new BrowserRunPageAcquirer({
-        launcher: /** @type {import("./browser-run-page-acquirer.js").BrowserLauncher} */ (platform.browserLauncher),
-        binding: browserConfiguration.binding,
-        resolveAddresses: (hostname) => resolveAddresses(hostname, platform.fetch),
-        now: () => platform.now().toISOString(),
-        policy: browserRunAcquisitionPolicy(),
-      }),
+      acquirer: new PublicPageAcquirer({ client: acquisition, policy: ACQUISITION_POLICY, now: () => platform.now().toISOString(), maximumPagesPerRun: 5, maximumFrontierEntries: 500, maximumRunMilliseconds: 60_000, logger: (entry) => learningLogger(entry) }),
       contentStore: manualContentStore,
       digest: async (bytes) => {
         const result = await digest(bytes);
@@ -705,7 +706,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         if (!isRecord(command) || typeof command.ownerId !== "string" || command.ownerId.trim() === "" || typeof command.sourceId !== "string" || command.sourceId.trim() === "") return { ok: false, error: { kind: "WorkflowCommandInvalid" } };
         const listed = await /** @type {import("./knowledge-workflow-d1.js").D1KnowledgeWorkflowRepository} */ (knowledgeWorkflowRepository).listBySource(command.ownerId, command.sourceId, undefined);
         if (!listed.ok) return listed;
-        return { ok: true, value: Object.freeze({ ownerId: command.ownerId, sourceId: command.sourceId, run: listed.value[0] ?? null }) };
+        const run=listed.value[0] ?? null;
+        const warnings=run===null ? {ok:/** @type {const} */(true),value:[]} : await new D1KnowledgeContentRepository({database:/** @type {import('./knowledge-workflow-content-d1.js').D1DatabasePort} */(configuration.value.sourceLibraryDatabase),logger:knowledgeWorkflowLogger}).loadImageWarnings({ownerId:command.ownerId,runId:run.runId});
+        if(!warnings.ok)return warnings;
+        return { ok: true, value: Object.freeze({ ownerId: command.ownerId, sourceId: command.sourceId, run, imageWarnings:warnings.value }) };
       },
       ...(knowledgeWorkflowMaterialService === null ? {} : {
         material: async (/** @type {unknown} */ command) => {
@@ -836,7 +840,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
   const learningMedia = learningMediaRepository === null
     ? null
     : createMediaPipeline({
-      publicEgress: platform.publicEgress,
+      publicEgress: platform.publicEgress ?? createMediaPublicEgress(acquisition.mediaCapability),
       digest: async (bytes) => {
         const result = await digest(bytes);
         return result.ok ? result : { ok: false, error: { kind: "MediaDigestUnavailable" } };
@@ -885,10 +889,9 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
   const centralSearch = createCentralDiscoverySearch(
     { maximumLimit: 20 },
     {
+      budget: {timeoutMs:25_000, now:() => platform.now().getTime(), timeoutSignal: milliseconds => AbortSignal.timeout(milliseconds)},
       policy: createEducationalSearchPolicy({
-        version: "educational-v1",
-        terms: Object.freeze(["tutorial", "lesson", "course", "educational"]),
-        markers: Object.freeze(["learn", "tutorial", "lesson", "course", "educational", "guide", "explained", "how to"]),
+        version: "raw-provider-v1",
         maximumSubmittedCharacters: 120,
         maximumProviderCharacters: 240,
       }),
@@ -2488,6 +2491,17 @@ async function reconcileKnowledgeWorkflowLaunch(binding, run, params, reused) {
       ? { ok: true, value: null }
       : { ok: false, error: { kind: "WorkflowStartFailed" } };
   } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    try {
+      const winner = await binding.get(instanceId);
+      if (winner?.id === instanceId && typeof winner.status === "function") {
+        const status = await winner.status();
+        if (status && typeof status.status === "string" && status.status.trim() !== "") return {ok:true,value:null};
+      }
+    } catch (readError) {
+      if (!(readError instanceof Error)) throw readError;
+      console.error(JSON.stringify({event:"workflow-launch-reconciliation-failure",runId:run.runId,failureKind:"WorkflowStartFailed"}));
+    }
     return { ok: false, error: { kind: "WorkflowStartFailed" } };
   }
 }
@@ -2534,7 +2548,7 @@ async function deliverKnowledgeWorkflowControl(instance, action) {
   }
   if (action === "abandon") {
     if (typeof instance.terminate !== "function") throw new TypeError("Knowledge workflow abandonment control is unavailable.");
-    await instance.terminate({ rollback: true });
+    await instance.terminate({ rollback: false });
     return;
   }
   throw new TypeError("Knowledge workflow control action is invalid.");

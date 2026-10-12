@@ -32,6 +32,25 @@ const source = Object.freeze({
   revision: 1,
 });
 
+Deno.test("source gateway preserves empty descriptions through catalog and search", async () => {
+  const empty = { ...source, description: "" };
+  const browse = await gateway(async () => Response.json({ ownerId: "owner-a", result: { items: [empty], interestAreas: [], nextCursor: null } })).browse({ limit: 20 });
+  if (!browse.ok) throw new Error(browse.error.kind);
+  assertEquals(browse.value.items[0].description, "");
+  const search = await gateway(async () => Response.json({ result: [{ source: empty, score: 1 }] })).search({ query: "music", limit: 20 });
+  if (!search.ok) throw new Error(search.error.kind);
+  assertEquals(search.value[0].source.description, "");
+});
+
+Deno.test("source gateway rejects malformed descriptions and catalog owner mismatches", async () => {
+  for (const description of [undefined, null, 42, {}, []]) {
+    const result = await gateway(async () => Response.json({ result: { items: [{ ...source, description }], interestAreas: [], nextCursor: null } })).browse({ limit: 20 });
+    if (result.ok || result.error.kind !== "SourceGatewayResponseInvalid") throw new Error("Malformed description accepted.");
+  }
+  const result = await gateway(async () => Response.json({ ownerId: "owner-b", result: { items: [{ ...source, description: "" }], interestAreas: [], nextCursor: null } })).browse({ limit: 20 });
+  if (result.ok || result.error.kind !== "SourceGatewayResponseInvalid") throw new Error("Catalog owner mismatch accepted.");
+});
+
 Deno.test("source gateway excludes expired extraction runs but keeps work before the deadline", () => {
   /** @param {number} remainingMs */
   const run = (remainingMs) => ({
@@ -421,4 +440,30 @@ Deno.test("source gateway validates the active source projection", async () => {
   assertEquals(injected.ok, false);
   if (injected.ok) throw new Error("Expected invalid active projection.");
   assertEquals(injected.error.kind, "SourceGatewayResponseInvalid");
+});
+
+Deno.test("source gateway fences ignored fetch/body deadlines", async () => {
+  for (const delayBody of [false,true]) {
+    const client=new SourceLibraryGatewayClient({baseUrl:"https://example.test/",timeoutMs:5,fetch:async()=>{
+      if(!delayBody) await new Promise(resolve=>setTimeout(resolve,15));
+      const response=Response.json({result:{items:[],interestAreas:[],nextCursor:null}});
+      if(delayBody) response.json=async()=>{await new Promise(resolve=>setTimeout(resolve,15));return {result:{items:[],interestAreas:[],nextCursor:null}};};
+      return response;
+    }});
+    const result=await client.browse({limit:1});
+    assertEquals(result.ok,false);if(!result.ok)assertEquals(result.error.kind,"SourceGatewayTimedOut");
+    await new Promise(resolve=>setTimeout(resolve,20)); // Release the deliberately ignored late response/body timers.
+  }
+});
+
+Deno.test("cancel gateway sends an authenticated scoped abandon command",async()=>{
+  let payload;
+  const client=gateway(async request=>{payload=await request.json();return Response.json({result:{runId:"run-a",state:"abandoned",revision:2,counts:{pages:0,knowledgePoints:0,acceptedQuizzes:0,pendingQuizzes:0},extractionStartedAt:null,extractionDeadlineAt:null,elapsedMs:null,remainingMs:null,decisionRequired:null,failureKind:null,robotsEvidence:null}});});
+  const result=await client.cancelWorkflow({runId:"run-a",expectedRevision:1,idempotencyKey:"cancel-a"});
+  assertEquals(result.ok,true);assertEquals(JSON.stringify(payload),JSON.stringify({runId:"run-a",expectedRevision:1,action:"abandon",idempotencyKey:"cancel-a"}));
+});
+
+Deno.test("source gateway deadline returns even when injected transport never settles",async()=>{
+  const client=new SourceLibraryGatewayClient({baseUrl:"https://example.test/",timeoutMs:5,fetch:()=>new Promise(()=>{})});
+  const result=await client.browse({limit:1});assertEquals(result.ok,false);if(!result.ok)assertEquals(result.error.kind,"SourceGatewayTimedOut");
 });

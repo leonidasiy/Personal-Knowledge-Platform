@@ -17,10 +17,12 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   aggregateJavascript: Object.freeze({
     label: "Aggregate JavaScript",
     // Settings/reminders aggregate allowance approved 2026-09-19.
-    // Minimal learner-feature packaging adjustment measured 2026-10-04.
+    // Owner-approved minimal aggregate raise, 2026-10-06 blocker-fixes request.
+    // Link copy closure: measured +679 raw / +240 gzip; no per-file/CSS raise.
+    // Final production measurement: test-results/link-copy-closure/build.log.
     // Initial and lazy-chunk limits remain unchanged.
-    rawBytes: 222_630,
-    gzipBytes: 72_317,
+    rawBytes: 226_669,
+    gzipBytes: 73_591,
   }),
   stylesheet: Object.freeze({
     label: "CSS",
@@ -1259,4 +1261,6 @@ if (import.meta.main) {
       `${artifact.path}: ${artifact.rawBytes} bytes raw, ${artifact.gzipBytes} bytes gzip`,
     );
   }
+  const javascript = result.artifacts.filter((artifact) => artifact.path.startsWith("src/") && artifact.path.endsWith(".js"));
+  console.log(`Aggregate JavaScript: ${javascript.reduce((sum, artifact) => sum + artifact.rawBytes, 0)} bytes raw / ${ARTIFACT_BUDGETS.aggregateJavascript.rawBytes} cap, ${javascript.reduce((sum, artifact) => sum + artifact.gzipBytes, 0)} bytes gzip / ${ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes} cap`);
 }

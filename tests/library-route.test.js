@@ -1,4 +1,4 @@
-import { renderLibraryRoute } from "../src/routes/library.js";
+import { renderLibraryRoute, renderProcessingStatus } from "../src/routes/library.js";
 import { createLibraryPage } from "../src/startup/library-page.js";
 import { createUploadPage } from "../src/features/uploads/page.js";
 import { SUBJECTS } from "../src/features/knowledge-subjects/public.js";
@@ -23,7 +23,7 @@ Deno.test("Library static collection markup is supplied by the offline shell", a
   assert(html.includes("Processing: generating and validating review quizzes."), "Shell carries processing copy too.");
   const messages = [
     "This source is unavailable. Return to Library and reopen Upload.",
-    "Select an awaiting source or a new private document and confirm processing permission.",
+    "Select an awaiting source or a new private document.",
     "The upload exceeds the 100 MiB limit.",
     "Pasted text exceeds the one-million-character limit.",
     "Provide either pasted text or one document.",
@@ -44,8 +44,8 @@ Deno.test("Library static collection markup is supplied by the offline shell", a
   });
   const form = new FormData();
   await page.uploadMaterial("", form);
-  assert(!page.uploadResult().ok && page.uploadResult().message === messages[1], "Permission failure copy is exact.");
-  form.set("attested", "on");
+  assert(!page.uploadResult().ok && page.uploadResult().message === messages[4], "Missing content is explicit without a permission gate.");
+
   await page.uploadMaterial("", form);
   assert(page.uploadResult().message === messages[4], "Missing content copy is exact.");
   form.set("content", "x".repeat(1_000_001));
@@ -202,9 +202,6 @@ Deno.test("Library offers private document creation without an existing source",
   const form = new FormData();
   form.set("file", new File(["Synthetic authorized notes"], "lecture.txt"));
   await page.uploadMaterial("", form);
-  assert(requests.length === 0, "No source or content may be created before attestation.");
-  form.set("attested", "on");
-  await page.uploadMaterial("", form);
   fail = false;
   await page.uploadMaterial("", form);
   assert(requests.join(",") === "create,upload,create,upload", "A failed attachment must retry the idempotent creation and upload steps.");
@@ -234,9 +231,6 @@ Deno.test("Library uploads validated material to its persisted run and preserves
   await page.load();
   const form = new FormData();
   form.set("content", "A synthetic source explains a musical relation.");
-  await page.uploadMaterial("source-a", form);
-  assert(uploads.length === 0, "Unattested content must not be transmitted.");
-  form.set("attested", "on");
   await page.uploadMaterial("unknown-source", form);
   assert(uploads.length === 0, "Unknown sources must not be transmitted.");
   await page.uploadMaterial("source-a", form);
@@ -261,7 +255,7 @@ Deno.test("Library uploads validated material to its persisted run and preserves
   assert(uploads.length === 3, "Unsupported formats must fail before transmission.");
 });
 
-Deno.test("Library image option is off by default and batches selected raster files only when enabled", async () => {
+Deno.test("Library batches selected raster files automatically without checkbox", async () => {
   /** @type {FormData[]} */ const uploads = [];
   const page = createLibraryPage({
     fetch: async (input, init) => {
@@ -282,13 +276,11 @@ Deno.test("Library image option is off by default and batches selected raster fi
   });
   await page.load();
   const form = new FormData();
-  form.set("attested", "on");
+
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   for (let index = 1; index <= 3; index++) form.append("file", new File([png], `figure-${index}.png`, { type: "image/png" }));
   await page.uploadMaterial("source-a", form);
-  assert(uploads.length === 0, "Default-off processing must reject a multi-image upload.");
-  form.set("imageProcessing", "on");
-  await page.uploadMaterial("source-a", form);
+
   assert(uploads.length === 1 && uploads[0].get("mode") === "image" && uploads[0].get("mediaType") === "application/x-knowledge-images", "Enabled processing must send one image bundle.");
 });
 
@@ -396,8 +388,8 @@ Deno.test("Library related-knowledge overview displays the source-owned topic", 
   assert(overview.length <= 300, "The related-knowledge overview must remain bounded.");
 });
 
-Deno.test("Library announces the number of actively processing sources", () => {
-  const html = renderLibraryRoute({
+Deno.test("Header announces the number of actively processing sources", () => {
+  const html = renderProcessingStatus({
     ...baseModel(),
     workflowStatuses: [workflowStatus("extraction-loop")],
   });
@@ -410,8 +402,8 @@ Deno.test("Library announces the number of actively processing sources", () => {
   assert(html.includes('aria-hidden="true"') && html.includes("⟳"), "The CSS spinner must be decorative and visible without replacing the text label.");
 });
 
-Deno.test("Library pluralizes active processing sources and excludes waiting states", () => {
-  const active = renderLibraryRoute({
+Deno.test("Header pluralizes active processing sources and excludes waiting states", () => {
+  const activeModel = {
     ...baseModel(),
     collection: { ...baseModel().collection, items: [source, sourceB] },
     workflowStatuses: [
@@ -419,17 +411,19 @@ Deno.test("Library pluralizes active processing sources and excludes waiting sta
       workflowStatus("per-point-quiz-loop", "source-b"),
       { ...workflowStatus("awaiting-upload", "source-a"), message: "Upload content instead." },
     ],
-  });
+  };
+  const active = renderProcessingStatus(activeModel) + renderLibraryRoute(activeModel);
   assert(active.includes("Processing 2 sources"), "The status chip must pluralize and count active sources once each.");
   assert(active.includes("generating and validating review quizzes"), "An active quiz-generation status must explain what processing is doing.");
 
-  const terminal = renderLibraryRoute({
+  const terminalModel = {
     ...baseModel(),
     workflowStatuses: [
       { ...workflowStatus("awaiting-upload"), message: "Upload content instead." },
       workflowStatus("completed", "source-b"),
     ],
-  });
+  };
+  const terminal = renderProcessingStatus(terminalModel) + renderLibraryRoute(terminalModel);
   assert(!terminal.includes('data-library-processing-status'), "Waiting and completed sources must not keep the spinner visible.");
   assert(terminal.includes("Upload content instead."), "The source card must retain the specific upload explanation.");
 });
@@ -805,13 +799,13 @@ Deno.test("Library polls active workflow status and stops after completion", asy
   await page.load();
   assert(statusCalls === 1, "Library must load workflow status with the source list.");
   assert(scheduled.length === 1 && scheduled[0].delayMs === 5_000, "Active work must schedule one five-second refresh.");
-  assert(page.render({}).includes("Processing 1 source"), "The active source must be visible before the poll completes.");
+  assert(page.renderProcessingStatus().includes("Processing 1 source"), "The active source must be visible before the poll completes.");
 
   scheduled[0].callback();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert(statusCalls === 2, "The scheduled refresh must fetch the latest workflow status.");
-  assert(!page.render({}).includes('data-library-processing-status'), "The chip must disappear after the source completes.");
+  assert(!page.renderProcessingStatus().includes('data-library-processing-status'), "The chip must disappear after the source completes.");
   assert(scheduled.length === 1, "Polling must stop after a terminal workflow state.");
 });
 
@@ -852,7 +846,7 @@ Deno.test("Library preserves a known active status when a poll fails", async () 
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert(page.render({}).includes("Harmony source"), "A status outage must not erase the Library source.");
-  assert(page.render({}).includes("Processing 1 source"), "A status outage must retain the last confirmed processing state.");
+  assert(page.renderProcessingStatus().includes("Processing 1 source"), "A status outage must retain the last confirmed processing state.");
   assert(errors.length === 1, "A status outage must be reported to the user.");
   assert(scheduled.length === 2, "A known active source may retry with one replacement poll after a transient status failure.");
 });
@@ -869,6 +863,7 @@ Deno.test("Upload attaches validated source context without depending on Library
   let uploaded = false;
   const page = createLibraryPage({
     fetch: async (url, init) => {
+      if(String(url).includes("source-status")) return Response.json({result:workflowStatus("extraction-loop")});
       assert(String(url).endsWith("/material"), "Bound upload must never create a private source or read pagination.");
       const command = JSON.parse(String(init?.body));
       assert(command.sourceId === source.id && command.runId === "run-a" && command.sourceRevision === source.revision, "Bound material keeps current identity and revision.");
@@ -886,6 +881,7 @@ Deno.test("Upload material failure retains inline retry context without a global
   /** @type {typeof fetch} */ const fetchFixture = async (url) => {
     const path = new URL(String(url)).pathname;
     if (path.endsWith("/upload-context")) return Response.json({ result: { source, runId: "run-a", reason: "Authorized material required." } });
+    if (path.endsWith("/source-status")) return Response.json({result:workflowStatus("awaiting-upload")});
     assert(path.endsWith("/material"), `Unexpected upload fixture request: ${path}`);
     materialRequests += 1;
     return Response.json({ error: "SyntheticUnavailable" }, { status: 503 });
@@ -909,7 +905,7 @@ Deno.test("Upload material failure retains inline retry context without a global
   const form = new FormData();
   form.set("title", source.title);
   form.set("content", "Synthetic retained retry draft.");
-  form.set("attested", "on");
+
   assert(await upload.submit(form) === false, "Material failure must report an unsuccessful upload.");
   assert(materialRequests === 1, "The regression must reach the failing material endpoint exactly once.");
   const html = upload.render();
@@ -941,4 +937,29 @@ Deno.test("Source search invalidates old knowledge when the source revision chan
  },gatewayBaseUrl:"https://app.example/",escapeHtml:value=>value,formatDate:value=>value,createId:()=>"id",confirmDisable:()=>true,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
  await page.load();const form=new FormData();form.set("query","Harmony");form.set("searchScope","sources");await page.search(form);
  assert(!page.render({}).includes("Old revision knowledge"),"Source search must not reattach stale knowledge from a previous revision.");
+});
+
+Deno.test("Contextual image upload is checkbox-free and ignores stale image state", async () => {
+ /** @type {FormData|null} */ let sent=null;
+ const page=createLibraryPage({fetch:async(input,init)=>{
+  if(String(input).includes("/material")){sent=/** @type {FormData} */(init?.body);return Response.json({result:{status:"attached",materialId:"m",runId:"run-a",reused:false}});}
+  if(String(input).includes("source-status"))return Response.json({result:workflowStatus("extraction-loop")});
+  return Response.json({error:"Unexpected"},{status:404});
+ },gatewayBaseUrl:"https://app.example/",escapeHtml:v=>v,formatDate:v=>v,createId:()=>"id",confirmDisable:()=>false,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
+ const form=new FormData();form.set("title",source.title);form.set("file",new File([new Uint8Array([137,80,78,71,13,10,26,10])],"image.png",{type:"image/png"}));form.set("imageProcessing","off");
+ await page.uploadMaterial(source.id,form,{source,runId:"run-a",reason:"awaiting attachment"});
+ assert(page.uploadResult().ok,"Context upload must work without checkbox.");
+ assert(/** @type {FormData|null} */(sent)?.get("mode")==="image","Image mode must be unconditional.");
+});
+
+Deno.test("Library exposes cancellation for active attempts and retains explicit image warnings",()=>{
+  const status=workflowStatus("extraction-loop");
+  const html=renderLibraryRoute({...baseModel(),workflowStatuses:[{...status,message:"Image warning: MediaStorageFailed. Text retained."}]});
+  assert(html.includes('data-library-workflow-cancel="run-source-a"'),"Active run must expose cancellation");
+  assert(html.includes('MediaStorageFailed'),"Image warning must be visible");
+  for(const state of ["completed","abandoned"])assert(!renderLibraryRoute({...baseModel(),workflowStatuses:[workflowStatus(state)]}).includes("data-library-workflow-cancel"),"Terminal attempt cannot be canceled again");
+});
+
+Deno.test("failed cancellation remains retryable after the run is already abandoned",()=>{
+  const html=renderLibraryRoute({...baseModel(),workflowStatuses:[workflowStatus("abandoned")],cancellationRetries:["run-source-a"]});assert(html.includes('data-library-workflow-cancel="run-source-a"'),"Cleanup/termination retry must remain available");
 });

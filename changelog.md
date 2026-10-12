@@ -9,3 +9,28 @@
 - Learner packaging follow-up: inspected the production graph (19 JavaScript files, 222,630 raw / 72,317 gzip) and found no safe duplicate/dead code optimization that closes the 2,630 raw / 317 gzip gap without changing behavior or presentation. Set aggregate limits to the exact measured totals, preserving initial/per-chunk caps and separate raw/gzip failure checks. Full validation passed: Deno (1,099/1,099), Node (55/55), strict check, 20 migrations / 136 schema objects, and migration tests (6/6). The build artifact is local; release remained gated on independent acceptance.
 - Release checkpoint: the initial budget gate correctly failed at 222,630 raw / 72,317 gzip against the earlier 222,424 / 72,250 caps. The approved exact measured caps now accept equality and independently reject values one byte above either cap. The earlier 300,000 / 100,000 diagnostic allowances were not release validation.
 - Jev grader now receives the typed model, endpoint, threshold, and evidence configuration explicitly from Worker composition. Adapter tests prove injected serving/acceptance settings are used; nine bounded synthetic live Decisions API cases passed with no false acceptance. No hosted learner records or classification backfill were changed.
+
+## 2026-10-06
+
+- Closed approved image boundaries: typed malformed-upload failures, stored uploaded visual cues, verified matches with durable candidate/page warnings, and owner-attributed persistent page/run budgets with original model/acquisition attempt deadlines and pixel-bound model replay.
+- Added the configurable labelled holdout harness and working offline positive/rejection exercises; synthetic fixture arithmetic is not model accuracy. Full local checks/build/browser evidence and remaining semantic/prescribed-review limits: final closure. No live requests, deployment, Git mutation or learner data changes.
+
+## 2026-10-07
+
+- Fixed webpage extraction schema/types, canonical quote provenance, shared phase/request admission, and cancellation/timer/body/usage diagnostics. Mocked production workflow retains text after image-association failure. Historical paid evidence and learner data remain unchanged.
+
+## 2026-10-08
+
+- Added canonical validation-evidence snapshot/artifact/retention tasks: explicit SHA256 file manifests, verified immutable digest reuse with per-run receipts, and report-only 30-day inactive/unreferenced eligibility. Future Codex review/benchmark guidance uses these tasks instead of recursive history/dependency copies. Historical outputs and build contracts retained; deletion remains separately gated.
+
+## 2026-10-08 validation evidence lifecycle repair
+
+- Clean owned OS-temp test fixtures, retire only successful invocation stages (including identical receipts), and protect inactive parents with registered active/unknown descendants. Behavioral RED25/2 → GREEN27/27; two final repeats leave zero project fixtures. Fresh directory sealing is0555; historical0700 remains unchanged.
+- Deleted exactly267 manifest-bound disposable roots,0skips; retained18logs, real evidence, canonical outputs, dependencies and caches. Preserved the original1,000-line PROCESS byte-for-byte in PROCESS.history-2026-10-08.md and consolidated active guidance below450lines.
+
+## 2026-10-13
+
+- Improve source-backed webpage coverage and preserve the taught relationship during review and repair. Allow labeled contextual illustrations while checking factual diagrams against their visible content.
+- Give quiz generation an initial attempt plus three retries. Remove the knowledge point and quiz after exhausted generation, and report knowledge/quiz drop and retry statistics against their original cohorts.
+- Fix captured image attachments at the model boundary and retain text-only knowledge and quizzes when optional image storage fails. Preserve processing diagnostics across workflow phases.
+- Reuse cached shell markup for Library, Upload and Feed to keep the existing frontend size limits.

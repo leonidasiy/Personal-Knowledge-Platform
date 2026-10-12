@@ -93,7 +93,7 @@ export class SourceLibraryGatewayClient {
     );
     if (!response.ok) return response;
     const result = isRecord(response.value) ? response.value.result : null;
-    return sourcePage(result);
+    return sourcePage(result, isRecord(response.value) ? response.value.ownerId : undefined);
   }
 
   /**
@@ -180,12 +180,23 @@ export class SourceLibraryGatewayClient {
   }
 
   /** @param {unknown} command @returns {Promise<Result<{ readonly source: LibrarySource, readonly reused: boolean, readonly workflow: WorkflowStartProjection | null }, SourceGatewayFailure>>} */
-  async approve(command) {
+  async approve(command) { return this.#approve(command, "approve"); }
+
+  /** @param {unknown} command @returns {Promise<Result<{readonly source:LibrarySource,readonly reused:boolean,readonly workflow:WorkflowStartProjection},SourceGatewayFailure>>} */
+  async extract(command) {
+    const result = await this.#approve(command, "extract");
+    if (!result.ok) return result;
+    if (result.value.workflow === null) return bad();
+    return {ok:true,value:{...result.value,workflow:result.value.workflow}};
+  }
+
+  /** @param {unknown} command @param {"approve"|"extract"} action @returns {Promise<Result<{readonly source:LibrarySource,readonly reused:boolean,readonly workflow:WorkflowStartProjection|null},SourceGatewayFailure>>} */
+  async #approve(command, action) {
     if (!isRecord(command) || Object.hasOwn(command, "ownerId")) {
       return invalid("command");
     }
     const response = await this.#request(
-      "api/source-library/approve",
+      `api/source-library/${action}`,
       "POST",
       command,
     );
@@ -204,7 +215,7 @@ export class SourceLibraryGatewayClient {
 
   /** @param {unknown} command @returns {Promise<Result<{ readonly source: LibrarySource, readonly runId: string, readonly reused: boolean }, SourceGatewayFailure>>} */
   async createPrivateDocument(command) {
-    if (!isRecord(command) || Object.hasOwn(command, "ownerId") || !isNonEmptyText(command.title) || !isNonEmptyText(command.fileName) || !isNonEmptyText(command.idempotencyKey) || !isRecord(command.rightsAttestation)) return invalid("command");
+    if (!isRecord(command) || Object.hasOwn(command, "ownerId") || !isNonEmptyText(command.title) || !isNonEmptyText(command.fileName) || !isNonEmptyText(command.idempotencyKey)) return invalid("command");
     const response = await this.#request("api/source-library/private-documents", "POST", command);
     if (!response.ok) return response;
     const value = isRecord(response.value) ? response.value.result : null;
@@ -238,7 +249,7 @@ export class SourceLibraryGatewayClient {
 
   /** @param {unknown} command @returns {Promise<Result<{ readonly materialId: string, readonly runId: string }, SourceGatewayFailure>>} */
   async uploadWorkflowMaterial(command) {
-    if (!isRecord(command) || Object.hasOwn(command, "ownerId") || !isNonEmptyText(command.runId) || !isNonEmptyText(command.sourceId) || !Number.isSafeInteger(/** @type {number} */ (command.sourceRevision)) || /** @type {number} */ (command.sourceRevision) < 1 || !isPublicHttpsUrl(command.sourceUrl) || !isNonEmptyText(command.mediaType) || !isNonEmptyText(command.fileName) || !isNonEmptyText(command.idempotencyKey) || !isRecord(command.rightsAttestation) || (command.mode !== undefined && command.mode !== "text" && command.mode !== "image")) return invalid("command");
+    if (!isRecord(command) || Object.hasOwn(command, "ownerId") || !isNonEmptyText(command.runId) || !isNonEmptyText(command.sourceId) || !Number.isSafeInteger(/** @type {number} */ (command.sourceRevision)) || /** @type {number} */ (command.sourceRevision) < 1 || !isPublicHttpsUrl(command.sourceUrl) || !isNonEmptyText(command.mediaType) || !isNonEmptyText(command.fileName) || !isNonEmptyText(command.idempotencyKey) || (command.mode !== undefined && command.mode !== "text" && command.mode !== "image")) return invalid("command");
     const mode = command.mode ?? "text";
     let response;
     if (command.file instanceof Blob) {
@@ -252,12 +263,11 @@ export class SourceLibraryGatewayClient {
         fileName: command.fileName,
         mode,
         idempotencyKey: command.idempotencyKey,
-        rightsAttestation: JSON.stringify(command.rightsAttestation),
       })) form.set(key, value);
       form.set("file", command.file, command.fileName);
       response = await this.#request("api/knowledge-workflows/material", "POST", form);
     } else if (typeof command.content === "string") {
-      response = await this.#request("api/knowledge-workflows/material", "POST", { runId: command.runId, sourceId: command.sourceId, sourceRevision: command.sourceRevision, sourceUrl: command.sourceUrl, mediaType: command.mediaType, fileName: command.fileName, mode, idempotencyKey: command.idempotencyKey, rightsAttestation: command.rightsAttestation, content: command.content });
+      response = await this.#request("api/knowledge-workflows/material", "POST", { runId: command.runId, sourceId: command.sourceId, sourceRevision: command.sourceRevision, sourceUrl: command.sourceUrl, mediaType: command.mediaType, fileName: command.fileName, mode, idempotencyKey: command.idempotencyKey, content: command.content });
     } else return invalid("content");
     if (!response.ok) return response;
     const value = isRecord(response.value) ? response.value.result : null;
@@ -271,17 +281,24 @@ export class SourceLibraryGatewayClient {
     const response = await this.#request(`api/knowledge-workflows/source-status?sourceId=${encodeURIComponent(sourceId)}`, "GET", null);
     if (!response.ok) return response;
     const value = isRecord(response.value) ? response.value.result : null;
-    return parseWorkflowSourceStatus(value);
+    const parsed = parseWorkflowSourceStatus(value);
+    return parsed.ok && parsed.value.sourceId !== sourceId ? bad() : parsed;
   }
 
   /** @param {{ readonly runId: string, readonly expectedRevision: number, readonly idempotencyKey: string }} command @returns {Promise<Result<WorkflowRunStatus, SourceGatewayFailure>>} */
-  async retryWorkflow(command) {
+  async retryWorkflow(command) {return this.#controlWorkflow(command,"resume");}
+
+  /** @param {{readonly runId:string,readonly expectedRevision:number,readonly idempotencyKey:string}} command */
+  async cancelWorkflow(command) {return this.#controlWorkflow(command,"abandon");}
+
+  /** @param {{readonly runId:string,readonly expectedRevision:number,readonly idempotencyKey:string}} command @param {"resume"|"abandon"} action @returns {Promise<Result<WorkflowRunStatus, SourceGatewayFailure>>} */
+  async #controlWorkflow(command,action) {
     if (!isRecord(command) || !isNonEmptyText(command.runId) || !Number.isSafeInteger(command.expectedRevision) || command.expectedRevision < 1 || !isNonEmptyText(command.idempotencyKey)) return invalid("command");
-    const response = await this.#request("api/knowledge-workflows/control", "POST", { runId: command.runId, expectedRevision: command.expectedRevision, action: "resume", idempotencyKey: command.idempotencyKey });
+    const response = await this.#request("api/knowledge-workflows/control", "POST", { runId: command.runId, expectedRevision: command.expectedRevision, action, idempotencyKey: command.idempotencyKey });
     if (!response.ok) return response;
     const value = isRecord(response.value) ? response.value.result : null;
     const run = parseWorkflowRunStatus(value);
-    return run === null ? bad() : { ok: true, value: run };
+    return run === null || run.runId !== command.runId ? bad() : { ok: true, value: run };
   }
 
   /** @param {unknown} command @returns {Promise<Result<{ readonly suppression: SourceSuppression, readonly reused: boolean }, SourceGatewayFailure>>} */
@@ -350,75 +367,57 @@ export class SourceLibraryGatewayClient {
   /** @param {string} path @param {"GET" | "POST"} method @param {unknown | FormData} body @returns {Promise<Result<unknown, SourceGatewayFailure>>} */
   async #request(path, method, body) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    /** @type {ReturnType<typeof setTimeout>|undefined} */ let timeout;
+    const deadline=new Promise((resolve)=>{timeout=setTimeout(()=>{controller.abort();resolve(/** @type {Result<never,SourceGatewayFailure>} */({ok:false,error:{kind:"SourceGatewayTimedOut"}}));},this.#timeoutMs);});
+    /** @returns {Promise<Result<unknown,SourceGatewayFailure>>} */
+    const work=async()=>{
     const multipart = body instanceof FormData;
-    /** @type {Response} */ let response;
     try {
-      response = await (0, this.#fetch)(new URL(path, this.#base), {
-        method,
-        credentials: "same-origin",
-        headers: {
-          accept: "application/json",
-          ...(body === null || multipart ? {} : { "content-type": "application/json" }),
-        },
-        body: body === null ? null : multipart ? body : JSON.stringify(body),
-        cache: "no-store",
-        signal: controller.signal,
+      const response = await (0, this.#fetch)(new URL(path, this.#base), {
+        method, credentials: "same-origin",
+        headers: {accept:"application/json",...(body === null || multipart ? {} : {"content-type":"application/json"})},
+        body:body === null ? null : multipart ? body : JSON.stringify(body),cache:"no-store",signal:controller.signal,
       });
-    } catch (error) {
-      if (controller.signal.aborted) {
-        return { ok: false, error: { kind: "SourceGatewayTimedOut" } };
-      }
-      if (error instanceof TypeError) {
-        return { ok: false, error: { kind: "SourceGatewayUnavailable" } };
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (response.status === 401) {
-      return { ok: false, error: { kind: "SourceGatewayUnauthenticated" } };
-    }
-    if (response.status === 403) {
-      return { ok: false, error: { kind: "SourceGatewayUnauthorized" } };
-    }
-    /** @type {unknown} */ let document;
-    try {
-      document = await response.json();
-    } catch (error) {
+      if (controller.signal.aborted) return {ok:false,error:{kind:"SourceGatewayTimedOut"}};
+      if (response.status === 401) return {ok:false,error:{kind:"SourceGatewayUnauthenticated"}};
+      if (response.status === 403) return {ok:false,error:{kind:"SourceGatewayUnauthorized"}};
+      /** @type {unknown} */ const document = await response.json();
+      if (controller.signal.aborted) return {ok:false,error:{kind:"SourceGatewayTimedOut"}};
+      if (!response.ok) return isRecord(document) && isNonEmptyText(document.error)
+        ? {ok:false,error:{kind:"SourceGatewayRejected",failureKind:document.error}} : bad();
+      return {ok:true,value:document};
+    } catch(error) {
+      if (controller.signal.aborted) return {ok:false,error:{kind:"SourceGatewayTimedOut"}};
       if (error instanceof SyntaxError) return bad();
+      if (error instanceof TypeError) return {ok:false,error:{kind:"SourceGatewayUnavailable"}};
       throw error;
     }
-    if (!response.ok) {
-      const failureKind = isRecord(document) && isNonEmptyText(document.error)
-        ? document.error
-        : null;
-      return failureKind === null
-        ? bad()
-        : { ok: false, error: { kind: "SourceGatewayRejected", failureKind } };
-    }
-    return { ok: true, value: document };
+    };
+    try {return /** @type {Result<unknown,SourceGatewayFailure>} */(await Promise.race([work(),deadline]));}
+    finally {if(timeout!==undefined)clearTimeout(timeout);}
   }
 
 }
 
-/** @param {unknown} value @returns {Result<SourceCatalogPage, SourceGatewayFailure>} */
-function sourcePage(value) {
+/** @param {unknown} value @param {unknown} ownerId @returns {Result<SourceCatalogPage, SourceGatewayFailure>} */
+function sourcePage(value, ownerId) {
   if (
     !isRecord(value) || !Array.isArray(value.items) ||
     !Array.isArray(value.interestAreas) ||
+    (ownerId !== undefined && !isNonEmptyText(ownerId)) ||
     (value.nextCursor !== null && typeof value.nextCursor !== "string")
   ) return bad();
   /** @type {LibrarySource[]} */ const items = [];
   for (const candidate of value.items) {
     const source = parseSource(candidate);
-    if (source === null || source.state !== "active") return bad();
+    if (source === null || source.state !== "active" || (ownerId !== undefined && source.ownerId !== ownerId)) return bad();
     items.push(source);
   }
   /** @type {SourceInterestArea[]} */ const interestAreas = [];
   for (const candidate of value.interestAreas) {
     if (
       !isRecord(candidate) || !isNonEmptyText(candidate.id) ||
+      (ownerId !== undefined && candidate.ownerId !== ownerId) ||
       !isNonEmptyText(candidate.ownerId) || !isNonEmptyText(candidate.title) ||
       !isNonEmptyText(candidate.provenance)
     ) return bad();
@@ -444,17 +443,14 @@ function sourcePage(value) {
 /** @param {unknown} value @returns {LibrarySource | null} */
 function parseSource(value) {
   if (
-    !isRecord(value) || !isNonEmptyText(value.id) ||
-    !isNonEmptyText(value.ownerId) || !isPublicHttpsUrl(value.submittedUrl) ||
-    !isPublicHttpsUrl(value.canonicalUrl) || !isNonEmptyText(value.title) ||
-    !isNonEmptyText(value.description) || !isRecord(value.adapter) ||
-    !isNonEmptyText(value.adapter.id) ||
-    !isNonEmptyText(value.adapter.version) ||
-    !isNonEmptyText(value.adapter.granularity) ||
+    !isRecord(value) || ![value.id, value.ownerId, value.title].every(isNonEmptyText) ||
+    !isPublicHttpsUrl(value.submittedUrl) || !isPublicHttpsUrl(value.canonicalUrl) ||
+    typeof value.description !== "string" || !isRecord(value.adapter) ||
+    ![value.adapter.id, value.adapter.version, value.adapter.granularity].every(isNonEmptyText) ||
     !Array.isArray(value.adapter.capabilities) ||
-    value.adapter.capabilities.some((item) => !isNonEmptyText(item)) ||
+    !value.adapter.capabilities.every(isNonEmptyText) ||
     !Array.isArray(value.interestAreaIds) ||
-    value.interestAreaIds.some((item) => !isNonEmptyText(item)) ||
+    !value.interestAreaIds.every(isNonEmptyText) ||
     !Array.isArray(value.identityEvidence) ||
     (value.state !== "active" && value.state !== "disabled") ||
     !isIsoDateTime(value.approvedAt) || !isIsoDateTime(value.updatedAt) ||
@@ -476,29 +472,31 @@ function parseSource(value) {
 
 /** @param {unknown} value @returns {KnowledgeSearchHit | null} */
 function parseKnowledgeSearchHit(value) {
+  if (!isRecord(value)) return null;
+  const knowledge = value.knowledge;
   if (
-    !isRecord(value) || typeof value.score !== "number" ||
+    typeof value.score !== "number" ||
     !Number.isFinite(value.score) ||
     (value.matchedBy !== "exact" && value.matchedBy !== "semantic" &&
-      value.matchedBy !== "combined") || !isRecord(value.knowledge) ||
-    !isNonEmptyText(value.knowledge.knowledgeId) ||
-    !isNonEmptyText(value.knowledge.sourceId) ||
-    !isNonEmptyText(value.knowledge.sourceTitle) ||
-    !isNonEmptyText(value.knowledge.summary) ||
-    !isPublicHttpsUrl(value.knowledge.sourceUrl) ||
-    !Array.isArray(value.knowledge.evidenceAnchorIds) ||
-    value.knowledge.evidenceAnchorIds.some((item) => !isNonEmptyText(item)) ||
-    typeof value.knowledge.questionLocked !== "boolean"
+      value.matchedBy !== "combined") || !isRecord(knowledge) ||
+    !isNonEmptyText(knowledge.knowledgeId) ||
+    !isNonEmptyText(knowledge.sourceId) ||
+    !isNonEmptyText(knowledge.sourceTitle) ||
+    !isNonEmptyText(knowledge.summary) ||
+    !isPublicHttpsUrl(knowledge.sourceUrl) ||
+    !Array.isArray(knowledge.evidenceAnchorIds) ||
+    !knowledge.evidenceAnchorIds.every(isNonEmptyText) ||
+    typeof knowledge.questionLocked !== "boolean"
   ) return null;
   return freeze({
     knowledge: freeze({
-      knowledgeId: value.knowledge.knowledgeId,
-      sourceId: value.knowledge.sourceId,
-      sourceTitle: value.knowledge.sourceTitle,
-      summary: value.knowledge.summary,
-      sourceUrl: value.knowledge.sourceUrl,
-      evidenceAnchorIds: freeze([...value.knowledge.evidenceAnchorIds]),
-      questionLocked: value.knowledge.questionLocked,
+      knowledgeId: knowledge.knowledgeId,
+      sourceId: knowledge.sourceId,
+      sourceTitle: knowledge.sourceTitle,
+      summary: knowledge.summary,
+      sourceUrl: knowledge.sourceUrl,
+      evidenceAnchorIds: freeze([...knowledge.evidenceAnchorIds]),
+      questionLocked: knowledge.questionLocked,
     }),
     score: value.score,
     matchedBy: value.matchedBy,
@@ -515,16 +513,17 @@ function parseWorkflowStart(value) {
 /** @param {unknown} value @returns {WorkflowRunStatus | null} */
 function parseWorkflowRunStatus(value) {
   if (!isRecord(value) || !isNonEmptyText(value.runId) || !isNonEmptyText(value.state) || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1 || !isRecord(value.counts)) return null;
+  const { extractionStartedAt, extractionDeadlineAt, elapsedMs, remainingMs, decisionRequired, failureKind } = value;
   const counts = value.counts;
   if (![counts.pages, counts.knowledgePoints, counts.acceptedQuizzes, counts.pendingQuizzes].every((count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)) return null;
-  if ((value.extractionStartedAt !== null && !isIsoDateTime(value.extractionStartedAt)) || (value.extractionDeadlineAt !== null && !isIsoDateTime(value.extractionDeadlineAt)) || (value.elapsedMs !== null && (typeof value.elapsedMs !== "number" || !Number.isFinite(value.elapsedMs) || value.elapsedMs < 0)) || (value.remainingMs !== null && (typeof value.remainingMs !== "number" || !Number.isFinite(value.remainingMs) || value.remainingMs < 0)) || (value.decisionRequired !== null && !isNonEmptyText(value.decisionRequired)) || (value.failureKind !== null && !isNonEmptyText(value.failureKind))) return null;
+  if ((extractionStartedAt !== null && !isIsoDateTime(extractionStartedAt)) || (extractionDeadlineAt !== null && !isIsoDateTime(extractionDeadlineAt)) || (elapsedMs !== null && (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0)) || (remainingMs !== null && (typeof remainingMs !== "number" || !Number.isFinite(remainingMs) || remainingMs < 0)) || (decisionRequired !== null && !isNonEmptyText(decisionRequired)) || (failureKind !== null && !isNonEmptyText(failureKind))) return null;
   const pages = /** @type {number} */ (counts.pages);
   const knowledgePoints = /** @type {number} */ (counts.knowledgePoints);
   const acceptedQuizzes = /** @type {number} */ (counts.acceptedQuizzes);
   const pendingQuizzes = /** @type {number} */ (counts.pendingQuizzes);
-  const robotsEvidence = value.robotsEvidence === undefined || value.robotsEvidence === null ? null : parseWorkflowRobotsEvidence(value.robotsEvidence);
-  if (value.robotsEvidence !== undefined && value.robotsEvidence !== null && robotsEvidence === null) return null;
-  return freeze({ runId: value.runId, state: value.state, revision: value.revision, counts: freeze({ pages, knowledgePoints, acceptedQuizzes, pendingQuizzes }), extractionStartedAt: value.extractionStartedAt, extractionDeadlineAt: value.extractionDeadlineAt, elapsedMs: value.elapsedMs, remainingMs: value.remainingMs, decisionRequired: value.decisionRequired, failureKind: value.failureKind, robotsEvidence });
+  const robotsEvidence = value.robotsEvidence == null ? null : parseWorkflowRobotsEvidence(value.robotsEvidence);
+  if (value.robotsEvidence != null && robotsEvidence === null) return null;
+  return freeze({ runId: value.runId, state: value.state, revision: value.revision, counts: freeze({ pages, knowledgePoints, acceptedQuizzes, pendingQuizzes }), extractionStartedAt, extractionDeadlineAt, elapsedMs, remainingMs, decisionRequired, failureKind, robotsEvidence });
 }
 
 /** @param {unknown} value @returns {WorkflowRobotsEvidence | null} */

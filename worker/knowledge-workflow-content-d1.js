@@ -1,5 +1,7 @@
 // @ts-check
 
+import { QUIZ_MAX_ATTEMPTS } from "../src/features/knowledge-workflows/quiz.js";
+import { quoteHash } from "./webpage-citations.js";
 import { parseClassification } from "../src/features/knowledge-subjects/public.js";
 import { validateAssembledQuizPair } from "../src/features/knowledge-workflows/quiz-pair.js";
 
@@ -99,6 +101,102 @@ export class D1KnowledgeContentRepository {
     }
   }
 
+  /** @param {{ownerId:string,runId:string,knowledgeId:string,warnings:readonly string[],clearMedia?:boolean}} command @returns {Promise<ContentResult>} */
+  async updateImageWarnings(command) {
+    if(!text(command?.ownerId)||!text(command.runId)||!text(command.knowledgeId)||!Array.isArray(command.warnings)||!command.warnings.every(text)||(command.clearMedia!==undefined&&typeof command.clearMedia!=="boolean"))return {ok:false,error:{kind:"ImageWarningPersistenceFailed"}};
+    try {
+      const result=await this.#database.prepare("UPDATE extraction_knowledge_points SET point_json = json_patch(point_json, json(?)) WHERE owner_id = ? AND run_id = ? AND knowledge_id = ?").bind(JSON.stringify({imageWarnings:command.warnings,...(command.clearMedia?{mediaCandidates:[]}:{})}),command.ownerId,command.runId,command.knowledgeId).run();
+      return result.success && (result.meta?.changes ?? 0)>0 ? {ok:true,value:null} : {ok:false,error:{kind:"ImageWarningPersistenceFailed"}};
+    } catch(error) {if(!(error instanceof Error))throw error;this.#logger({event:"image-warning-persistence-failure",ownerId:command.ownerId,runId:command.runId,failureKind:"ImageWarningPersistenceFailed"});return {ok:false,error:{kind:"ImageWarningPersistenceFailed"}};}
+  }
+
+  /** @param {{ownerId:string,runId:string,pageUrl:string,warnings:readonly string[]}} command @returns {Promise<ContentResult>} */
+  async savePageImageWarnings(command) {
+    if (!text(command?.ownerId) || !text(command.runId) || !text(command.pageUrl) || !URL.canParse(command.pageUrl) || new URL(command.pageUrl).protocol !== "https:" || !Array.isArray(command.warnings) || command.warnings.length === 0 || !command.warnings.every(text)) return {ok:false,error:{kind:"ImageWarningPersistenceFailed"}};
+    this.#logger({event:"image-page-warning-entry",ownerId:command.ownerId,runId:command.runId});
+    try {
+      const result=await this.#database.prepare("INSERT INTO knowledge_workflow_page_image_warnings (owner_id,run_id,page_url,warnings_json) SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM knowledge_workflow_runs WHERE owner_id = ? AND run_id = ? AND state <> 'abandoned') AND NOT EXISTS (SELECT 1 FROM knowledge_workflow_run_tombstones WHERE owner_id = ? AND run_id = ?) ON CONFLICT(owner_id,run_id,page_url) DO UPDATE SET warnings_json = (SELECT json_group_array(value) FROM (SELECT value FROM json_each(knowledge_workflow_page_image_warnings.warnings_json) UNION SELECT value FROM json_each(excluded.warnings_json)))").bind(command.ownerId,command.runId,command.pageUrl,JSON.stringify(command.warnings),command.ownerId,command.runId,command.ownerId,command.runId).run();
+      if (!changed(result)) return {ok:false,error:{kind:"ImageWarningPersistenceFailed"}};
+      this.#logger({event:"image-page-warning-success",ownerId:command.ownerId,runId:command.runId});
+      return {ok:true,value:null};
+    } catch(error) {
+      this.#logger({event:"image-page-warning-failure",ownerId:command.ownerId,runId:command.runId,failureKind:"ImageWarningPersistenceFailed"});
+      if (!(error instanceof Error)) throw error;
+      return {ok:false,error:{kind:"ImageWarningPersistenceFailed"}};
+    }
+  }
+
+  /** @param {{readonly ownerId:string,readonly runId:string}} scope @returns {Promise<import('../src/features/source-library/contracts.js').Result<readonly string[],{readonly kind:"ImageWarningReadFailed"}>>} */
+  async loadImageWarnings(scope) {
+    if (!text(scope?.ownerId) || !text(scope.runId)) return {ok:false,error:{kind:"ImageWarningReadFailed"}};
+    try {
+      const rows=await this.#database.prepare("SELECT json_extract(point_json, '$.imageWarnings') AS warnings_json FROM extraction_knowledge_points WHERE owner_id = ? AND run_id = ? UNION ALL SELECT warnings_json FROM knowledge_workflow_page_image_warnings WHERE owner_id = ? AND run_id = ?").bind(scope.ownerId,scope.runId,scope.ownerId,scope.runId).all();
+      if (!rows.success) return {ok:false,error:{kind:"ImageWarningReadFailed"}};
+      const warnings=new Set();
+      for(const row of rows.results) {
+        if(!isRecord(row) || !(row.warnings_json === null || text(row.warnings_json))) return {ok:false,error:{kind:"ImageWarningReadFailed"}};
+        const values=row.warnings_json === null ? [] : JSON.parse(/** @type {string} */(row.warnings_json));
+        if(!Array.isArray(values)||!values.every(text))return {ok:false,error:{kind:"ImageWarningReadFailed"}};
+        for(const warning of values)warnings.add(warning);
+      }
+      return {ok:true,value:[...warnings]};
+    } catch(error) {
+      this.#logger({event:"knowledge-image-warning-read-failure",ownerId:scope.ownerId,runId:scope.runId,failureKind:"ImageWarningReadFailed"});
+      if(!(error instanceof Error))throw error;
+      return {ok:false,error:{kind:"ImageWarningReadFailed"}};
+    }
+  }
+
+  /** @param {{ownerId:string,runId:string,sourceId:string,knowledgeId:string}} scope @returns {Promise<{ok:true,value:import('../src/features/knowledge-workflows/quality-review.js').ReviewContext}|{ok:false,error:{kind:string}}>} */
+  async reviewContext(scope) {
+    try {
+      const points=await this.#database.prepare("SELECT p.knowledge_id,p.source_id,p.point_json,f.choice FROM extraction_knowledge_points p LEFT JOIN learner_preference_feedback f ON f.owner_id=p.owner_id AND f.knowledge_id=p.knowledge_id WHERE p.owner_id=? AND (p.knowledge_id<>? OR p.run_id<>?) AND (p.source_id=? OR f.choice='less') ORDER BY p.created_at,p.knowledge_id").bind(scope.ownerId,scope.knowledgeId,scope.runId,scope.sourceId).all();
+      const quizzes=await this.#database.prepare('SELECT draft_json FROM knowledge_workflow_quizzes WHERE owner_id=? AND source_id=? AND (knowledge_id<>? OR run_id<>?) ORDER BY created_at,quiz_id').bind(scope.ownerId,scope.sourceId,scope.knowledgeId,scope.runId).all();
+      if(!points.success||!quizzes.success)return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
+      const previousKnowledge=[],lessOften=[],previousQuizzes=[];
+      for(const row of points.results) {
+        if(!isRecord(row)||!text(row.point_json)||!text(row.knowledge_id))return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
+        const point=JSON.parse(row.point_json);
+        if(!isKnowledgePoint(point))return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
+        const summary={id:row.knowledge_id,summary:point.summary};
+        if(row.source_id===scope.sourceId)previousKnowledge.push(summary);
+        if(row.choice==='less')lessOften.push(summary);
+      }
+      const ownPreference=await this.#database.prepare("SELECT choice FROM learner_preference_feedback WHERE owner_id=? AND knowledge_id=?").bind(scope.ownerId,scope.knowledgeId).first();
+      if(isRecord(ownPreference)&&ownPreference.choice==='less') {
+        const ownPoint=await this.#database.prepare('SELECT point_json FROM extraction_knowledge_points WHERE owner_id=? AND knowledge_id=?').bind(scope.ownerId,scope.knowledgeId).first();
+        const parsed=isRecord(ownPoint)&&text(ownPoint.point_json)?JSON.parse(ownPoint.point_json):null;
+        if(isKnowledgePoint(parsed))lessOften.push({id:scope.knowledgeId,summary:parsed.summary});
+      }
+      for(const row of quizzes.results) {
+        if(!isRecord(row)||!text(row.draft_json))return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
+        const draft=JSON.parse(row.draft_json);
+        if(!isDraft(draft))return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
+        previousQuizzes.push({prompt:draft.prompt,answer:draft.answer,pairedQuiz:draft.pairedQuiz??null});
+      }
+      return {ok:true,value:{lessOften,previousKnowledge,previousQuizzes}};
+    }catch(error){this.#logger({event:'knowledge-review-context-failure',ownerId:scope.ownerId,runId:scope.runId,failureKind:'KnowledgeReviewContextFailed'});return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};}
+  }
+
+  /** @param {{ownerId:string,runId:string,knowledgeId:string,sourceRevision:number,evidenceDigest:string,evidence:unknown}} command @returns {Promise<ContentResult>} */
+  async saveReviewEvidence(command) {
+    try {
+      const result=await this.#database.prepare("INSERT INTO knowledge_workflow_review_evidence (owner_id,run_id,knowledge_id,source_revision,evidence_digest,evidence_json) SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=? AND state <> 'abandoned') AND NOT EXISTS (SELECT 1 FROM knowledge_workflow_run_tombstones WHERE owner_id=? AND run_id=?) ON CONFLICT DO NOTHING").bind(command.ownerId,command.runId,command.knowledgeId,command.sourceRevision,command.evidenceDigest,JSON.stringify(command.evidence),command.ownerId,command.runId,command.ownerId,command.runId).run();
+      if(!result.success)return {ok:false,error:{kind:'KnowledgeReviewEvidenceFailed'}};
+      if(result.meta?.changes===1)return {ok:true,value:null};
+      const row=await this.#database.prepare('SELECT evidence_digest FROM knowledge_workflow_review_evidence WHERE owner_id=? AND run_id=? AND knowledge_id=? AND source_revision=?').bind(command.ownerId,command.runId,command.knowledgeId,command.sourceRevision).first();
+      return isRecord(row)&&row.evidence_digest===command.evidenceDigest?{ok:true,value:null}:{ok:false,error:{kind:'KnowledgeReviewEvidenceChanged'}};
+    }catch(error){return {ok:false,error:{kind:'KnowledgeReviewEvidenceFailed'}};}
+  }
+
+  /** @param {{ownerId:string,runId:string,knowledgeId:string,sourceRevision:number}} scope @returns {Promise<{ok:true,value:unknown}|{ok:false,error:{kind:string}}>} */
+  async readReviewEvidence(scope) {
+    try {
+      const row=await this.#database.prepare('SELECT evidence_json,evidence_digest FROM knowledge_workflow_review_evidence WHERE owner_id=? AND run_id=? AND knowledge_id=? AND source_revision=?').bind(scope.ownerId,scope.runId,scope.knowledgeId,scope.sourceRevision).first();
+      return isRecord(row)&&text(row.evidence_json)&&await quoteHash(row.evidence_json)===row.evidence_digest?{ok:true,value:JSON.parse(row.evidence_json)}:{ok:false,error:{kind:'KnowledgeReviewEvidenceUnavailable'}};
+    }catch(error){return {ok:false,error:{kind:'KnowledgeReviewEvidenceFailed'}};}
+  }
+
   /** @param {{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number }} scope @returns {Promise<{ readonly ok: true, readonly value: readonly KnowledgePoint[] } | { readonly ok: false, readonly error: { readonly kind: "KnowledgePersistenceFailed" } }>} */
   async listKnowledgePoints(scope) {
     if (!text(scope?.ownerId) || !text(scope.runId) || !text(scope.sourceId) || !positiveInteger(scope.sourceRevision)) return { ok: false, error: { kind: "KnowledgePersistenceFailed" } };
@@ -142,7 +240,7 @@ export class D1QuizRepository {
     try {
       const row=await this.#database.prepare("SELECT status,attempt_number FROM knowledge_workflow_quizzes WHERE owner_id=? AND run_id=? AND knowledge_id=? LIMIT 1").bind(scope.ownerId,scope.runId,scope.knowledgeId).first();
       if (row===null) { this.#logger({event:"quiz-publication-read-success",ownerId:scope.ownerId,runId:scope.runId}); return {ok:true,value:null}; }
-      if (!isRecord(row) || (row.status!=="published" && row.status!=="pending-review") || !positiveInteger(row.attempt_number) || row.attempt_number>3) {
+      if (!isRecord(row) || (row.status!=="published" && row.status!=="pending-review") || !positiveInteger(row.attempt_number) || row.attempt_number>QUIZ_MAX_ATTEMPTS) {
         this.#logger({event:"quiz-publication-read-failure",failureKind:"QuizPersistenceFailed"});
         return {ok:false,error:{kind:"QuizPersistenceFailed"}};
       }
@@ -163,9 +261,9 @@ export class D1QuizRepository {
       const values=[attempt.ownerId,attempt.id,attempt.runId,attempt.knowledgeId,attempt.attempt,attempt.draftId,attempt.score,attempt.feedback,attempt.failureKind,attempt.createdAt];
       const results=await this.#database.batch([
         this.#database.prepare("INSERT INTO knowledge_workflow_quiz_attempts (owner_id, attempt_id, run_id, knowledge_id, attempt_number, draft_id, score, feedback, failure_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id,run_id,knowledge_id,attempt_number) DO NOTHING").bind(...values),
-        this.#database.prepare("INSERT INTO knowledge_workflow_quiz_retry_attempts (owner_id, attempt_id, run_id, knowledge_id, attempt_number, draft_id, score, feedback, failure_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...values),
+        this.#database.prepare("INSERT INTO knowledge_workflow_quiz_retry_attempts (owner_id, attempt_id, run_id, knowledge_id, attempt_number, draft_id, score, feedback, failure_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id,attempt_id) DO NOTHING").bind(...values),
       ]);
-      if (results.length!==2 || !results[0]?.success || !changed(results[1])) {
+      if (results.length!==2 || !results[0]?.success || !results[1]?.success) {
         this.#logger({event:"quiz-attempt-d1-failure",failureKind:"QuizPersistenceFailed"});
         return {ok:false,error:{kind:"QuizPersistenceFailed"}};
       }

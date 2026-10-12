@@ -65,6 +65,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   /** @type {string[]} */ const notices = [];
   /** @type {string[]} */ const errors = [];
   /** @type {string[]} */ const destinations = [];
+  const uploadTitles = /** @type {string[]} */ ([]);
   let nextId = 0;
   const page = createDiscoveryPage({
     ownerId: "owner-a",
@@ -102,9 +103,9 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
                 attribute: "provider-result-page", value: "https://orchestration.example/lessons/",
                 provenanceUrl: "https://orchestration.example/lessons/",
               }],
-            }], providerFailures: [], submittedQuery: "orchestration",
-            providerQuery: "orchestration tutorial lesson course educational",
-            policyVersion: "educational-v1",
+            }], providerFailures: [{providerId:"secondary",failure:{kind:"SearchProviderTimedOut"}}], submittedQuery: "orchestration",
+            providerQuery: "orchestration",
+            policyVersion: "raw-provider-v1"
           } });
         }
         return Response.json({ result: {
@@ -127,7 +128,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
             resultKind: "video",
             sourceLevel: "video",
             title: "Official harmony tutorial title",
-            description: null,
+            description: "Synthetic supplied harmony explanation",
             canonicalUrl: "https://www.youtube.com/watch?v=harmony",
             publisherLabel: "Music Teacher",
             publishedAt: "2026-07-01T00:00:00.000Z",
@@ -157,8 +158,8 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
           }],
           providerFailures: [],
           submittedQuery: "counterpoint",
-          providerQuery: "counterpoint tutorial lesson course educational",
-          policyVersion: "educational-v1",
+          providerQuery: "counterpoint",
+          policyVersion: "raw-provider-v1"
         } });
       }
       if (path === "/api/discovery/youtube/oauth/connection") {
@@ -182,14 +183,14 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       if (path === "/api/source-library/suppressions/check") {
         return Response.json({ result: [] });
       }
-      if (path === "/api/source-library/approve") {
+      if (path === "/api/source-library/extract") {
         decisionRequests += 1;
         approvalCommands.push(
           /** @type {Record<string,unknown>} */ (await request.json()),
         );
         if (holdApproval) await approvalGate;
         return Response.json({
-          result: { source: librarySource, reused: false },
+          result: { source: librarySource, reused: false },workflow:{runId:"run-a",reused:false},
         });
       }
       if (path === "/api/source-library/reject") {
@@ -240,6 +241,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
     now: () => "2026-07-22T08:00:00.000Z",
     onNotice: (message) => notices.push(message),
     onError: (message) => errors.push(message),
+    navigateToUpload: ({title}) => uploadTitles.push(title),
     navigateToLibrary: (sourceId) => destinations.push(sourceId),
     rerender: () => {},
   });
@@ -310,6 +312,14 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
     "Controller fixture requires three source items.",
   );
 
+  const selectedTitle = list.match(new RegExp(`data-discovery-item-id="${itemIds[0]}"[^>]*>[\\s\\S]*?<strong>([^<]+)</strong>`))?.[1];
+  assert(selectedTitle !== undefined, "Selected source has a real title.");
+  const opened = page.openUpload(itemIds[0]);
+  assert(opened.ok && uploadTitles[0] === selectedTitle, "Navigate directly with the actual selected title.");
+  const missingUpload = page.openUpload("missing-source");
+  assert(!missingUpload.ok && missingUpload.error.kind === "DiscoveryUploadSourceUnavailable" && uploadTitles.length === 1, "Missing identity must never select another source.");
+  assert(appendCalls === writesAfterLoad && decisionRequests === 0 && manualUploads === 0, "Navigation must not save approval or upload material.");
+
   holdApproval = true;
   const first = page.approve(itemIds[0], "area-a");
   const repeated = page.approve(itemIds[0], "area-a");
@@ -338,7 +348,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   const afterFailure = page.render({ selectedItemId: null, online: true });
   assert(
     afterFailure.includes(`data-discovery-item-id="${itemIds[2]}"`) &&
-      errors.includes("The Library decision could not be saved."),
+      errors.includes("Extraction or decision failed: SourceSuppressionFailed."),
     "Rejected suppression must remain visible with an explicit failure.",
   );
   const searched = await page.search({
@@ -393,38 +403,14 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       !selectedSearchHtml.includes("Ableton Learning Music"),
     "Selecting a live search result must preserve that search projection instead of restoring persisted rows.",
   );
+  const approvalsBeforeUnsupported = approvalCommands.length;
   await page.approve(searchedIds[1], "area-a");
-  const youtubeApproval = approvalCommands.at(-1);
-  const initialItem = youtubeApproval?.initialItem;
-  assert(
-    youtubeApproval?.title === "Saved YouTube video" &&
-      youtubeApproval.description ===
-        "Saved video link. Upload a permitted transcript to create learning material." &&
-      typeof initialItem === "object" && initialItem !== null &&
-      "publishedAt" in initialItem && initialItem.publishedAt === null &&
-      !JSON.stringify(youtubeApproval).includes("Official harmony tutorial title") &&
-      !JSON.stringify(youtubeApproval).includes("Music Teacher"),
-    "Library approval must retain the selected link without durable official YouTube metadata.",
-  );
   await page.approve(searchedIds[2], "area-a");
-  const podcastApproval = approvalCommands.at(-1);
-  assert(
-    podcastApproval?.title === "Saved podcast feed" &&
-      podcastApproval.description ===
-        "Saved podcast feed link. Review eligibility and rights before acquiring material." &&
-      podcastApproval.initialItem === null &&
-      JSON.stringify(podcastApproval.adapter) === JSON.stringify({
-        id: "central-search:podcasts",
-        version: "educational-v1",
-        granularity: "feed",
-        capabilities: ["metadata"],
-      }) &&
-      !JSON.stringify(podcastApproval).includes("Official harmony podcast title") &&
-      !JSON.stringify(podcastApproval).includes("Provider-authored podcast description") &&
-      !JSON.stringify(podcastApproval).includes("Example Radio") &&
-      JSON.stringify(podcastApproval).includes("6bdfd429-f58b-427d-8072-353d478aa15f"),
-    "Podcast approval must keep feed evidence without retaining provider preview metadata or enabling ingestion.",
-  );
+  assert(approvalCommands.length === approvalsBeforeUnsupported, "Unsupported video/feed extraction must not persist provider preview metadata or start ingestion.");
+  assert(errors.includes("Extraction is unavailable for this format. Explore the source or provide permitted learning material."), "Unsupported formats must explain their access boundary.");
+  assert(searchedHtml.includes("Unreviewed provider results"), "Raw results must visibly disclose that they are unreviewed.");
+  assert(searchedHtml.includes("Educational lessons in species counterpoint."), "Provider snippet must render unchanged.");
+  assert(appendCalls === writesAfterLoad && manualUploads === 0, "Search and source selection must not extract or persist material.");
   const requestsAfterSearch = centralSearchRequests;
   await page.load();
   const restored = page.render({ selectedItemId: null, online: true });
@@ -436,6 +422,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   assert(replaced.ok, "The replacement search must succeed.");
   const replacement = page.render({ selectedItemId: null, online: true });
   assert(!replacement.includes("Counterpoint course library") && replacement.includes("Orchestration lesson archive"), "A successful replacement must atomically replace results.");
+  assert(replacement.includes("SearchProviderTimedOut") && replacement.includes("secondary"),"Partial provider failures must name the provider and cause.");
   const failedReplacement = await page.search({ query: "replacement-failure", providerIds: ["podcasts"], limit: 20 });
   assert(!failedReplacement.ok, "The fixture replacement must fail.");
   const afterFailedReplacement = page.render({ selectedItemId: null, online: true });
@@ -473,8 +460,8 @@ Deno.test("Central search requires YouTube consent only when YouTube is selected
           items: [],
           providerFailures: [],
           submittedQuery: "harmony",
-          providerQuery: "harmony tutorial lesson course educational",
-          policyVersion: "educational-v1",
+          providerQuery: "harmony",
+          policyVersion: "raw-provider-v1"
         } });
       }
       if (path === "/api/source-library" && request.method === "GET") {
@@ -503,6 +490,7 @@ Deno.test("Central search requires YouTube consent only when YouTube is selected
     now: () => "2026-07-28T08:00:00.000Z",
     onNotice: () => {},
     onError: (message) => errors.push(message),
+    navigateToUpload: () => {},
     navigateToLibrary: () => {},
     rerender: () => {},
   });
@@ -548,8 +536,8 @@ Deno.test("Discovery controller ignores stale central search completions", async
   let requests = 0;
   /** @param {string} title */
   const result = (title) => Response.json({ result: {
-    items: [{ providerId: "web", resultKind: "web", sourceLevel: "site", title, description: null, canonicalUrl: `https://${title}.example/`, publisherLabel: null, publishedAt: null, identityEvidence: [{ attribute: "result", value: title, provenanceUrl: `https://${title}.example/` }] }],
-    providerFailures: [], submittedQuery: title, providerQuery: title, policyVersion: "educational-v1",
+    items: [{ providerId: "web", resultKind: "web", sourceLevel: "site", title, description: "Synthetic supplied explanation", canonicalUrl: `https://${title}.example/`, publisherLabel: null, publishedAt: null, identityEvidence: [{ attribute: "result", value: title, provenanceUrl: `https://${title}.example/` }] }],
+    providerFailures: [], submittedQuery: title, providerQuery: title, policyVersion: "raw-provider-v1"
   } });
   const page = createDiscoveryPage({
     ownerId: "owner-a", persistence: { appendBatch: storage.appendBatch.bind(storage), list: storage.list.bind(storage) },
@@ -561,7 +549,7 @@ Deno.test("Discovery controller ignores stale central search completions", async
       if (path === "/api/source-library/suppressions/check") return Response.json({ result: [] });
       throw new Error(`Unexpected request: ${request.method} ${path}`);
     },
-    gatewayBaseUrl: "https://app.example/", policyStorage: { getItem: () => null, setItem: () => {} }, starterInventory: STARTERS, markup: MARKUP, escapeHtml: (value) => value, createId: () => "race-id", now: () => "2026-08-01T00:00:00.000Z", onNotice: () => {}, onError: () => {}, navigateToLibrary: () => {}, rerender: () => {},
+    gatewayBaseUrl: "https://app.example/", policyStorage: { getItem: () => null, setItem: () => {} }, starterInventory: STARTERS, markup: MARKUP, escapeHtml: (value) => value, createId: () => "race-id", now: () => "2026-08-01T00:00:00.000Z", onNotice: () => {}, onError: () => {}, navigateToUpload: () => {}, navigateToLibrary: () => {}, rerender: () => {},
   });
   await page.load();
   const first = page.search({ query: "first", providerIds: ["web"], limit: 5 });
@@ -627,6 +615,7 @@ Deno.test("Discovery source actions recover after a transient catalog failure", 
     now: () => "2026-07-28T08:00:00.000Z",
     onNotice: () => {},
     onError: () => {},
+    navigateToUpload: () => {},
     navigateToLibrary: () => {},
     rerender: () => {},
   });

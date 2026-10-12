@@ -1,4 +1,5 @@
 // @ts-check
+import {AgentExecutionBoundaryFailure} from './harness.js';
 
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
@@ -207,6 +208,7 @@ export function createContextCompactor(dependencies) {
         try {
           summarized = await summarize({ role, context, coveredTurnIds: coveredTurns.map((turn) => turn.id), maxOutputTokens: maxSummaryTokens });
         } catch (error) {
+          if(error instanceof AgentExecutionBoundaryFailure)throw error;
           dependencies.logger({ event: "knowledge-workflow.compaction-failure", runId, role, failureKind: "ContextSummaryFailed" });
           return { ok: false, error: { kind: "ContextSummaryFailed" } };
         }

@@ -1,3 +1,11 @@
+
+const shell = Deno.readTextFileSync("index.html");
+Object.defineProperty(globalThis, "document", { configurable: true, value: {
+  getElementById: (/** @type {string} */ id) => {
+    const content = shell.match(new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`))?.[1];
+    return content === undefined ? null : { textContent: content };
+  },
+} });
 // @ts-check
 import { SUBJECTS, CLASSIFICATION_SCHEMA, parseClassification } from "../src/features/knowledge-subjects/public.js";
 import { subjectPresentation } from "../src/features/knowledge-subjects/presentation.js";

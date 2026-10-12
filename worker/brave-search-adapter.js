@@ -2,9 +2,9 @@
 
 /** @template T @template E @typedef {{readonly ok:true,readonly value:T}|{readonly ok:false,readonly error:E}} Result */
 /** @typedef {{readonly id:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean}} SearchProviderDescriptor */
-/** @typedef {{readonly kind:"SearchProviderCredentialMissing"}|{readonly kind:"SearchProviderCredentialRejected"}|{readonly kind:"SearchProviderQuotaExceeded"}|{readonly kind:"SearchProviderUnavailable"}|{readonly kind:"SearchProviderResponseInvalid"}} SearchProviderFailure */
+/** @typedef {{readonly kind:"SearchProviderTimedOut"}|{readonly kind:"SearchProviderCredentialMissing"}|{readonly kind:"SearchProviderCredentialRejected"}|{readonly kind:"SearchProviderQuotaExceeded"}|{readonly kind:"SearchProviderUnavailable"}|{readonly kind:"SearchProviderResponseInvalid"}} SearchProviderFailure */
 /** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number}} SearchProviderCommand */
-/** @typedef {{readonly providerId:string,readonly resultKind:string,readonly sourceLevel:"site",readonly title:string,readonly description:string|null,readonly canonicalUrl:string,readonly publisherLabel:null,readonly publishedAt:null,readonly identityEvidence:readonly {readonly attribute:string,readonly value:string,readonly provenanceUrl:string}[]}} BraveCandidate */
+/** @typedef {{readonly providerId:string,readonly resultKind:string,readonly sourceLevel:"document",readonly title:string,readonly description:string|null,readonly canonicalUrl:string,readonly publisherLabel:null,readonly publishedAt:null,readonly identityEvidence:readonly {readonly attribute:string,readonly value:string,readonly provenanceUrl:string}[]}} BraveCandidate */
 /** @typedef {{readonly providerId:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean,readonly maximumResults:number,readonly apiVersion:string}} BraveSearchConfiguration */
 
 /**
@@ -24,8 +24,9 @@ export function createBraveSearchProvider(configuration, dependencies) {
   });
   return Object.freeze({
     descriptor,
-    /** @param {SearchProviderCommand} command @returns {Promise<Result<readonly BraveCandidate[],SearchProviderFailure>>} */
-    async search(command) {
+    /** @param {SearchProviderCommand} command @param {import("./discovery-search.js").SearchExecution} [execution] @returns {Promise<Result<readonly BraveCandidate[],SearchProviderFailure>>} */
+    async search(command, execution) {
+      if (execution !== undefined && (!(execution.signal instanceof AbortSignal) || typeof execution.remainingMs !== "function")) throw new TypeError("Invalid Brave execution budget.");
       if (!commandValid(command, descriptor.id)) {
         throw new TypeError("Invalid Brave search command.");
       }
@@ -46,7 +47,7 @@ export function createBraveSearchProvider(configuration, dependencies) {
         accept: "application/json",
         "api-version": configuration.apiVersion,
         "x-subscription-token": credential.value,
-      });
+      }, execution?.signal);
       if (!response.ok) return response;
       const document = await readDocument(response.value);
       if (!document.ok) return document;
@@ -55,12 +56,13 @@ export function createBraveSearchProvider(configuration, dependencies) {
   });
 }
 
-/** @param {typeof fetch} fetchDependency @param {URL} url @param {HeadersInit} headers @returns {Promise<Result<Response,SearchProviderFailure>>} */
-async function request(fetchDependency, url, headers) {
+/** @param {typeof fetch} fetchDependency @param {URL} url @param {HeadersInit} headers @param {AbortSignal} [signal] @returns {Promise<Result<Response,SearchProviderFailure>>} */
+async function request(fetchDependency, url, headers, signal) {
   /** @type {Response} */ let response;
   try {
-    response = await fetchDependency(url, { headers });
+    response = await fetchDependency(url, { headers, signal });
   } catch (error) {
+    if (signal?.aborted) return {ok:false,error:{kind:"SearchProviderTimedOut"}};
     if (error instanceof Error) {
       return { ok: false, error: { kind: "SearchProviderUnavailable" } };
     }
@@ -95,19 +97,18 @@ function parseDocument(value, descriptor) {
   if (!record(value) || !record(value.web) || !Array.isArray(value.web.results) || value.web.results.length > 100) {
     return { ok: false, error: { kind: "SearchProviderResponseInvalid" } };
   }
-  /** @type {Map<string,BraveCandidate>} */ const candidates = new Map();
+  /** @type {BraveCandidate[]} */ const candidates = [];
   for (const item of value.web.results) {
-    if (!record(item) || !text(item.title) || !text(item.url) || !URL.canParse(item.url) || (item.description !== undefined && typeof item.description !== "string")) {
+    if (!record(item) || !text(item.title) || !text(item.url) || !URL.canParse(item.url) || (item.description !== undefined && typeof item.description !== "string") || (item.author !== undefined && typeof item.author !== "string")) {
       return { ok: false, error: { kind: "SearchProviderResponseInvalid" } };
     }
     const resultUrl = new URL(item.url);
-    if (resultUrl.protocol !== "https:") continue;
-    const canonicalUrl = `${resultUrl.origin}/`;
-    if (candidates.has(canonicalUrl)) continue;
-    candidates.set(canonicalUrl, Object.freeze({
+    if (resultUrl.protocol !== "https:" || resultUrl.username !== "" || resultUrl.password !== "" || resultUrl.hash !== "") continue;
+    const canonicalUrl = item.url;
+    candidates.push(Object.freeze({
       providerId: descriptor.id,
       resultKind: descriptor.resultKind,
-      sourceLevel: "site",
+      sourceLevel: "document",
       title: item.title.trim(),
       description: typeof item.description === "string" ? item.description.trim() || null : null,
       canonicalUrl,
@@ -117,10 +118,13 @@ function parseDocument(value, descriptor) {
         attribute: "provider-result-page",
         value: item.url,
         provenanceUrl: item.url,
-      })]),
+      }),
+        ...(typeof item.description === "string" && item.description.trim() !== "" ? [Object.freeze({attribute:"provider-result-description",value:item.description,provenanceUrl:item.url})] : []),
+        ...(typeof item.author === "string" && item.author.trim() !== "" ? [Object.freeze({attribute:"provider-result-author",value:item.author,provenanceUrl:item.url})] : []),
+      ]),
     }));
   }
-  return { ok: true, value: Object.freeze([...candidates.values()]) };
+  return { ok: true, value: Object.freeze(candidates) };
 }
 
 /** @param {unknown} value @returns {value is BraveSearchConfiguration} */

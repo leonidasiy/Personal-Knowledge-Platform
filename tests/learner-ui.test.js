@@ -1,3 +1,11 @@
+
+const shell = Deno.readTextFileSync("index.html");
+Object.defineProperty(globalThis, "document", { configurable: true, value: {
+  getElementById: (/** @type {string} */ id) => {
+    const content = shell.match(new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`))?.[1];
+    return content === undefined ? null : { textContent: content };
+  },
+} });
 // @ts-check
 
 import { createLearnerController } from "../src/features/learning-generation/learner.js";
@@ -60,6 +68,19 @@ Deno.test("Feed renders an associated source image without an unrelated fallback
   assert(!html.includes("data-fallback-src"), "Unrelated fallback must never be declared.");
   assert(html.includes("Source page diagram"), "Media attribution must remain visible.");
   assert(html.indexOf('card-knowledge') < html.indexOf('card-media') && html.indexOf('card-media') < html.indexOf('card-source'), "Associated media must support the knowledge before its source, not lead the page.");
+});
+
+Deno.test("Feed labels source illustrations without presenting them as evidence", async () => {
+  for (const purpose of [undefined, "evidence", "illustration"]) {
+    const media = { assetId: "media-1", kind: "image", url: "/api/learning-media?assetId=media-1&variant=feed", attribution: "Source page image", ...(purpose === undefined ? {} : { purpose }) };
+    const card = { knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A text-supported relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media, questionLocked: true };
+    const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:illustration", itemIds: [card.knowledgeId] }, items: [card] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
+    await controller.loadFeed();
+    const html = controller.renderFeed();
+    assert(html.includes('data-associated-media="true"'), "Approved source images remain visible.");
+    assert(html.includes("Source page image"), "Attribution remains visible.");
+    assert(html.includes("Illustration — facts are supported by the source text") === (purpose === "illustration"), "Only illustration bindings receive the explicit caption.");
+  }
 });
 
 Deno.test("Feed source editor exposes only main subject dropdown and free-text topic", async () => {

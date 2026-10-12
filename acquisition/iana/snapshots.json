@@ -1,0 +1,40 @@
+{
+  "sources": [
+    {
+      "family": 4,
+      "url": "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xml",
+      "file": "iana-ipv4-special-registry.xml",
+      "retrievedAt": "2026-10-06T02:27:39Z",
+      "sha256": "cf24e11f41b7d42c68debe2d18b97cac815084ec413ebb3b244f704028a16f20",
+      "bytes": 13459,
+      "responseHeaders": {
+        "Content-Type": "application/xml",
+        "Last-Modified": "Tue, 29 Sep 2026 00:49:13 GMT"
+      }
+    },
+    {
+      "family": 6,
+      "url": "https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xml",
+      "file": "iana-ipv6-special-registry.xml",
+      "retrievedAt": "2026-10-06T02:27:39Z",
+      "sha256": "c17f4380ba84fb2160dae82ebfd8bd155a5853cfab624ed3a9fd251638a8be02",
+      "bytes": 13431,
+      "responseHeaders": {
+        "Content-Type": "application/xml",
+        "Last-Modified": "Tue, 29 Sep 2026 00:48:48 GMT"
+      }
+    }
+  ],
+  "conservativeConfig": {
+    "ipv4Multicast": {
+      "cidr": "224.0.0.0/4",
+      "source": "https://www.rfc-editor.org/rfc/rfc1112#section-4",
+      "basis": "IPv4 multicast; RFC 1112 is cited by the retained IPv4 registry Reserved record."
+    },
+    "ipv6Envelope": {
+      "cidr": "2000::/3",
+      "source": "https://www.rfc-editor.org/rfc/rfc4291#section-2.4",
+      "basis": "Owner-approved retention of the inherited 001 global-unicast subset; RFC 4291 defines address types. This narrower envelope is a conservative acquisition choice, not a claim that all other unicast space is non-global."
+    }
+  }
+}

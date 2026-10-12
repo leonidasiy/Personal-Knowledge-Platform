@@ -1,8 +1,11 @@
 // @ts-check
+import { createShellMarkup } from "../../shell-markup.js";
+import { validateSubmittedLink } from "../source-library/submitted-link.js";
 import { SourceLibraryGatewayClient } from "../source-library/gateway.js";
-/** @typedef {"text"|"documents"|"pdf"|"images"} UploadInput */
+/** @typedef {"text"|"documents"|"pdf"|"images"|"link"} UploadInput */
+/** @typedef {{readonly title:string}} UploadPrefill */
 /** @typedef {{readonly source:import('../source-library/contracts.js').LibrarySource,readonly runId:string,readonly reason:string}} UploadContext */
-/** @typedef {{readonly fetch:typeof fetch,readonly baseUrl:string,readonly onChange:()=>void,readonly createId:()=>string,readonly onRenamed:(sourceId:string,title:string)=>void,readonly upload:(sourceId:string,form:FormData,context:UploadContext|null)=>Promise<{readonly ok:boolean,readonly message:string}>}} UploadDependencies */
+/** @typedef {{readonly fetch:typeof fetch,readonly baseUrl:string,readonly onChange:()=>void,readonly createId:()=>string,readonly onExtracted?:(sourceId:string)=>void,readonly onRenamed:(sourceId:string,title:string)=>void,readonly upload:(sourceId:string,form:FormData,context:UploadContext|null)=>Promise<{readonly ok:boolean,readonly message:string}>}} UploadDependencies */
 /** @param {UploadDependencies} dependencies */
 export function createUploadPage(dependencies) {
   if (
@@ -14,6 +17,8 @@ export function createUploadPage(dependencies) {
     typeof dependencies.onRenamed !== "function"
   ) throw new TypeError("UploadPageDependenciesInvalid");
   /** @type {UploadInput} */ let input = "text";
+  /** @type {readonly import("../source-library/contracts.js").SourceInterestArea[]} */ let areas = [];
+  /** @type {{fingerprint:string,key:string}|null} */ let linkAttempt = null;
   let title = "";
   let draft = new FormData();
   let busy = false;
@@ -29,7 +34,7 @@ export function createUploadPage(dependencies) {
   function remember(form) {
     if (!(form instanceof FormData)) throw new TypeError("UploadDraftInvalid");
     if (
-      input !== "text" &&
+      input !== "text" && input !== "link" &&
       !form.getAll("file").some((value) =>
         value instanceof File && value.size > 0
       )
@@ -52,11 +57,12 @@ export function createUploadPage(dependencies) {
   /** @param {FormData} form */
   async function submit(form) {
     if (busy || state !== "ready") return false;
+    if (!(form instanceof FormData)) throw new TypeError("UploadDraftInvalid");
+    if (input === "link") return submitLink(form);
     const selected = new FormData();
     for (
       const key of [
         "title",
-        "attested",
         ...(input === "text" ? ["content"] : ["file"]),
         ...(input === "pdf"
           ? ["pageRange", "imageProcessing"]
@@ -67,6 +73,7 @@ export function createUploadPage(dependencies) {
     ) {
       for (const value of form.getAll(key)) selected.append(key, value);
     }
+    if (input === "images") selected.set("imageProcessing", "on");
     form = selected;
     remember(form);
     if (
@@ -101,12 +108,6 @@ export function createUploadPage(dependencies) {
       dependencies.onChange();
       return false;
     }
-    if (form.get("attested") !== "on") {
-      message =
-        shellMarkup(14);
-      dependencies.onChange();
-      return false;
-    }
     const current = generation;
     if (context !== null && !await saveTitle(form)) return false;
     if (generation !== current) return false;
@@ -129,6 +130,26 @@ export function createUploadPage(dependencies) {
       busy = false;
       dependencies.onChange();
     }
+  }
+  /** @param {FormData} form */
+  async function submitLink(form) {
+    const command = {title:form.get("title"),url:form.get("url"),interestAreaId:form.get("interest-area"),idempotencyKey:"pending"};
+    const checked = validateSubmittedLink(command);
+    remember(form);
+    if (!checked.ok || !areas.some(area=>area.id===command.interestAreaId) || context !== null) {
+      message = checked.ok ? shellMarkup(30) : shellMarkup(31,checked.error.field);
+      dependencies.onChange();return false;
+    }
+    const fingerprint = JSON.stringify([command.title,command.url,command.interestAreaId]);
+    if (linkAttempt?.fingerprint !== fingerprint) linkAttempt={fingerprint,key:`link:${dependencies.createId()}`};
+    const current=generation;busy=true;dependencies.onChange();
+    try {
+      const result=await gateway.extract({...command,idempotencyKey:linkAttempt.key});
+      if(current!==generation)return false;
+      if(!result.ok) {message=shellMarkup(32,linkFailureMessage(result.error));return false;}
+      message=shellMarkup(33);
+      dependencies.onExtracted?.(result.value.source.id);return true;
+    } finally {busy=false;dependencies.onChange();}
   }
   /** @param {FormData} form */
   async function saveTitle(form) {
@@ -195,14 +216,20 @@ export function createUploadPage(dependencies) {
     dependencies.onChange();
     return true;
   }
-  /** @param {string} hash */
-  async function load(hash) {
+  /** @param {string} hash @param {UploadPrefill|null} [prefill] */
+  async function load(hash, prefill = null) {
+    if (typeof hash !== "string" || prefill !== null &&
+      (hash !== "#upload" || typeof prefill.title !== "string" || !prefill.title.trim())) {
+      throw new TypeError("UploadPrefillInvalid");
+    }
     const current = ++generation;
     context = null;
     draft = new FormData();
     input = "text";
     renameAttempt = null;
-    title = "";
+    linkAttempt = null;
+    areas = [];
+    title = prefill?.title ?? "";
     message = "";
     const [route, query] = hash.split("?");
     if (route !== "#upload") {
@@ -242,18 +269,26 @@ export function createUploadPage(dependencies) {
     dependencies.onChange();
   }
   /** @param {string} value */
-  function select(value) {
+  async function select(value) {
     if (
-      value !== "text" && value !== "documents" && value !== "pdf" &&
-      value !== "images"
+      !["text", "documents", "pdf", "images", "link"].includes(value)
     ) throw new TypeError("UploadInputInvalid");
+    if (value === "link" && context !== null) throw new TypeError("UploadLinkContextInvalid");
     if (input !== value) {
-      for (const key of ["content", "file", "pageRange", "imageProcessing"]) {
+      for (const key of ["content", "file", "pageRange", "imageProcessing", "url", "interest-area"]) {
         draft.delete(key);
       }
     }
-    input = value;
+    input = /** @type {UploadInput} */ (value);
     dependencies.onChange();
+    if (input === "link") {
+      const current=generation;
+      const result=await gateway.browse({limit:1});
+      if(current!==generation || input!=="link")return;
+      areas=result.ok ? result.value.interestAreas : [];
+      message=result.ok ? "" : shellMarkup(34,linkFailureMessage(result.error));
+      dependencies.onChange();
+    }
   }
   function render() {
     if (state === "loading") {
@@ -268,41 +303,30 @@ export function createUploadPage(dependencies) {
     const files = draft.getAll("file").filter((value) =>
       value instanceof File && value.size > 0
     );
-    const control = input === "text"
+    const control = input === "link"
+      ? shellMarkup(29,escape(String(draft.get("url")??"")),areas.map(area=>shellMarkup(7,escape(area.id),draft.get("interest-area")===area.id?" selected":"",escape(area.title))).join(""))
+      : input === "text"
       ? shellMarkup(2, escape(String(draft.get("content") ?? "")))
-      : shellMarkup(3, input === "documents"
-          ? "Choose a document"
-          : input === "pdf"
-          ? "Choose a PDF"
-          : "Choose images", input === "images" ? "multiple" : "", input === "documents"
+      : shellMarkup(3, shellMarkup(input === "documents" ? 21 : input === "pdf" ? 22 : 23), input === "images" ? "multiple" : "", input === "documents"
           ? ".txt,.md,.pptx"
           : input === "pdf"
           ? ".pdf"
-          : ".png,.jpg,.jpeg,.webp,.gif", files.length ? "" : " required", files.length
-          ? shellMarkup(4, files.map((file) => escape(/** @type {File} */ (file).name)).join(
+          : ".png,.jpg,.jpeg,.webp,.gif", files.length ? "" : " required", shellMarkup(4, files.length ? "" : " hidden", files.map((file) => escape(/** @type {File} */ (file).name)).join(
               ", ",
-            ))
-          : "");
+            )));
     return shellMarkup(5, context === null
         ? ""
-        : shellMarkup(6, escape(context.reason)), busy, escape(title), context !== null || input === "text" ? " required" : "", ([
-        ["text", "Paste text"],
-        ["documents", "Documents"],
-        ["pdf", "PDF"],
-        ["images", "Images"],
-      ]).map(([value, label]) =>
-        shellMarkup(7, value, input === value ? " selected" : "", label)
-      ).join(""), control, input === "pdf" || input === "images"
+        : shellMarkup(6, escape(context.reason)), escape(context?.source.id ?? ""), busy, escape(title), context !== null || input === "text" || input === "link" ? " required" : "", ["text", "documents", "pdf", "images", ...(context === null ? ["link"] : [])].map((value, index) =>
+        shellMarkup(24 + index, input === value ? " selected" : "")
+      ).join(""), control, input === "pdf"
         ? shellMarkup(8, draft.has("imageProcessing")
             ? draft.get("imageProcessing") === "on" ? " checked" : ""
-            : input === "images"
-            ? " checked"
             : "")
         : "", input === "pdf"
         ? shellMarkup(9, escape(String(draft.get("pageRange") ?? "")))
-        : "", draft.get("attested") === "on" ? " checked" : "", context === null
+        : "", shellMarkup(input === "link" ? 37 : 38), context === null
         ? ""
-        : shellMarkup(10), busy ? " disabled" : "", busy ? "Uploading…" : shellMarkup(20), escape(message));
+        : shellMarkup(10), busy ? " disabled" : "", busy ? input === "link" ? shellMarkup(35) : "Uploading…" : input === "link" ? shellMarkup(36) : shellMarkup(20), escape(message));
   }
   /** @param {HTMLElement} root */
   function bind(root) {
@@ -316,9 +340,10 @@ export function createUploadPage(dependencies) {
     form.addEventListener("input", () => remember(new FormData(form)));
     form.addEventListener("change", (event) => {
       if (event.target !== choice) remember(new FormData(form));
+      if (event.target === form.querySelector('[name="file"]')) dependencies.onChange();
     });
     choice?.addEventListener("change", () => {
-      select(choice.value);
+      void select(choice.value);
       /** @type {HTMLSelectElement|null} */ (root.querySelector(
         "[data-upload-input]",
       ))?.focus();
@@ -353,15 +378,24 @@ function escape(value) {
   ).replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
-/** Static markup is part of the cached shell; values are escaped by callers.
- * @param {number} index @param {...(string|boolean|number)} values */
-function shellMarkup(index, ...values) {
-  const content = document.getElementById("upload-markup")?.textContent;
-  if (!content) throw new TypeError("ShellMarkupUnavailable:upload-markup");
-  const templates = JSON.parse(content);
-  const parts = templates[index];
-  if (!Array.isArray(parts) || parts.length !== values.length + 1 || parts.some(part => typeof part !== "string")) {
-    throw new TypeError("ShellMarkupInvalid:upload-markup");
-  }
-  return parts.reduce((html, part, slot) => html + (slot === 0 ? "" : values[slot - 1]) + part, "");
+const shellMarkup = createShellMarkup("upload-markup");
+
+/** Project known typed failures to copy; retain gateway/server diagnostics internally.
+ * @param {import("../source-library/gateway.js").SourceGatewayFailure} error */
+function linkFailureMessage(error) {
+  /** @type {Record<string,number>} */
+  const messages = error.kind === "SourceGatewayRejected" ? {
+    KnowledgePageAuthenticationRequired:41, KnowledgePagePaywallDetected:42,
+    KnowledgePageBotAccessDenied:43, KnowledgePageRateLimited:44,
+    KnowledgePageTypeUnsupported:45, SourceExtractionFormatUnsupported:45,
+    KnowledgePageFetchFailed:46, KnowledgeBrowserNavigationFailed:46,
+    KnowledgeBrowserTimedOut:47,
+    KnowledgeBrowserNavigationRejected:48, KnowledgeBrowserNetworkRejected:48, SourceExtractionUrlInvalid:48,
+  } : {
+    SourceGatewayUnauthenticated:39, SourceGatewayUnauthorized:40,
+    SourceGatewayResponseInvalid:50, SourceGatewayUnavailable:51,
+    SourceGatewayTimedOut:52, SourceGatewayCommandInvalid:53,
+  };
+  const kind = error.kind === "SourceGatewayRejected" ? error.failureKind : error.kind;
+  return shellMarkup(Object.hasOwn(messages,kind) ? messages[kind] : 49);
 }

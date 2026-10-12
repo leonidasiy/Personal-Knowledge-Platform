@@ -1,0 +1,73 @@
+{
+  "knowledgeId": "knowledge:dev-web-016:1:sha256:515614d1b3852a20d639e55e3563bdc95b68169c5186437112b6fe72e8fd8b9e",
+  "knowledgeRevision": 1,
+  "canonicalAnswers": [
+    "collagen",
+    "proteoglycans"
+  ],
+  "citedEvidenceUrls": [
+    "https://openstax.org/books/biology-2e/pages/4-6-connections-between-cells-and-cellular-activities"
+  ],
+  "multipleChoice": {
+    "prompt": "Cells release materials into the extracellular space, and these materials are composed primarily of proteins. Which two statements about the composition of these materials are correct according to the text?",
+    "options": [
+      {
+        "key": "opt-a",
+        "text": "The most abundant protein among these materials is collagen, and collagen fibers are interwoven with carbohydrate-containing protein molecules."
+      },
+      {
+        "key": "opt-b",
+        "text": "The carbohydrate-containing protein molecules interwoven with the collagen fibers are called proteoglycans."
+      },
+      {
+        "key": "opt-c",
+        "text": "The primary components of these materials are carbohydrates, which form the structural core of the extracellular matrix."
+      },
+      {
+        "key": "opt-d",
+        "text": "The most abundant component of these materials is a lipid that cells secrete to hold the tissue together."
+      }
+    ],
+    "correctOptionKeys": [
+      "opt-a",
+      "opt-b"
+    ],
+    "correctOptionAnswers": [
+      {
+        "key": "opt-a",
+        "canonicalAnswer": "collagen"
+      },
+      {
+        "key": "opt-b",
+        "canonicalAnswer": "proteoglycans"
+      }
+    ],
+    "explanation": "The text states that the primary components of the materials cells release into the extracellular space are proteins, that the most abundant protein is collagen, and that collagen fibers are interwoven with proteoglycans, which are carbohydrate-containing protein molecules. Carbohydrates are not the primary components, and no lipid is described as the most abundant material."
+  },
+  "fillBlank": {
+    "prompt": "The materials that cells release into the extracellular space are composed primarily of proteins, and the most abundant of these proteins is ____. Collagen fibers are interwoven with ____, which are protein molecules containing carbohydrates.",
+    "blanks": [
+      {
+        "id": "blank-1",
+        "canonicalAnswer": "collagen",
+        "acceptedAnswers": [
+          "collagen",
+          "Collagen",
+          "the collagen protein",
+          "collagen protein"
+        ]
+      },
+      {
+        "id": "blank-2",
+        "canonicalAnswer": "proteoglycans",
+        "acceptedAnswers": [
+          "proteoglycans",
+          "Proteoglycans",
+          "proteoglycan molecules",
+          "the proteoglycans"
+        ]
+      }
+    ],
+    "explanation": "According to the source, the most abundant protein in the materials released into the extracellular space is collagen, and collagen fibers are interwoven with proteoglycans, which are carbohydrate-containing protein molecules."
+  }
+}

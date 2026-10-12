@@ -1,5 +1,7 @@
 // @ts-check
 
+import { sourceApprovalFingerprint } from "./repository.js";
+
 import {
   isIsoDateTime,
   isNonEmptyText,
@@ -179,17 +181,17 @@ export class SourceLibraryService {
       id: sourceId, ownerId: validated.value.ownerId,
       origin: /** @type {const} */ ("private-document"), submittedUrl: canonicalUrl, canonicalUrl,
       title: validated.value.title, description: validated.value.fileName,
-      adapter: freeze({ id: "private-document", version: "v1", granularity: "document", capabilities: freeze(["owner-private-document", "processing-attested"]) }),
+      adapter: freeze({ id: "private-document", version: "v1", granularity: "document", capabilities: freeze(["owner-private-document", "processing-authorized"]) }),
       interestAreaIds: freeze([]),
       identityEvidence: freeze([
-        freeze({ attribute: "owner-attested-processing", value: "storage, transformation, and processing allowed", provenanceUrl: canonicalUrl, observedAt: approvedAt }),
+        freeze({ attribute: "user-upload-authorization", value: "storage, transformation, and processing allowed", provenanceUrl: canonicalUrl, observedAt: approvedAt }),
         freeze({ attribute: "processing-basis", value: validated.value.basis, provenanceUrl: canonicalUrl, observedAt: approvedAt }),
         freeze({ attribute: "processing-reference", value: validated.value.reference, provenanceUrl: canonicalUrl, observedAt: approvedAt }),
         freeze({ attribute: "file-name", value: validated.value.fileName, provenanceUrl: canonicalUrl, observedAt: approvedAt }),
       ]), state: /** @type {const} */ ("active"), approvedAt, updatedAt: approvedAt, revision: 1,
     });
     const event = freeze({ id: this.#id("source-event"), ownerId: source.ownerId, sourceId, kind: /** @type {const} */ ("approved"), sourceRevision: 1, idempotencyKey: validated.value.idempotencyKey, occurredAt: approvedAt });
-    return await this.#dependencies.repository.approve({ source, event, job: null, initialItem: null, fingerprint: JSON.stringify(validated.value) });
+    return await this.#dependencies.repository.approve({ source, event, job: null, initialItem: null, fingerprint: JSON.stringify(validated.value), ownerUploadAuthorization: true });
   }
 
   /** @param {unknown} command @returns {Promise<Result<LibrarySource, SourceLibraryFailure>>} */
@@ -285,9 +287,11 @@ export function validateApprovalCommand(command) {
     };
   }
   if (command.identityStatus !== "resolved") return invalid("identityStatus");
-  for (const field of ["ownerId", "title", "description", "idempotencyKey"]) {
+  for (const field of ["ownerId", "title", "idempotencyKey"]) {
     if (!isNonEmptyText(command[field])) return invalid(field);
   }
+  if (typeof command.description !== "string") return invalid("description");
+  if (/** @type {string} */(command.title).trim().length > 300) return invalid("title");
   if (!isPublicHttpsUrl(command.submittedUrl)) return invalid("submittedUrl");
   if (!isPublicHttpsUrl(command.canonicalUrl)) return invalid("canonicalUrl");
   const adapter = validateAdapter(command.adapter);
@@ -322,12 +326,11 @@ export function validatePrivateDocumentCommand(command) {
   for (const field of ["ownerId", "title", "fileName", "idempotencyKey", "applicationOrigin"]) {
     if (!isNonEmptyText(command[field])) return invalid(field);
   }
-  if (!isRecord(command.rightsAttestation) || command.rightsAttestation.ownsOrPermitted !== true || command.rightsAttestation.storageAllowed !== true || command.rightsAttestation.transformationAllowed !== true || command.rightsAttestation.processingAllowed !== true || !isNonEmptyText(command.rightsAttestation.basis) || !isNonEmptyText(command.rightsAttestation.reference)) return invalid("rightsAttestation");
   if (!isPublicHttpsUrl(command.applicationOrigin)) return invalid("applicationOrigin");
   return { ok: true, value: freeze({
     ownerId: /** @type {string} */ (command.ownerId).trim(), title: /** @type {string} */ (command.title).trim(), fileName: /** @type {string} */ (command.fileName).trim(),
     idempotencyKey: /** @type {string} */ (command.idempotencyKey).trim(), applicationOrigin: new URL(/** @type {string} */ (command.applicationOrigin)).href,
-    basis: command.rightsAttestation.basis.trim(), reference: command.rightsAttestation.reference.trim(),
+    basis: "user-owned upload authorization", reference: `user-upload:${/** @type {string} */(command.idempotencyKey).trim()}`,
   }) };
 }
 
@@ -483,7 +486,7 @@ function uniqueText(value) {
 
 /** @param {ValidatedApproval} value */
 function approvalFingerprint(value) {
-  return JSON.stringify(value);
+  return sourceApprovalFingerprint(JSON.stringify(value), value.adapter.id);
 }
 
 /** @param {{ readonly ownerId: string, readonly sourceId: string, readonly expectedRevision: number, readonly idempotencyKey: string }} value @param {LibrarySourceState} targetState */

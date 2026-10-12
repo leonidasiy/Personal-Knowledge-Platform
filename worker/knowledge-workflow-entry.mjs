@@ -1,5 +1,5 @@
+import { WEBPAGE_IMAGE_POLICY } from './webpage-image-budget.js';
 import { WorkflowEntrypoint } from "cloudflare:workers";
-import puppeteer from "@cloudflare/puppeteer";
 import { D1KnowledgeWorkflowRepository } from "./knowledge-workflow-d1.js";
 import { D1KnowledgeWorkflowMaterialRepository } from "./knowledge-workflow-material-d1.js";
 import { createKnowledgeWorkflowService, isWorkflowRetryStage } from "../src/features/knowledge-workflows/workflow.js";
@@ -12,7 +12,8 @@ import { resolvePublicAddresses } from "./knowledge-workflow-network.js";
 import { createCloudflareImageDerivative, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
 import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
 import { executeAuthoritativeWorkflowStep } from "./knowledge-workflow-step.js";
-import { createKnowledgeWorkflowBrowser } from "./knowledge-workflow-browser.js";
+import { createAcquisitionClient, createAcquisitionWorkflowBrowser } from "./acquisition-client.js";
+import { ACQUISITION_POLICY } from "./acquisition-policy.js";
 import { createOpenSourceImageSearch } from "./open-source-image-search.js";
 import { createReminderRuntime } from "./reminders/runtime.js";
 import { notifyKnowledgeWorkflowOutcome } from "./knowledge-workflow-notifications.js";
@@ -30,13 +31,6 @@ const supportedTools = new Set([
   "quiz.duplicate.check",
 ]);
 
-const KNOWLEDGE_BROWSER_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
-const KNOWLEDGE_BROWSER_HEADERS = Object.freeze({
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Upgrade-Insecure-Requests": "1",
-});
-
 /** @param {unknown} value @param {string} currentTime @returns {boolean} */
 function isAutomaticExtractionContinuation(value, currentTime) {
   if (typeof value !== "object" || value === null || Array.isArray(value) || value.state !== "awaiting-time-limit-decision" || !Number.isFinite(Date.parse(currentTime))) return false;
@@ -53,7 +47,7 @@ async function sha256(input) {
 
 /** @param {Readonly<Record<string, string>>} expected @returns {Promise<import("../src/features/knowledge-workflows/config.js").Result<Readonly<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>, { readonly kind: string }>>} */
 async function loadConfigurationSnapshots(expected) {
-  const loader = createAgentConfigurationLoader({ sha256, supportedModels: new Set(["openrouter/z-ai/glm-5.3-flash"]), supportedTools });
+  const loader = createAgentConfigurationLoader({ sha256, supportedModels: new Set(["openrouter/z-ai/glm-5.3-flash", "openrouter/mistralai/mistral-large-4-0"]), supportedTools });
   /** @type {Partial<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>} */
   const snapshots = {};
   for (const role of roleNames) {
@@ -89,40 +83,25 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     const bucket = this.env.SOURCE_CONTENT_BUCKET;
     if (!bucket || typeof bucket.put !== "function" || typeof bucket.get !== "function" || typeof bucket.delete !== "function") throw new TypeError("Knowledge workflow media bucket binding is unavailable.");
     if (!isCloudflareImageBinding(this.env.IMAGES)) throw new TypeError("Knowledge workflow image derivative binding is unavailable.");
-    const browserBinding = this.env.SOURCE_BROWSER;
-    if (!browserBinding || (typeof browserBinding !== "object" && typeof browserBinding !== "function")) throw new TypeError("Knowledge workflow browser binding is unavailable.");
     const now = () => new Date().toISOString();
     const workerFetch = globalThis.fetch.bind(globalThis);
     const logger = createKnowledgeWorkflowLogger({ sink: (record) => console.info(JSON.stringify(record)), now });
-    const createBrowser = () => createKnowledgeWorkflowBrowser({
-      launcher: {
-        limits: (binding) => puppeteer.limits(binding),
-        launch: (binding) => puppeteer.launch(binding),
-      },
-      binding: browserBinding,
-      resolveAddresses: (hostname) => resolvePublicAddresses(hostname, workerFetch),
-      browserRequest: typeof this.env.SOURCE_BROWSER_REQUEST === "function" ? this.env.SOURCE_BROWSER_REQUEST : undefined,
-      nowMs: () => Date.now(),
-      userAgent: KNOWLEDGE_BROWSER_USER_AGENT,
-      extraHTTPHeaders: KNOWLEDGE_BROWSER_HEADERS,
-      logger: (entry) => logger({ event: entry.event, ownerId, stage: "browser", failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken, httpStatus: entry.httpStatus }),
-      navigationTimeoutMilliseconds: 15_000,
-      maximumHtmlBytes: 1_000_000,
-      maximumRobotsBytes: 256 * 1024,
-      maximumScreenshotBytes: 2_000_000,
-      minimumInterRequestDelayMilliseconds: 1_500,
-      maximumRetryAfterMilliseconds: 30_000,
-      maximumRateLimitRetries: 1,
-      maximumCachedPages: 4,
-      maximumVisibleLinks: 200,
-      maximumRenderedTextCharacters: 250_000,
-      renderSettleMilliseconds: 750,
-      renderSettleTimeoutMilliseconds: 5_000,
+    const acquisition = createAcquisitionClient({
+      binding: this.env.PUBLIC_ACQUISITION,
+      endpoint: this.env.PUBLIC_ACQUISITION_ENDPOINT,
+      token: this.env.PUBLIC_ACQUISITION_TOKEN,
+      policy: ACQUISITION_POLICY,
+      createId: () => crypto.randomUUID(),
+    });
+    const createBrowser = () => createAcquisitionWorkflowBrowser({ client: acquisition, policy: ACQUISITION_POLICY,
+      logger: (entry) => logger({ event: entry.event, ownerId, stage: "browser", failureKind: entry.failureKind }),
     });
     const mediaRepository = new D1KnowledgeMediaRepository({ database, bucket, logger: (entry) => logger({ event: entry.event, ownerId: entry.ownerId, stage: "media", failureKind: entry.failureKind }) });
-    const publicEgress = createMediaPublicEgress(this.env.MEDIA_PUBLIC_EGRESS);
+    const publicEgress = createMediaPublicEgress(acquisition.mediaCapability);
     const fallbackManifest = createUserAttestedLocalManifest(fallbackMediaEntries);
     if (!fallbackManifest.ok) throw new Error(fallbackManifest.error.kind);
+    const transformImage=createCloudflareImageDerivative(this.env.IMAGES);
+    const decodeImage=async(bytes,mediaType)=>{const decoded=await transformImage({assetId:"upload-decode",variant:"feed",bytes,mediaType});return decoded.ok?{ok:true,value:null}:{ok:false,error:{kind:"UploadedImageDecodeFailed"}};};
     const media = createMediaPipeline({
       publicEgress,
       digest: async (bytes) => {
@@ -152,11 +131,11 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       logger: (entry) => logger({ event: entry.event, runId: entry.runId, ownerId: entry.ownerId, stage: "material", failureKind: entry.failureKind }),
     });
     const materialContent = {
-      read: async (materialOwnerId, objectKey) => {
+      read: async (materialOwnerId, objectKey, identity) => {
         if (typeof materialOwnerId !== "string" || materialOwnerId.trim() === "" || typeof objectKey !== "string" || !objectKey.startsWith("source-content/") || objectKey.includes("..")) return { ok: false, error: { kind: "WorkflowMaterialImageUnavailable" } };
         try {
           const object = await bucket.get(objectKey);
-          if (object === null || object.customMetadata?.owner !== materialOwnerId) return { ok: false, error: { kind: "WorkflowMaterialImageUnavailable" } };
+          if (object === null || object.customMetadata?.owner !== materialOwnerId || object.customMetadata?.source !== identity.sourceId || object.customMetadata?.item !== identity.runId || object.customMetadata?.version !== String(identity.sourceRevision) || object.customMetadata?.digest !== identity.digest) return { ok: false, error: { kind: "WorkflowMaterialImageUnavailable" } };
           return { ok: true, value: new Uint8Array(await object.arrayBuffer()) };
         } catch (error) {
           if (error instanceof Error) return { ok: false, error: { kind: "WorkflowMaterialImageUnavailable" } };
@@ -180,6 +159,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     const configurations = await step.do("validate workflow role configurations", async () => loadConfigurationSnapshots(current.value.configDigests));
     if (!configurations.ok) throw new Error(configurations.error.kind);
     const createRuntime = () => createKnowledgeWorkflowRuntime({
+      imagePolicy:WEBPAGE_IMAGE_POLICY,
       database,
       fetch: workerFetch,
       browser: createBrowser(),
@@ -187,14 +167,17 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       endpoint: "https://openrouter.ai/api/v1/chat/completions",
       now,
       nowMs: () => Date.now(),
-      logger: (entry) => logger({ event: entry.event, runId: entry.runId, ownerId, stage: entry.stage, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken }),
+      logger: (entry) => logger({ event: entry.event, runId: entry.runId, ownerId, stage: entry.stage, failureKind: entry.failureKind, field: entry.field, diagnosticToken: entry.diagnosticToken, phase: entry.phase, durationMs: entry.durationMs, requestId: entry.requestId, inputTokens: entry.inputTokens, outputTokens: entry.outputTokens }),
       configSnapshots: configurations.value,
       media,
+      publicEgress,
       imageSearch,
       fallbackManifest: fallbackManifest.value,
       mediaBucket: bucket,
+      reviewMedia: {readOriginal:(scope)=>mediaRepository.readOriginal(scope)},
       material: { read: (materialOwnerId, materialRunId) => materialRepository.read(materialOwnerId, materialRunId) },
       materialContent,
+      decodeImage,
       resolveAddresses: (hostname) => resolvePublicAddresses(hostname, workerFetch),
       transition: (command) => service.advance({ ownerId: command.run.ownerId, runId: command.run.runId, expectedRevision: command.run.revision, nextState: command.nextState, ...(command.counts === undefined ? {} : { counts: command.counts }), ...(command.failureKind === undefined ? {} : { failureKind: command.failureKind }), ...(command.robotsEvidence === undefined ? {} : { robotsEvidence: command.robotsEvidence }) }),
     });

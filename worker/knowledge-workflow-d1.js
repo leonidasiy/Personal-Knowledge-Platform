@@ -150,8 +150,9 @@ export class D1KnowledgeWorkflowRepository {
   async insert(run) {
     if (!isKnowledgeWorkflowRun(run)) return { ok: false, error: { kind: "WorkflowCommandInvalid", field: "run" } };
     try {
-      const result = await this.#database.prepare("INSERT INTO knowledge_workflow_runs (owner_id, run_id, source_id, source_revision, canonical_source_identity, content_signature, state, revision, idempotency_key, config_digests_json, extraction_started_at, extraction_deadline_at, decision_required, counts_json, failure_kind, reused, created_at, updated_at, run_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(run.ownerId, run.runId, run.sourceId, run.sourceRevision, run.canonicalSourceIdentity, run.contentSignature, run.state, run.revision, run.idempotencyKey, JSON.stringify(run.configDigests), run.extractionStartedAt, run.extractionDeadlineAt, run.decisionRequired, JSON.stringify(run.counts), run.failureKind, run.reused ? 1 : 0, run.createdAt, run.updatedAt, JSON.stringify(run)).run();
-      if (!changedOne(result)) return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
+      const result = await this.#database.prepare("INSERT INTO knowledge_workflow_runs (owner_id, run_id, source_id, source_revision, canonical_source_identity, content_signature, state, revision, idempotency_key, config_digests_json, extraction_started_at, extraction_deadline_at, decision_required, counts_json, failure_kind, reused, created_at, updated_at, run_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id,idempotency_key) DO NOTHING").bind(run.ownerId, run.runId, run.sourceId, run.sourceRevision, run.canonicalSourceIdentity, run.contentSignature, run.state, run.revision, run.idempotencyKey, JSON.stringify(run.configDigests), run.extractionStartedAt, run.extractionDeadlineAt, run.decisionRequired, JSON.stringify(run.counts), run.failureKind, run.reused ? 1 : 0, run.createdAt, run.updatedAt, JSON.stringify(run)).run();
+      if (!result.success) return {ok:false,error:{kind:"WorkflowPersistenceFailed"}};
+      if (!changedOne(result)) return {ok:false,error:{kind:"WorkflowIdempotencyConflict"}};
       this.#logger({ event: "knowledge-workflow-d1-insert-success", ownerId: run.ownerId, runId: run.runId });
       return { ok: true, value: null };
     } catch (error) {

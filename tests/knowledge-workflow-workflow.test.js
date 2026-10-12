@@ -31,7 +31,7 @@ function setup(cleanup = undefined) {
     /** @param {import("../src/features/knowledge-workflows/workflow.js").GlobalSourceReuse & { readonly createdAt: string, readonly updatedAt: string }} reuse */
     async markReuse(reuse) { manifests.push(reuse); return { ok: true, value: null }; },
     /** @param {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} run */
-    async insert(run) { runs.push(run); return { ok: true, value: null }; },
+    async insert(run) { if (runs.some(existing => existing.ownerId === run.ownerId && existing.idempotencyKey === run.idempotencyKey)) return {ok:false,error:{kind:"WorkflowIdempotencyConflict"}}; runs.push(run); return { ok: true, value: null }; },
     /** @param {{ readonly ownerId: string, readonly runId: string, readonly expectedRevision: number, readonly next: import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun }} command */
     async update(command) {
       const index = runs.findIndex((run) => run.ownerId === command.ownerId && run.runId === command.runId && run.revision === command.expectedRevision);
@@ -91,6 +91,21 @@ Deno.test("workflow creates one idempotent run and transitions into a timed extr
   if (!extracting.ok) return;
   assertEquals(extracting.value.state, "extraction-loop");
   assertEquals(extracting.value.extractionDeadlineAt, "2026-08-13T00:30:00.000Z");
+});
+
+Deno.test("workflow validates unknown authorization timestamps and bindings before persistence", async () => {
+ const command = { ownerId: "owner-a", sourceId: "source-a", sourceRevision: 1, canonicalSourceIdentity: "https://example.test/source", contentSignature: "sha256:source-a", configDigests: { "knowledge-scraper": "sha256:config" }, idempotencyKey: "authorized-link" };
+ const authorization = { kind: "user-authorized-link", ownerId: command.ownerId, sourceId: command.sourceId, sourceRevision: 1, url: command.canonicalSourceIdentity, recordedAt: "2026-10-05T00:00:00.000Z" };
+ for (const recordedAt of [undefined, null, 42, {}, [], "", "not-a-date"]) {
+  const f = setup(); const result = await f.service.createRun({ ...command, userAuthorization: { ...authorization, recordedAt } });
+  if (result.ok || result.error.kind !== "WorkflowCommandInvalid" || result.error.field !== "userAuthorization" || f.runs.length !== 0) throw new Error("Malformed timestamp persisted.");
+ }
+ for (const change of [{ ownerId: "owner-b" }, { sourceId: "source-b" }, { sourceRevision: 2 }, { url: "https://other.example/" }]) {
+  const result = await setup().service.createRun({ ...command, userAuthorization: { ...authorization, ...change } });
+  if (result.ok || result.error.kind !== "WorkflowCommandInvalid") throw new Error("Mismatched authorization accepted.");
+ }
+ const f = setup(); const result = await f.service.createRun({ ...command, userAuthorization: authorization });
+ if (!result.ok || result.value.run.userAuthorization?.recordedAt !== authorization.recordedAt) throw new Error("Valid timestamp rejected.");
 });
 
 Deno.test("server-owned private document origin starts directly awaiting authorized upload", async () => {
@@ -366,4 +381,11 @@ Deno.test("abandonment persists the terminal state before cleanup and retries cl
   const retry = await fixture.service.control({ ownerId: "owner-a", runId: run.runId, expectedRevision: 1, action: "abandon", idempotencyKey: "abandon-1" });
   assertEquals(retry.ok, true);
   assertEquals(cleanupCalls, 2);
+});
+
+Deno.test("cancelled extraction creates a fresh in-memory attempt and concurrent identical extraction reuses it",async()=>{
+ const f=setup(),first=await createRun(f.service);
+ const cancelled=await f.service.control({ownerId:"owner-a",runId:first.run.runId,expectedRevision:1,action:"abandon",idempotencyKey:"cancel-fresh"});assertEquals(cancelled.ok,true);
+ const [a,b]=await Promise.all([createRun(f.service),createRun(f.service)]);
+ assertEquals(a.run.state,"source-added");assertEquals(a.run.runId===first.run.runId,false);assertEquals(a.run.runId,b.run.runId);assertEquals(f.runs.length,2);assertEquals(f.runs[0].state,"abandoned");
 });

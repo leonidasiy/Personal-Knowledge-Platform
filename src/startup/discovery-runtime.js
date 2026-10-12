@@ -569,30 +569,6 @@ function cursorValue(value, owner, revision) {
 function record(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-/** @param {unknown} value */
-function anchor(value) {
-  return record(value) && Object.keys(value).length === 2 && text(value.kind) &&
-    text(value.value);
-}
-/** @param {unknown} value */
-function attribution(value) {
-  return record(value) && Object.keys(value).length === 2 &&
-    text(value.label) && secure(value.sourceUrl);
-}
-/** @param {unknown} value */
-function provenance(value) {
-  return record(value) && Object.keys(value).length === 4 &&
-    text(value.method) && text(value.sourceReference) &&
-    instant(value.acquiredAt) && text(value.digest);
-}
-/** @param {unknown} value */
-function rightsBasis(value) {
-  return record(value) && Object.keys(value).length === 7 &&
-    text(value.basis) && text(value.reference) &&
-    instant(value.assessedAt) && nullableInstant(value.expiresAt) &&
-    value.storageAllowed === true && value.displayAllowed === true &&
-    value.transformationAllowed === true;
-}
 /** @param {unknown} value @returns {value is string} */
 function text(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -617,10 +593,6 @@ function nullableText(value) {
 /** @param {unknown} value */
 function nullableInstant(value) {
   return value === null || instant(value);
-}
-/** @param {unknown} value */
-function strings(value) {
-  return Array.isArray(value) && value.length <= 20 && value.every(text);
 }
 /** @param {unknown} value */
 function evidence(value) {

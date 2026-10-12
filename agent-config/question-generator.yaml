@@ -1,8 +1,9 @@
 role: question-generator
-version: question-generator-v4
+version: question-generator-v5
 model:
   provider: openrouter
   name: z-ai/glm-5.3-flash
+  reasoningEffort: high
 procedureVersion: question-procedure-v1
 promptVersion: question-prompt-v3
 inputSchema: knowledge-point-handoff-v1

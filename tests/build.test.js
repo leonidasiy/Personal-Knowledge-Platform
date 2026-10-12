@@ -175,7 +175,7 @@ Deno.test("browser acceptance pins Playwright Core outside the production browse
   }
 });
 
-Deno.test("artifact budgets accept exact boundaries", () => {
+Deno.test("artifact budgets accept exact production boundaries", async () => {
   const javascript = validateArtifactBudget(
     {
       path: "src/app.js",
@@ -202,21 +202,29 @@ Deno.test("artifact budgets accept exact boundaries", () => {
   );
   assertEquals(oversizedStylesheet.ok, false);
   if (!oversizedStylesheet.ok) assertEquals(oversizedStylesheet.error.kind, "ArtifactRawBudgetExceeded");
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 222_630);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 72_317);
-  const exactAggregate = validateArtifactBudget(
-    { path: "src/*.js", rawBytes: 222_630, gzipBytes: 72_317 },
-    ARTIFACT_BUDGETS.aggregateJavascript,
-  );
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 226_669);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 73_591);
+  /** @type {string[]} */
+  const manifest = JSON.parse(await Deno.readTextFile("dist/asset-manifest.json"));
+  const measured = { path: "src/*.js", rawBytes: 0, gzipBytes: 0 };
+  const javascriptPaths = manifest.filter(path => path.startsWith("./src/") && path.endsWith(".js"));
+  assert(javascriptPaths.length > 0, "Production JavaScript must exist before measuring the aggregate.");
+  for (const path of javascriptPaths) {
+    const bytes = await Deno.readFile(`dist/${path}`);
+    measured.rawBytes += bytes.byteLength;
+    measured.gzipBytes += (await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer()).byteLength;
+  }
+  assertEquals(validateArtifactBudget(measured, ARTIFACT_BUDGETS.aggregateJavascript).ok, true);
+  const exactAggregate = validateArtifactBudget({ ...measured, rawBytes: ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, gzipBytes: ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes }, ARTIFACT_BUDGETS.aggregateJavascript);
   assertEquals(exactAggregate.ok, true);
   const oversizedAggregateRaw = validateArtifactBudget(
-    { path: "src/*.js", rawBytes: 222_631, gzipBytes: 1 },
+    { ...measured, rawBytes: ARTIFACT_BUDGETS.aggregateJavascript.rawBytes + 1 },
     ARTIFACT_BUDGETS.aggregateJavascript,
   );
   assertEquals(oversizedAggregateRaw.ok, false);
   if (!oversizedAggregateRaw.ok) assertEquals(oversizedAggregateRaw.error.kind, "ArtifactRawBudgetExceeded");
   const oversizedAggregateGzip = validateArtifactBudget(
-    { path: "src/*.js", rawBytes: 1, gzipBytes: 72_318 },
+    { ...measured, gzipBytes: ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes + 1 },
     ARTIFACT_BUDGETS.aggregateJavascript,
   );
   assertEquals(oversizedAggregateGzip.ok, false);

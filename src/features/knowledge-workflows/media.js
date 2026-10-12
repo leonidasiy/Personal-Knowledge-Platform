@@ -1,25 +1,26 @@
 // @ts-check
+import { FAILURE_KINDS } from "../../../acquisition/contracts.ts";
 
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
 /** @typedef {{ readonly url: string, readonly kind: "image" | "screenshot", readonly educationallyConnected: boolean, readonly mediaTypeHint: string, readonly rights: { readonly storage: "allowed", readonly display: "allowed", readonly transformation: "allowed", readonly attribution: string, readonly originEvidence: string } }} MediaCandidate */
-/** @typedef {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly assetId: string, readonly sourceUrl: string, readonly origin: string, readonly kind: MediaCandidate["kind"], readonly mediaType: string, readonly byteCount: number, readonly digest: string, readonly privateOriginalKey: string, readonly attribution: string, readonly createdAt: string }} MediaAsset */
+/** @typedef {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly assetId: string, readonly sourceUrl: string, readonly origin: string, readonly kind: MediaCandidate["kind"], readonly mediaType: string, readonly byteCount: number, readonly digest: string, readonly privateOriginalKey: string, readonly attribution: string, readonly createdAt: string, readonly binding?: import("../../../worker/webpage-images.js").ImageAssociation["binding"] }} MediaAsset */
 /** @typedef {{ readonly ownerId: string, readonly assetId: string, readonly derivativeId: string, readonly variant: "feed" | "thumbnail", readonly mediaType: string, readonly byteCount: number, readonly privateObjectKey: string, readonly deliveryToken: string, readonly createdAt: string }} MediaDerivative */
 /** @typedef {{ readonly id: string, readonly path: string, readonly mediaType: "image/jpeg" | "image/png", readonly width: number, readonly height: number, readonly userAttested: true }} FallbackAsset */
 /** @typedef {{ readonly kind: "FallbackManifestInvalid", readonly field: string } | { readonly kind: "FallbackManifestDuplicateId", readonly assetId: string } | { readonly kind: "FallbackManifestDuplicatePath", readonly path: string } | { readonly kind: "FallbackReferenceInvalid" } | { readonly kind: "FallbackAssetUnlisted" } | { readonly kind: "FallbackAssetMissing", readonly assetId: string } | { readonly kind: "FallbackAssetReadFailed", readonly assetId: string } | { readonly kind: "FallbackAssetMetadataMismatch", readonly assetId: string, readonly field: "mediaType" | "dimensions" }} FallbackManifestFailure */
 /** @typedef {{ readonly entries: readonly FallbackAsset[], readonly resolve: (reference: { readonly assetId: string, readonly path: string }) => Result<FallbackAsset, FallbackManifestFailure> }} UserAttestedLocalManifest */
 
-/** @typedef {{ readonly kind: "MediaPublicEgressUnavailable" | "MediaPublicEgressFailed" | "MediaPublicEgressRedirectUnsafe" | "MediaPublicEgressPrivateAddress" | "MediaPublicEgressLoopbackAddress" | "MediaPublicEgressLinkLocalAddress" | "MediaPublicEgressReservedAddress" | "MediaPublicEgressCredentialsRejected" | "MediaPublicEgressNonHttpsUrl" | "MediaPublicEgressPayloadTooLarge" | "MediaPublicEgressTimeout" | "MediaPublicEgressRedirectLimitExceeded" }} MediaPublicEgressFailure */
+/** @typedef {{ readonly kind: "MediaPublicEgressUnavailable" | "MediaPublicEgressFailed" | "MediaPublicEgressRedirectUnsafe" | "MediaPublicEgressPrivateAddress" | "MediaPublicEgressLoopbackAddress" | "MediaPublicEgressLinkLocalAddress" | "MediaPublicEgressReservedAddress" | "MediaPublicEgressCredentialsRejected" | "MediaPublicEgressNonHttpsUrl" | "MediaPublicEgressPayloadTooLarge" | "MediaPublicEgressTimeout" | "MediaPublicEgressCancellationUnconfirmed" | "MediaPublicEgressRedirectLimitExceeded" } | import("../../../acquisition/contracts.ts").Failure | {readonly kind:"MediaAcquisitionTransportFailed",readonly causeKind:string}} MediaPublicEgressFailure */
 /** @typedef {{ readonly maximumBytes: number, readonly timeoutMilliseconds: number, readonly redirectLimit: number, readonly validateEveryRedirect: true, readonly publicAddressesOnly: true, readonly signal: AbortSignal }} MediaPublicEgressPolicy */
-/** @typedef {{ readonly request: (request: Request, policy: MediaPublicEgressPolicy) => Promise<Result<{ readonly response: Response, readonly redirectHops: readonly string[] }, MediaPublicEgressFailure>> }} MediaPublicEgressCapability */
+/** @typedef {{ readonly cancellationMilliseconds?: number, readonly request: (request: Request, policy: MediaPublicEgressPolicy) => Promise<Result<{ readonly response: Response, readonly redirectHops: readonly string[] }, MediaPublicEgressFailure>> }} MediaPublicEgressCapability */
 /** @typedef {{ readonly kind: "MediaTrustedReadFailed" }} MediaTrustedReadFailure */
-/** @typedef {{ readonly kind: "MediaCommandInvalid", readonly field: string } | { readonly kind: "MediaEducationalRelevanceRequired" } | { readonly kind: "MediaRightsEvidenceRequired" } | { readonly kind: "MediaOriginNotAllowed" } | MediaPublicEgressFailure | MediaTrustedReadFailure | { readonly kind: "MediaNetworkRejected" } | { readonly kind: "MediaFetchFailed" } | { readonly kind: "MediaPayloadTooLarge" } | { readonly kind: "MediaMimeSignatureConflict" } | { readonly kind: "MediaUnsupportedType" } | { readonly kind: "MediaScriptableFormatRejected" } | { readonly kind: "MediaQuarantineFailed" } | { readonly kind: "MediaDerivativeProcessingFailed" } | { readonly kind: "MediaPersistenceFailed" } | { readonly kind: "MediaDerivativeNotFound" } | { readonly kind: "MediaDerivativeRevoked" } | { readonly kind: "MediaCleanupFailed" } | FallbackManifestFailure} MediaFailure */
+/** @typedef {{ readonly kind: "MediaCommandInvalid", readonly field: string } | { readonly kind: "MediaEducationalRelevanceRequired" } | { readonly kind: "MediaRightsEvidenceRequired" } | { readonly kind: "MediaOriginNotAllowed" } | MediaPublicEgressFailure | MediaTrustedReadFailure | { readonly kind: "MediaNetworkRejected" } | { readonly kind: "MediaFetchFailed" } | { readonly kind: "MediaPayloadTooLarge" } | { readonly kind: "MediaMimeSignatureConflict" } | { readonly kind: "MediaUnsupportedType" } | { readonly kind: "MediaScriptableFormatRejected" } | { readonly kind: "MediaQuarantineFailed" } | { readonly kind: "MediaDerivativeProcessingFailed" } | { readonly kind: "MediaPersistenceFailed" } | {readonly kind:"MediaIntegrityMismatch"|"MediaBindingUnverified"|"MediaAssetIdentityMismatch"|"MediaObjectReadFailed"} | { readonly kind: "MediaDerivativeNotFound" } | { readonly kind: "MediaDerivativeRevoked" } | { readonly kind: "MediaCleanupFailed" } | FallbackManifestFailure} MediaFailure */
 
 /** Atomic boundary owns public DNS, redirect, and network policy for one request. */
-/** @typedef {{ readonly fetch: (request: Request) => Promise<Result<Response, MediaPublicEgressFailure>> }} MediaPublicEgress */
+/** @typedef {{ readonly fetch: (request: Request, policy?:{readonly maximumBytes:number}) => Promise<Result<Response, MediaPublicEgressFailure>> }} MediaPublicEgress */
 /** Explicitly trusted same-origin/local fixture reads; never a remote fallback. */
 /** @typedef {{ readonly read: (request: Request) => Promise<Result<Response, MediaTrustedReadFailure>> }} MediaTrustedRead */
-/** @typedef {{ readonly publicEgress?: MediaPublicEgress, readonly trustedRead?: MediaTrustedRead, readonly digest: (bytes: Uint8Array) => Promise<Result<string, unknown>>, readonly quarantine: { readonly put: (object: { readonly key: string, readonly bytes: Uint8Array, readonly mediaType: string }) => Promise<Result<null, unknown>>, readonly remove: (key: string) => Promise<Result<null, unknown>> }, readonly derivatives: { readonly create: (command: { readonly assetId: string, readonly variant: "feed" | "thumbnail", readonly bytes: Uint8Array, readonly mediaType: string }) => Promise<Result<{ readonly bytes: Uint8Array, readonly mediaType: string }, unknown>> }, readonly repository: { readonly save: (asset: MediaAsset, derivative: MediaDerivative, bytes: Uint8Array) => Promise<Result<null, unknown>>, readonly read: (command: { readonly ownerId: string, readonly assetId: string, readonly variant: "feed" | "thumbnail" }) => Promise<Result<{ readonly bytes: Uint8Array, readonly mediaType: string, readonly revoked: boolean }, unknown>>, readonly revoke: (command: { readonly ownerId: string, readonly assetId: string }) => Promise<Result<null, unknown>> }, readonly createId: () => string, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly assetId?: string, readonly failureKind?: string }) => void, readonly maximumImageBytes?: number }} MediaDependencies */
+/** @typedef {{ readonly publicEgress?: MediaPublicEgress, readonly trustedRead?: MediaTrustedRead, readonly digest: (bytes: Uint8Array) => Promise<Result<string, unknown>>, readonly quarantine: { readonly put: (object: { readonly key: string, readonly bytes: Uint8Array, readonly mediaType: string }) => Promise<Result<null, unknown>>, readonly remove: (key: string) => Promise<Result<null, unknown>> }, readonly derivatives: { readonly create: (command: { readonly assetId: string, readonly variant: "feed" | "thumbnail", readonly bytes: Uint8Array, readonly mediaType: string }) => Promise<Result<{ readonly bytes: Uint8Array, readonly mediaType: string }, unknown>> }, readonly repository: { readonly save: (asset: MediaAsset, derivative: MediaDerivative, bytes: Uint8Array) => Promise<Result<null, {readonly kind:string}>>, readonly read: (command: { readonly ownerId: string, readonly assetId: string, readonly variant: "feed" | "thumbnail" }) => Promise<Result<{ readonly bytes: Uint8Array, readonly mediaType: string, readonly revoked: boolean, readonly purpose?: "illustration" | "evidence" }, unknown>>, readonly revoke: (command: { readonly ownerId: string, readonly assetId: string }) => Promise<Result<null, unknown>> }, readonly createId: () => string, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly assetId?: string, readonly failureKind?: string }) => void, readonly maximumImageBytes?: number }} MediaDependencies */
 
 const imageLimit = 20 * 1024 * 1024;
 
@@ -27,6 +28,8 @@ const imageLimit = 20 * 1024 * 1024;
 function record(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
 /** @param {unknown} value @returns {value is string} */
 function text(value) { return typeof value === "string" && value.trim() !== ""; }
+/** @param {unknown} binding @returns {boolean} */
+export function isMediaBindingPurpose(binding) { return record(binding) && (binding.purpose === undefined || binding.purpose === "evidence" || binding.purpose === "illustration" && binding.kind === "webpage-support"); }
 /** @param {unknown} value @returns {value is MediaCandidate} */
 function validCandidate(value) { return record(value) && text(value.url) && (value.kind === "image" || value.kind === "screenshot") && value.educationallyConnected === true && text(value.mediaTypeHint) && record(value.rights) && value.rights.storage === "allowed" && value.rights.display === "allowed" && value.rights.transformation === "allowed" && text(value.rights.attribution) && text(value.rights.originEvidence); }
 /** @param {unknown} value @returns {value is string} */
@@ -84,10 +87,15 @@ export function createMediaPublicEgress(capability, options = {}) {
   const redirectLimit = options.redirectLimit ?? 4;
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0 || maximumBytes > imageLimit || !Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0 || timeoutMilliseconds > 60_000 || !Number.isSafeInteger(redirectLimit) || redirectLimit < 0 || redirectLimit > 10) throw new TypeError("Media public egress policy is invalid.");
   const atomic = record(capability) && typeof capability.request === "function" ? /** @type {MediaPublicEgressCapability} */ (capability) : null;
-  const failureKinds = new Set(["MediaPublicEgressUnavailable", "MediaPublicEgressFailed", "MediaPublicEgressRedirectUnsafe", "MediaPublicEgressPrivateAddress", "MediaPublicEgressLoopbackAddress", "MediaPublicEgressLinkLocalAddress", "MediaPublicEgressReservedAddress", "MediaPublicEgressCredentialsRejected", "MediaPublicEgressNonHttpsUrl", "MediaPublicEgressPayloadTooLarge", "MediaPublicEgressTimeout", "MediaPublicEgressRedirectLimitExceeded"]);
+  const cancellationMilliseconds = atomic?.cancellationMilliseconds ?? timeoutMilliseconds;
+  if (!Number.isSafeInteger(cancellationMilliseconds) || cancellationMilliseconds <= 0 || cancellationMilliseconds > 60_000) throw new TypeError("Media cancellation budget is invalid.");
+  const failureKinds = new Set(["MediaAcquisitionTransportFailed", ...FAILURE_KINDS,"MediaPublicEgressUnavailable", "MediaPublicEgressFailed", "MediaPublicEgressRedirectUnsafe", "MediaPublicEgressPrivateAddress", "MediaPublicEgressLoopbackAddress", "MediaPublicEgressLinkLocalAddress", "MediaPublicEgressReservedAddress", "MediaPublicEgressCredentialsRejected", "MediaPublicEgressNonHttpsUrl", "MediaPublicEgressPayloadTooLarge", "MediaPublicEgressTimeout", "MediaPublicEgressCancellationUnconfirmed", "MediaPublicEgressRedirectLimitExceeded"]);
+  const configuredMaximumBytes=maximumBytes;
   return Object.freeze({
-    /** @param {Request} request @returns {Promise<Result<Response, MediaPublicEgressFailure>>} */
-    async fetch(request) {
+    /** @param {Request} request @param {{readonly maximumBytes:number}} [requestPolicy] @returns {Promise<Result<Response, MediaPublicEgressFailure>>} */
+    async fetch(request,requestPolicy) {
+      if(requestPolicy!==undefined&&(!record(requestPolicy)||!Number.isSafeInteger(requestPolicy.maximumBytes)||requestPolicy.maximumBytes<=0||requestPolicy.maximumBytes>configuredMaximumBytes))return {ok:false,error:{kind:'MediaPublicEgressFailed'}};
+      const maximumBytes=requestPolicy?.maximumBytes??configuredMaximumBytes;
       if (!(request instanceof Request) || request.method !== "GET") return { ok: false, error: { kind: "MediaPublicEgressFailed" } };
       const initialFailure = validatePublicUrl(request.url);
       if (initialFailure !== null) return { ok: false, error: initialFailure };
@@ -95,17 +103,32 @@ export function createMediaPublicEgress(capability, options = {}) {
       const controller = new AbortController();
       /** @type {ReturnType<typeof setTimeout> | undefined} */ let timer;
       const timeout = new Promise((resolve) => { timer = setTimeout(() => { controller.abort(); resolve(/** @type {const} */ ({ ok: false, error: { kind: "MediaPublicEgressTimeout" } })); }, timeoutMilliseconds); });
+      try {
       /** @type {unknown} */ let result;
       try {
-        result = await Promise.race([
-          atomic.request(request, Object.freeze({ maximumBytes, timeoutMilliseconds, redirectLimit, validateEveryRedirect: true, publicAddressesOnly: true, signal: controller.signal })),
-          timeout,
-        ]);
+        const pending = atomic.request(request, Object.freeze({ maximumBytes, timeoutMilliseconds, redirectLimit, validateEveryRedirect: true, publicAddressesOnly: true, signal: controller.signal }));
+        result = await Promise.race([pending, timeout]);
+        if (controller.signal.aborted) {
+          // The request deadline starts teardown; it cannot certify remote cleanup.
+          /** @type {ReturnType<typeof setTimeout> | undefined} */ let teardownTimer;
+          try {
+            result = await Promise.race([pending, new Promise((resolve) => {
+              teardownTimer = setTimeout(() => resolve({ ok: false, error: { kind: "MediaPublicEgressCancellationUnconfirmed" } }), cancellationMilliseconds);
+            })]);
+          } catch (error) {
+            if (!(error instanceof Error)) throw error;
+            return { ok: false, error: { kind: "MediaPublicEgressCancellationUnconfirmed" } };
+          } finally { if (teardownTimer !== undefined) clearTimeout(teardownTimer); }
+          if (record(result) && result.ok === false && record(result.error) && ["Cancelled", "TimedOut"].includes(String(result.error.kind))) {
+            return { ok: false, error: { kind: "MediaPublicEgressTimeout" } };
+          }
+          if (!record(result) || result.ok !== false || !record(result.error) || result.error.kind !== "MediaPublicEgressCancellationUnconfirmed") {
+            return { ok: false, error: { kind: "MediaPublicEgressCancellationUnconfirmed" } };
+          }
+        }
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        return { ok: false, error: { kind: controller.signal.aborted ? "MediaPublicEgressTimeout" : "MediaPublicEgressFailed" } };
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
+        return { ok: false, error: { kind: controller.signal.aborted ? "MediaPublicEgressCancellationUnconfirmed" : "MediaPublicEgressFailed" } };
       }
       if (!record(result) || typeof result.ok !== "boolean") return { ok: false, error: { kind: "MediaPublicEgressFailed" } };
       if (!result.ok) {
@@ -121,30 +144,46 @@ export function createMediaPublicEgress(capability, options = {}) {
       }
       const response = /** @type {Response} */ (result.value.response);
       const declaredLength = Number(response.headers.get("content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) return { ok: false, error: { kind: "MediaPublicEgressPayloadTooLarge" } };
-      /** @type {ReturnType<typeof setTimeout> | undefined} */ let bodyTimer;
-      /** @type {ArrayBuffer | null} */ let buffer;
-      try {
-        buffer = await Promise.race([
-          response.arrayBuffer(),
-          new Promise((resolve) => { bodyTimer = setTimeout(() => resolve(null), timeoutMilliseconds); }),
-        ]);
-      } catch (error) {
-        return { ok: false, error: { kind: "MediaPublicEgressFailed" } };
-      } finally {
-        if (bodyTimer !== undefined) clearTimeout(bodyTimer);
+      if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) { await response.body?.cancel(); return { ok: false, error: { kind: "MediaPublicEgressPayloadTooLarge" } }; }
+      const reader=response.body?.getReader();
+      /** @type {Uint8Array[]} */ const chunks=[];let total=0;
+      if(reader){
+        const cancelBody=()=>{void reader.cancel();};controller.signal.addEventListener('abort',cancelBody,{once:true});
+        try{while(true){const item=await Promise.race([reader.read(),timeout]);if('ok' in item)return item;if(controller.signal.aborted)return {ok:false,error:{kind:'MediaPublicEgressTimeout'}};if(item.done)break;total+=item.value.byteLength;if(total>maximumBytes){controller.abort();await reader.cancel();return {ok:false,error:{kind:'MediaPublicEgressPayloadTooLarge'}};}chunks.push(item.value);}}
+        catch(error){if(!(error instanceof Error))throw error;return {ok:false,error:{kind:controller.signal.aborted?'MediaPublicEgressTimeout':'MediaPublicEgressFailed'}};}
+        finally{controller.signal.removeEventListener('abort',cancelBody);reader.releaseLock();}
       }
-      if (buffer === null) return { ok: false, error: { kind: "MediaPublicEgressTimeout" } };
-      const bytes = new Uint8Array(buffer);
-      if (bytes.byteLength > maximumBytes) return { ok: false, error: { kind: "MediaPublicEgressPayloadTooLarge" } };
-      return { ok: true, value: new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers }) };
+      const bytes=new Uint8Array(total);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+      return { ok: true, value: new Response([204,205,304].includes(response.status)?null:bytes, { status: response.status, statusText: response.statusText, headers: response.headers }) };
+      } finally {if(timer!==undefined)clearTimeout(timer);controller.abort();}
     },
   });
 }
+/** Acquires bounded image bytes through the atomic public egress boundary.
+ * @param {MediaPublicEgress} publicEgress @param {string} url @param {AbortSignal} [signal] @param {number} [maximumBytes]
+ * @returns {Promise<Result<{readonly bytes:Uint8Array,readonly mediaType:"image/png"|"image/jpeg"|"image/webp"|"image/gif"},MediaFailure>>} */
+export async function acquireImageBytes(publicEgress,url,signal,maximumBytes) {
+  if ((maximumBytes!==undefined&&(!Number.isSafeInteger(maximumBytes)||maximumBytes<=0||maximumBytes>imageLimit))||typeof publicEgress?.fetch !== "function" || !text(url) || !URL.canParse(url)||(signal!==undefined&&!(signal instanceof AbortSignal))) return {ok:false,error:{kind:"MediaCommandInvalid",field:"image"}};
+  const unsafe=validatePublicUrl(url);
+  if(unsafe!==null)return {ok:false,error:unsafe};
+  /** @type {Result<Response,MediaPublicEgressFailure>} */ let response;
+  try {response=await publicEgress.fetch(new Request(url,{signal}),maximumBytes===undefined?undefined:{maximumBytes});} catch(error) {if(!(error instanceof Error))throw error;return {ok:false,error:{kind:"MediaPublicEgressFailed"}};}
+  if(!response.ok)return response;
+  if(!response.value.ok)return {ok:false,error:{kind:"MediaFetchFailed"}};
+  const declared=response.value.headers.get("content-type")?.split(";",1)[0]?.trim().toLowerCase();
+  let bytes;
+  try {bytes=new Uint8Array(await response.value.arrayBuffer());} catch(error) {if(!(error instanceof Error))throw error;return {ok:false,error:{kind:"MediaFetchFailed"}};}
+  if(bytes.byteLength>(maximumBytes??imageLimit))return {ok:false,error:{kind:"MediaPayloadTooLarge"}};
+  const detected=signature(bytes);
+  if(detected===null)return {ok:false,error:{kind:"MediaUnsupportedType"}};
+  if(detected!==declared)return {ok:false,error:{kind:"MediaMimeSignatureConflict"}};
+  return {ok:true,value:{bytes,mediaType:/** @type {"image/png"|"image/jpeg"|"image/webp"|"image/gif"} */(detected)}};
+}
+
 /** @param {MediaFailure} failure @param {MediaDependencies} dependencies @param {string | undefined} ownerId @param {string | undefined} assetId @returns {Result<never, MediaFailure>} */
 function fail(failure, dependencies, ownerId, assetId) { dependencies.logger({ event: "media-failure", ownerId, assetId, failureKind: failure.kind }); return { ok: false, error: failure }; }
 
-/** @param {MediaDependencies} dependencies @param {number} maximumImageBytes @param {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string }} command @param {MediaCandidate} candidate @param {URL} candidateUrl @param {Uint8Array} bytes @returns {Promise<Result<{ readonly asset: MediaAsset, readonly derivative: MediaDerivative }, MediaFailure>>} */
+/** @param {MediaDependencies} dependencies @param {number} maximumImageBytes @param {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly binding?: MediaAsset["binding"] }} command @param {MediaCandidate} candidate @param {URL} candidateUrl @param {Uint8Array} bytes @returns {Promise<Result<{ readonly asset: MediaAsset, readonly derivative: MediaDerivative }, MediaFailure>>} */
 async function persistImage(dependencies, maximumImageBytes, command, candidate, candidateUrl, bytes) {
   if (bytes.byteLength > maximumImageBytes) return fail({ kind: "MediaPayloadTooLarge" }, dependencies, command.ownerId, undefined);
   const detected = signature(bytes);
@@ -152,6 +191,10 @@ async function persistImage(dependencies, maximumImageBytes, command, candidate,
   if (candidate.mediaTypeHint.split(";", 1)[0].trim().toLowerCase() !== detected) return fail({ kind: "MediaMimeSignatureConflict" }, dependencies, command.ownerId, undefined);
   const digest = await dependencies.digest(bytes);
   if (!digest.ok || !text(digest.value)) return fail({ kind: "MediaPersistenceFailed" }, dependencies, command.ownerId, undefined);
+  if(command.binding!==undefined) {
+    const b=command.binding;
+    if(!record(b)||!isMediaBindingPurpose(b)||(b.kind!=="webpage-support"&&b.kind!=="uploaded-source")||b.ownerId!==command.ownerId||b.runId!==command.runId||!Number.isSafeInteger(b.sourceRevision)||b.sourceRevision<=0||!/^sha256:[0-9a-f]{64}$/u.test(b.factHash)||!text(b.imageId)||!text(b.evidence)||b.originalDigest!==digest.value||(b.kind==="uploaded-source"&&(!text(b.locator)||!text(b.sourceDigest)))) return fail({kind:"MediaAssetIdentityMismatch"},dependencies,command.ownerId,undefined);
+  }
   const assetId = `media:${dependencies.createId()}`;
   const derivativeId = `derivative:${dependencies.createId()}`;
   const createdAt = dependencies.now();
@@ -164,13 +207,13 @@ async function persistImage(dependencies, maximumImageBytes, command, candidate,
     const removed = await dependencies.quarantine.remove(originalKey);
     return removed.ok ? fail({ kind: "MediaDerivativeProcessingFailed" }, dependencies, command.ownerId, assetId) : fail({ kind: "MediaCleanupFailed" }, dependencies, command.ownerId, assetId);
   }
-  const asset = Object.freeze({ ownerId: command.ownerId, runId: command.runId, knowledgeId: command.knowledgeId, assetId, sourceUrl: candidateUrl.href, origin: candidateUrl.origin, kind: candidate.kind, mediaType: detected, byteCount: bytes.byteLength, digest: digest.value, privateOriginalKey: originalKey, attribution: candidate.rights.attribution, createdAt });
+  const asset = Object.freeze({ ownerId: command.ownerId, runId: command.runId, knowledgeId: command.knowledgeId, assetId, sourceUrl: candidateUrl.href, origin: candidateUrl.origin, kind: candidate.kind, mediaType: detected, byteCount: bytes.byteLength, digest: digest.value, privateOriginalKey: originalKey, attribution: candidate.rights.attribution, createdAt, ...(command.binding===undefined?{}:{binding:command.binding}) });
   const privateObjectKey = `private-derivatives/${command.ownerId}/${assetId}/feed`;
   const savedDerivative = Object.freeze({ ownerId: command.ownerId, assetId, derivativeId, variant: "feed", mediaType: derivative.value.mediaType, byteCount: derivative.value.bytes.byteLength, privateObjectKey, deliveryToken: `${assetId}:feed`, createdAt });
   const saved = await dependencies.repository.save(asset, savedDerivative, derivative.value.bytes);
   if (!saved.ok) {
     const removed = await dependencies.quarantine.remove(originalKey);
-    return removed.ok ? fail({ kind: "MediaPersistenceFailed" }, dependencies, command.ownerId, assetId) : fail({ kind: "MediaCleanupFailed" }, dependencies, command.ownerId, assetId);
+    return removed.ok && !(record(saved.error) && saved.error.kind === "MediaCleanupFailed") ? fail({ kind: "MediaPersistenceFailed" }, dependencies, command.ownerId, assetId) : fail({ kind: "MediaCleanupFailed" }, dependencies, command.ownerId, assetId);
   }
   dependencies.logger({ event: "media-ingest-success", ownerId: command.ownerId, runId: command.runId, assetId });
   return { ok: true, value: Object.freeze({ asset, derivative: savedDerivative }) };
@@ -212,7 +255,7 @@ export function createMediaPipeline(dependencies) {
       try { bytes = new Uint8Array(await response.arrayBuffer()); } catch (error) { return fail({ kind: "MediaFetchFailed" }, dependencies, command.ownerId, undefined); }
       const detected = signature(bytes);
       if (detected !== null && declared !== detected) return fail({ kind: "MediaMimeSignatureConflict" }, dependencies, command.ownerId, undefined);
-      return persistImage(dependencies, maximumImageBytes, /** @type {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string }} */ (command), candidate, candidateUrl, bytes);
+      return persistImage(dependencies, maximumImageBytes, /** @type {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly binding?: MediaAsset["binding"] }} */ (command), candidate, candidateUrl, bytes);
     },
     /** @param {unknown} command @returns {Promise<Result<{ readonly asset: MediaAsset, readonly derivative: MediaDerivative }, MediaFailure>>} */
     async ingestBytes(command) {
@@ -222,15 +265,15 @@ export function createMediaPipeline(dependencies) {
       try { candidateUrl = new URL(candidate.url, command.sourceUrl); } catch (error) { return fail({ kind: "MediaCommandInvalid", field: "candidate.url" }, dependencies, command.ownerId, undefined); }
       if (candidateUrl.username !== "" || candidateUrl.password !== "" || candidateUrl.origin !== new URL(command.sourceUrl).origin) return fail({ kind: "MediaOriginNotAllowed" }, dependencies, command.ownerId, undefined);
       dependencies.logger({ event: "media-ingest-bytes-entry", ownerId: command.ownerId, runId: command.runId });
-      return persistImage(dependencies, maximumImageBytes, /** @type {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string }} */ (command), candidate, candidateUrl, command.bytes);
+      return persistImage(dependencies, maximumImageBytes, /** @type {{ readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly binding?: MediaAsset["binding"] }} */ (command), candidate, candidateUrl, command.bytes);
     },
-    /** @param {unknown} command @returns {Promise<Result<{ readonly bytes: Uint8Array, readonly mediaType: string }, MediaFailure>>} */
+    /** @param {unknown} command @returns {Promise<Result<{ readonly bytes: Uint8Array, readonly mediaType: string, readonly purpose?: "illustration" | "evidence" }, MediaFailure>>} */
     async serve(command) {
       if (!record(command) || !text(command.ownerId) || !text(command.assetId) || (command.variant !== "feed" && command.variant !== "thumbnail")) return fail({ kind: "MediaCommandInvalid", field: "command" }, dependencies, undefined, undefined);
       const found = await dependencies.repository.read({ ownerId: command.ownerId, assetId: command.assetId, variant: command.variant });
-      if (!found.ok) return fail({ kind: "MediaDerivativeNotFound" }, dependencies, command.ownerId, command.assetId);
+      if (!found.ok) {const kind=record(found.error)&&typeof found.error.kind==="string"?found.error.kind:"MediaObjectReadFailed";return fail({kind:/** @type {"MediaDerivativeNotFound"|"MediaIntegrityMismatch"|"MediaBindingUnverified"|"MediaAssetIdentityMismatch"|"MediaObjectReadFailed"|"MediaPersistenceFailed"} */(kind)},dependencies,command.ownerId,command.assetId);}
       if (found.value.revoked) return fail({ kind: "MediaDerivativeRevoked" }, dependencies, command.ownerId, command.assetId);
-      return { ok: true, value: Object.freeze({ bytes: found.value.bytes, mediaType: found.value.mediaType }) };
+      return { ok: true, value: Object.freeze({ bytes: found.value.bytes, mediaType: found.value.mediaType, ...(found.value.purpose === undefined ? {} : { purpose: found.value.purpose }) }) };
     },
     /** @param {unknown} command @returns {Promise<Result<null, MediaFailure>>} */
     async revoke(command) {

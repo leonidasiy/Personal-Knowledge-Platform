@@ -126,7 +126,7 @@ Deno.test("image mode accepts a signed raster upload and rejects unsupported or 
   if (mismatch.ok || mismatch.error.kind !== "MaterialImageInvalid") throw new Error("Expected MIME/signature mismatch failure.");
 });
 
-Deno.test("image batches retain distinct PDF page anchors and require image mode", async () => {
+Deno.test("image batches retain distinct PDF page anchors and automatically use image mode", async () => {
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const packed = packImageBundle([{ name: "Page 2", locator: "page:2", mediaType: "image/png", bytes: png }, { name: "Page 5", locator: "page:5", mediaType: "image/png", bytes: png }]);
   if (!packed.ok) throw new Error(packed.error.kind);
@@ -134,7 +134,7 @@ Deno.test("image batches retain distinct PDF page anchors and require image mode
   const accepted = await parseAuthorizedMaterial(command, dependencies());
   if (!accepted.ok || accepted.value.sections.map((section) => section.locator).join(",") !== "page:2,page:5" || accepted.value.media.length !== 2) throw new Error("Image bundle lost source anchors.");
   const rejected = await parseAuthorizedMaterial({ ...command, mode: "text" }, dependencies());
-  if (rejected.ok || rejected.error.kind !== "MaterialImageModeUnsupported") throw new Error("Text mode accepted a vision bundle.");
+  if (!rejected.ok || rejected.value.mode !== "image") throw new Error("Vision bundle must use image mode.");
 });
 
 Deno.test("PDF extraction returns one page-anchored section per text page and rejects image-only, encrypted, and over-page documents", async () => {
@@ -197,9 +197,11 @@ Deno.test("PPTX extraction returns slide text and embedded media metadata", asyn
   if (result.value.media.length !== 1 || result.value.media[0]?.path !== "ppt/media/image1.png") throw new Error("Expected embedded media metadata.");
 });
 
-Deno.test("material parsing fails closed for missing processing consent, oversized text, and the exact 25MiB byte boundary", async () => {
+Deno.test("material accepts checkbox-free owned uploads and retains text and exact byte boundaries", async () => {
   const noConsent = await parseAuthorizedMaterial({ ...base, rightsAttestation: { ...base.rightsAttestation, processingAllowed: false }, mediaType: "text/plain", fileName: "notes.txt", bytes: bytes("notes") }, dependencies());
-  if (noConsent.ok || noConsent.error.kind !== "MaterialRightsAttestationMissing") throw new Error("Expected consent failure.");
+  if (!noConsent.ok) throw new Error(noConsent.error.kind);
+  const noCheckbox = await parseAuthorizedMaterial({ ...base, rightsAttestation: undefined, mediaType: "text/plain", fileName: "notes.txt", bytes: bytes("notes") }, dependencies());
+  if (!noCheckbox.ok || !noCheckbox.value.provenance.processingAllowed) throw new Error("Expected server-recorded upload authorization.");
   const oversized = await parseAuthorizedMaterial({ ...base, idempotencyKey: "material-large", mediaType: "text/plain", fileName: "notes.txt", bytes: bytes("notes") }, { ...dependencies(), maximumCharacters: 2 });
   if (oversized.ok || oversized.error.kind !== "MaterialTextLimitExceeded") throw new Error("Expected text limit failure.");
   const maximumBytes = 25 * 1024 * 1024;
@@ -208,4 +210,13 @@ Deno.test("material parsing fails closed for missing processing consent, oversiz
   if (!accepted.ok) throw new Error(accepted.error.kind);
   const rejected = await parseAuthorizedMaterial({ ...base, idempotencyKey: "material-byte-over", mediaType: "application/pdf", fileName: "over-boundary.pdf", bytes: new Uint8Array(maximumBytes + 1) }, { ...dependencies(), maximumBytes });
   if (rejected.ok || rejected.error.kind !== "MaterialByteLimitExceeded" || rejected.error.maximum !== maximumBytes) throw new Error("Expected exact byte limit rejection.");
+});
+
+Deno.test("Single and bundled images force image mode with absent or stale input mode", async () => {
+ const image = new Uint8Array([137,80,78,71,13,10,26,10]);
+ const bundled=packImageBundle([{name:"image.png",locator:"image:1",mediaType:"image/png",bytes:image}]); if(!bundled.ok) throw new Error(bundled.error.kind);
+ for (const mode of [undefined,"text","image"]) for (const mediaType of ["image/png",BUNDLE_TYPE]) {
+  const result=await parseAuthorizedMaterial({...base,rightsAttestation:undefined,mode,mediaType,fileName:"image",bytes:mediaType===BUNDLE_TYPE?bundled.value:image},dependencies());
+  if(!result.ok || result.value.mode!=="image") throw new Error("Image mode must be unconditional.");
+ }
 });

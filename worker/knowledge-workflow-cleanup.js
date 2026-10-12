@@ -42,7 +42,7 @@ export function createKnowledgeWorkflowCleanup(dependencies) {
         return { ok: false, error: { kind: "WorkflowCleanupFailed" } };
       }
     }
-    if (dependencies.sourceContent !== undefined) {
+    if (markTerminal && dependencies.sourceContent !== undefined) {
       const sourceContent = await dependencies.sourceContent.purge({ ownerId: run.ownerId, sourceId: run.sourceId, sourceRevision: run.sourceRevision });
       if (!sourceContent.ok) {
         dependencies.logger({ event: "knowledge-workflow-cleanup-failure", ownerId: run.ownerId, runId: run.runId, failureKind: "WorkflowCleanupFailed" });
@@ -51,7 +51,7 @@ export function createKnowledgeWorkflowCleanup(dependencies) {
     }
     let mediaRows;
     try {
-      const selected = await dependencies.database.prepare("SELECT a.private_original_key AS object_key FROM knowledge_workflow_media_assets a WHERE a.owner_id = ? AND a.run_id = ? UNION ALL SELECT d.private_object_key AS object_key FROM knowledge_workflow_media_derivatives d JOIN knowledge_workflow_media_assets a ON a.owner_id = d.owner_id AND a.asset_id = d.asset_id WHERE a.owner_id = ? AND a.run_id = ? UNION ALL SELECT object_key FROM knowledge_workflow_materials WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId, run.ownerId, run.runId, run.ownerId, run.runId).all();
+      const selected = await dependencies.database.prepare("SELECT a.private_original_key AS object_key FROM knowledge_workflow_media_assets a WHERE a.owner_id = ? AND a.run_id = ? UNION ALL SELECT d.private_object_key AS object_key FROM knowledge_workflow_media_derivatives d JOIN knowledge_workflow_media_assets a ON a.owner_id = d.owner_id AND a.asset_id = d.asset_id WHERE a.owner_id = ? AND a.run_id = ? UNION ALL SELECT object_key FROM knowledge_workflow_materials m WHERE owner_id = ? AND run_id = ? AND NOT EXISTS (SELECT 1 FROM source_content_references c WHERE c.owner_id = m.owner_id AND c.object_key = m.object_key) AND NOT EXISTS (SELECT 1 FROM knowledge_workflow_materials other WHERE other.owner_id = m.owner_id AND other.object_key = m.object_key AND other.run_id != m.run_id)").bind(run.ownerId, run.runId, run.ownerId, run.runId, run.ownerId, run.runId).all();
       if (!selected.success) return { ok: false, error: { kind: "WorkflowCleanupFailed" } };
       mediaRows = selected.results;
     } catch (error) {
@@ -74,6 +74,10 @@ export function createKnowledgeWorkflowCleanup(dependencies) {
     try {
       const generationPrefix = `knowledge-workflow-generation:${run.runId}:`;
       const statements = [
+        dependencies.database.prepare("DELETE FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=?").bind(run.ownerId,run.runId),
+        dependencies.database.prepare("DELETE FROM knowledge_workflow_review_evidence WHERE owner_id=? AND run_id=?").bind(run.ownerId,run.runId),
+        dependencies.database.prepare("DELETE FROM source_classification_review_issues WHERE owner_id = ? AND run_id = ?").bind(run.ownerId,run.runId),
+        dependencies.database.prepare("DELETE FROM source_classifications WHERE owner_id = ? AND run_id = ?").bind(run.ownerId,run.runId),
         dependencies.database.prepare("DELETE FROM learning_generation_tasks WHERE owner_id = ? AND generation_id IN (SELECT generation_id FROM learning_generation_jobs WHERE owner_id = ? AND substr(generation_id, 1, ?) = ?)").bind(run.ownerId, run.ownerId, generationPrefix.length, generationPrefix),
         dependencies.database.prepare("DELETE FROM learning_generation_units WHERE owner_id = ? AND generation_id IN (SELECT generation_id FROM learning_generation_jobs WHERE owner_id = ? AND substr(generation_id, 1, ?) = ?)").bind(run.ownerId, run.ownerId, generationPrefix.length, generationPrefix),
         dependencies.database.prepare("DELETE FROM learning_generation_jobs WHERE owner_id = ? AND substr(generation_id, 1, ?) = ?").bind(run.ownerId, generationPrefix.length, generationPrefix),
@@ -81,7 +85,10 @@ export function createKnowledgeWorkflowCleanup(dependencies) {
         dependencies.database.prepare("DELETE FROM knowledge_workflow_media_assets WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
         dependencies.database.prepare("DELETE FROM knowledge_workflow_materials WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
         dependencies.database.prepare("DELETE FROM extraction_knowledge_points WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
+        dependencies.database.prepare("DELETE FROM knowledge_workflow_page_image_warnings WHERE owner_id = ? AND run_id = ?").bind(run.ownerId,run.runId),
         dependencies.database.prepare("DELETE FROM extraction_scratchpads WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
+        dependencies.database.prepare("DELETE FROM knowledge_workflow_quiz_retry_attempts WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
+        dependencies.database.prepare("DELETE FROM knowledge_workflow_restrictions WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
         dependencies.database.prepare("DELETE FROM knowledge_workflow_quiz_attempts WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
         dependencies.database.prepare("DELETE FROM knowledge_workflow_quizzes WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
         dependencies.database.prepare("DELETE FROM knowledge_workflow_rights_decisions WHERE owner_id = ? AND run_id = ?").bind(run.ownerId, run.runId),
@@ -94,8 +101,10 @@ export function createKnowledgeWorkflowCleanup(dependencies) {
       ];
       const results = await dependencies.database.batch(statements);
       if (results.length !== statements.length || results.some((result) => !succeeded(result))) return { ok: false, error: { kind: "WorkflowCleanupFailed" } };
-      const invalidated = await dependencies.workflowRepository.invalidateReuse({ canonicalSourceIdentity: run.canonicalSourceIdentity, sourceRevision: run.sourceRevision });
-      if (!invalidated.ok) return { ok: false, error: { kind: "WorkflowCleanupFailed" } };
+      if (markTerminal) {
+        const invalidated = await dependencies.workflowRepository.invalidateReuse({ canonicalSourceIdentity: run.canonicalSourceIdentity, sourceRevision: run.sourceRevision });
+        if (!invalidated.ok) return { ok: false, error: { kind: "WorkflowCleanupFailed" } };
+      }
       dependencies.logger({ event: "knowledge-workflow-cleanup-success", ownerId: run.ownerId, runId: run.runId });
       return { ok: true, value: null };
     } catch (error) {

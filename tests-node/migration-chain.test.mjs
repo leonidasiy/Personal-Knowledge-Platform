@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -32,13 +32,13 @@ function assertFailure(result, kind) {
   assertEquals(result.error.kind, kind);
 }
 
-test("validates the ordered migration chain through 0020 and its SQLite invariants", async () => {
+test("validates the ordered migration chain and its SQLite invariants", async () => {
   const output = await execFileAsync(process.execPath, ["--permission", "--allow-fs-read=worker/migrations", "./scripts/validate-migration-chain.mjs"], { encoding: "utf8" });
 
   assertEquals(output.stderr, "");
   assertMatch(
     output.stdout.trim(),
-    /^Validated 20 migrations and [1-9]\d* schema objects\.$/,
+    new RegExp("^Validated " + (await readdir(migrationDirectory)).filter(f=>f.endsWith(".sql")).length + " migrations and [1-9][0-9]* schema objects[.]$"),
   );
 });
 

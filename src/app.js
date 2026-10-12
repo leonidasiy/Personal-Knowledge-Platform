@@ -257,6 +257,8 @@ let promptEligibilityTimer = null;
 let libraryPageController = null;
 /** @type {ReturnType<import("./features/uploads/page.js").createUploadPage>|null} */
 let uploadPage = null;
+/** @type {import("./features/uploads/page.js").UploadPrefill|null} */
+let uploadPrefill = null;
 /** @type {Promise<void> | null} */
 let libraryRouteLoad = null;
 /** @type {string | null} */
@@ -579,6 +581,8 @@ function createRecallPrompt(id, contentId, knowledgeUnitId, promptText) {
 
 async function loadActiveRoute() {
   if (startupRestoreIssue !== null) return;
+  const libraryAlreadyLoaded = libraryPageController !== null;
+  await loadLibraryRoute();
   if (learnerController !== null && activeView === "feed") {
     await learnerController.loadFeed();
   }
@@ -586,9 +590,7 @@ async function loadActiveRoute() {
     await learnerController?.loadReview();
   }
   if (activeView === "library") {
-    const existing = libraryPageController !== null;
-    await loadLibraryRoute();
-    if (existing) await libraryPageController?.load();
+    if (libraryAlreadyLoaded) await libraryPageController?.load();
   }
   if (activeView === "upload") {
     await loadLibraryRoute();
@@ -596,9 +598,11 @@ async function loadActiveRoute() {
       if (uploadPage === null) {
         const { createUploadPage } = await import("./features/uploads/page.js");
         const library = libraryPageController;
-        uploadPage = createUploadPage({ fetch, baseUrl:new URL("./",location.href).href,createId:()=>crypto.randomUUID(),onChange:()=>render(),onRenamed:(id,title)=>library.renamed(id,title),upload:async(id,form,context)=>{await library.uploadMaterial(id,form,context);return library.uploadResult();} });
+        uploadPage = createUploadPage({ fetch, baseUrl:new URL("./",location.href).href,createId:()=>crypto.randomUUID(),onChange:()=>render(),onRenamed:(id,title)=>library.renamed(id,title),onExtracted:()=>{location.hash="library";},upload:async(id,form,context)=>{await library.uploadMaterial(id,form,context);return library.uploadResult();} });
       }
-      await uploadPage.load(location.hash);
+      const prefill = uploadPrefill;
+      uploadPrefill = null;
+      await uploadPage.load(location.hash, prefill);
     }
   }
   if (activeView === "progress") {
@@ -650,6 +654,10 @@ async function loadActiveRoute() {
         onError: (message) => {
           errorMessage = message;
           notice = null;
+        },
+        navigateToUpload: (prefill) => {
+          uploadPrefill = prefill;
+          location.hash = "upload";
         },
         navigateToLibrary: () => {
           void libraryPageController?.load().catch(() => {
@@ -832,7 +840,7 @@ function transientFormKey(form) {
   if (form.dataset.learnerReviewQuestion) return `review:${form.dataset.learnerReviewBatch}:${form.dataset.learnerReviewQuestion}`;
   if (form.matches("[data-library-search]")) return "library-search";
   if (form.matches("[data-discovery-search-form]")) return "discovery-search";
-  const sourceId = form.getAttribute("data-library-upload");
+  const sourceId = form.getAttribute("data-library-upload") ?? form.getAttribute("data-upload-form");
   return sourceId === null ? null : `library-upload:${sourceId}`;
 }
 
@@ -854,7 +862,7 @@ function transientControlKey(formKey, control, index) {
 }
 
 /**
- * Capture only user-editable Library/Discover state. These routes are rebuilt
+ * Capture only user-editable Library/Discover/Upload state. These routes are rebuilt
  * by background refreshes, while their draft state is not yet persisted.
  * @returns {{ readonly forms: readonly { readonly key: string, readonly controls: readonly { readonly key: string, readonly value: string, readonly checked: boolean | null, readonly files: readonly File[], readonly selectionStart: number | null, readonly selectionEnd: number | null }[] }[], readonly details: readonly { readonly key: string, readonly open: boolean }[], readonly focus: { readonly key: string, readonly selectionStart: number | null, readonly selectionEnd: number | null } | null } | null}
  */
@@ -1006,7 +1014,7 @@ function renderStartupRecovery() {
 }
 
 function renderHeader() {
-  return `<header class="topbar"><div class="brand-group"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><svg class="brand-symbol" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M6 28V8h11a7 7 0 0 1 0 14H6m11 0 11 7" stroke="currentColor" stroke-width="3"/><circle cx="29" cy="8" r="3" fill="currentColor"/></svg><span>resonance</span></button><span class="brand-caption">A place for<br>what stays.</span></div><div class="topbar-actions"><span class="local-badge">${
+  return `<header class="topbar"><div class="brand-group"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><svg class="brand-symbol" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M6 28V8h11a7 7 0 0 1 0 14H6m11 0 11 7" stroke="currentColor" stroke-width="3"/><circle cx="29" cy="8" r="3" fill="currentColor"/></svg><span>resonance</span></button><span class="brand-caption">A place for<br>what stays.</span></div><div class="topbar-actions">${libraryPageController?.renderProcessingStatus() ?? ""}<span class="local-badge">${
     navigator.onLine ? "Personal space" : "Offline"
   }</span><button class="button quiet" type="button" data-view="settings" data-focus-key="settings-button"${activeView === "settings" ? ' aria-current="page"' : ""}>Settings</button></div></header>`;
 }

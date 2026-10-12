@@ -1,0 +1,3 @@
+# Authoritative pinned registry bytes: preserve hashes and upstream whitespace.
+acquisition/iana/iana-ipv4-special-registry.xml -text whitespace=-blank-at-eol
+acquisition/iana/iana-ipv6-special-registry.xml -text whitespace=-blank-at-eol

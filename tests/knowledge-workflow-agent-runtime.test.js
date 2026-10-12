@@ -49,9 +49,11 @@ Deno.test("agent memory replays notes while retaining exact facts outside model 
   let summaries = 0;
   /** @type {Record<string, unknown>[]} */ const calls = [];
   const snapshots = await configurationSnapshots();
+  const signal=new AbortController().signal;
   const makeRuntime = () => createKnowledgeWorkflowAgentRuntime({
     model: { generate: async (value) => {
-      const request = /** @type {{ input: Record<string, unknown>, maxOutputTokens: number }} */ (value);
+      const request = /** @type {{ input: Record<string, unknown>, maxOutputTokens: number, signal?:AbortSignal }} */ (value);
+      assertEquals(request.signal,signal);
       const summary = request.input.operation === "compact-working-context";
       if (summary) summaries++;
       else { calls.push(request.input); assertEquals(request.maxOutputTokens, 16); }
@@ -61,7 +63,7 @@ Deno.test("agent memory replays notes while retaining exact facts outside model 
     compactor: createContextCompactor({ now: () => "2026-09-08T00:00:00Z", digest: (value) => `digest:${value.length}`, appendRecord: async () => null, logger: () => {} }),
     configSnapshots: snapshots, now: () => "2026-09-08T00:00:00Z", logger: () => {},
   });
-  const command = { ownerId: "owner-memory", runId: "run-memory", role: /** @type {const} */ ("knowledge-scraper"), taskId: "batch", systemPrompt: "Return JSON", input: { task: "next" }, maxOutputTokens: 16 };
+  const command = { ownerId: "owner-memory", runId: "run-memory", role: /** @type {const} */ ("knowledge-scraper"), taskId: "batch", systemPrompt: "Return JSON", input: { task: "next" }, maxOutputTokens: 16,signal };
   assertEquals((await makeRuntime().run(command)).ok, true);
   assertEquals(summaries, 0);
   assertEquals(/** @type {unknown[]} */ (calls[0].memory).length, 11);
@@ -192,4 +194,9 @@ Deno.test("agent runtime rejects circular tool and model inputs before creating 
   assertEquals(modelResult.ok, false);
   if (!modelResult.ok) assertEquals(modelResult.error.kind, "WorkflowAgentValueNotSerializable");
   assertEquals(events.length, 0);
+});
+
+Deno.test("agent runtime preserves safe provider error termination metadata without another model turn",async()=>{
+ let calls=0;const runtime=createKnowledgeWorkflowAgentRuntime({model:{generate:async()=>{calls++;return {ok:false,error:{kind:"KnowledgeModelRejected",status:200,finishReason:/** @type {const} */("error")}};}},memory:memory(),eventLedger:{append:async()=>null},compactor:createContextCompactor({now:()=>"2026-08-13T00:00:00.000Z",digest:value=>`digest:${value.length}`,appendRecord:async()=>null,logger:()=>{}}),configSnapshots:await configurationSnapshots(),now:()=>"2026-08-13T00:00:00.000Z",logger:()=>{}});
+ const result=await runtime.run({ownerId:"synthetic-owner",runId:"synthetic-run",role:"question-evaluator",taskId:"synthetic-first-critic",systemPrompt:"Constructed only",input:{claim:"Constructed"},maxOutputTokens:2048});assertEquals(result.ok,false);if(result.ok)throw new Error("Provider error cannot become successful model output");assertEquals(result.error.kind,"KnowledgeModelRejected");assertEquals(result.error.status,200);assertEquals(/** @type {{finishReason?:string}} */(result.error).finishReason,"error");assertEquals(calls,1);
 });

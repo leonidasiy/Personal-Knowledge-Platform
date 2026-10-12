@@ -29,6 +29,8 @@ function draft() {
 Deno.test("quiz pair validates exact structured fields and stable variant assembly", () => {
   const source = draft();
   assertEquals(validateQuizPairDraft(source), true);
+  const mathematicalIdentifier = { ...source, fillBlank: { ...source.fillBlank, prompt: "In x_t, the tonal center is the ____." } };
+  assertEquals(validateQuizPairDraft(mathematicalIdentifier), true);
   const stableId = quizPairStableId({ sourceId: "source-a", knowledgeId: "knowledge-a", revision: 1 });
   const pair = assembleQuizPair(source, stableId);
   assertEquals(pair.multipleChoice.id, "quiz:source-a:knowledge-a:r1:mcq");

@@ -1,5 +1,12 @@
 // @ts-check
 
+/** A trusted execution boundary failure is not model output. Preserve it for the
+ * transport owner; ordinary model exceptions retain the harness failure contract. */
+export class AgentExecutionBoundaryFailure extends Error {
+  /** @param {{kind:string,field?:string,httpStatus?:number,errorCode?:number,finishReason?:'error'}} failure */
+  constructor(failure) { super(failure.kind); this.name = 'AgentExecutionBoundaryFailure'; this.failure = failure; this.notStarted = false; }
+}
+
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
 /** @typedef {import("./memory.js").AgentMemoryNamespace} AgentMemoryNamespace */
@@ -152,7 +159,8 @@ export function createAgentHarness(dependencies) {
         let response;
         try {
           response = await model.respond({ taskId: command.taskId, turn, input: command.input, toolResults });
-        } catch {
+        } catch (error) {
+          if (error instanceof AgentExecutionBoundaryFailure) throw error;
           logger({ event: "agent.failure", runId: command.namespace.runId, role: command.namespace.role, failureKind: "AgentOutputInvalid" });
           return { ok: false, error: { kind: "AgentOutputInvalid" } };
         }

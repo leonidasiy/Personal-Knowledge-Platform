@@ -38,7 +38,7 @@ export class BrowserRunPageAcquirer {
 
   /** @param {unknown} command @returns {Promise<Result<BrowserRunAcquisitionBatch, SourceIngestionFailure>>} */
   async acquire(command) {
-    const parsed = validateCommand(command);
+    const parsed = validateBrowserRunCommand(command);
     if (!parsed.ok) return parsed;
     const limits = await this.#activeLimits();
     if (!limits.ok) return limits;
@@ -275,7 +275,7 @@ function validPage(value) { return isRecord(value) && typeof value.setRequestInt
 function validPolicy(value) { return isRecord(value) && isPositiveInteger(value.maximumPagesPerRun) && isPositiveInteger(value.maximumRunMilliseconds) && isPositiveInteger(value.navigationTimeoutMilliseconds) && value.navigationTimeoutMilliseconds <= value.maximumRunMilliseconds && isPositiveInteger(value.maximumHtmlBytes) && isPositiveInteger(value.maximumTextCharacters) && isPositiveInteger(value.maximumLinksPerPage) && isPositiveInteger(value.maximumFrontierEntries); }
 
 /** @param {unknown} command @returns {Result<{ readonly job: TrustedSourceIngestionJob, readonly cursor: SourceIngestionCursor, readonly plan: SourceCrawlPlan, readonly rights: ServerRightsGrant }, SourceIngestionFailure>} */
-function validateCommand(command) {
+export function validateBrowserRunCommand(command) {
   if (!isRecord(command) || !validJob(command.job) || !validCursor(command.cursor) || !validPlan(command.plan) || !validRights(command.rights) || Object.keys(command).some((key) => !["job", "cursor", "plan", "rights"].includes(key))) return fail({ kind: "BrowserRunConfigurationInvalid" });
   const job = /** @type {TrustedSourceIngestionJob} */ (command.job);
   const plan = /** @type {SourceCrawlPlan} */ (command.plan);

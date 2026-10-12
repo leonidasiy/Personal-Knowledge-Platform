@@ -19,7 +19,7 @@ import {
 /** @typedef {{appendBatch(records:readonly PersistenceEnvelope[]):Promise<Result<readonly PersistenceEnvelope[],PersistenceFailure>>,list(ownerId:string,kind:RecordKind):Promise<Result<readonly PersistenceEnvelope[],PersistenceFailure>>}} DiscoveryPersistence */
 
 /**
- * @param {{readonly ownerId:string,readonly persistence:DiscoveryPersistence,readonly fetch:typeof fetch,readonly gatewayBaseUrl:string,readonly policyStorage:{readonly getItem:(key:string)=>string|null,readonly setItem:(key:string,value:string)=>void},readonly starterInventory:unknown,readonly markup:import("../routes/discover.js").DiscoverMarkup,readonly escapeHtml:(value:string)=>string,readonly createId:()=>string,readonly now:()=>string,readonly onNotice:(message:string)=>void,readonly onError:(message:string)=>void,readonly navigateToLibrary:(sourceId:string)=>void,readonly rerender:()=>void}} dependencies
+ * @param {{readonly ownerId:string,readonly persistence:DiscoveryPersistence,readonly fetch:typeof fetch,readonly gatewayBaseUrl:string,readonly policyStorage:{readonly getItem:(key:string)=>string|null,readonly setItem:(key:string,value:string)=>void},readonly starterInventory:unknown,readonly markup:import("../routes/discover.js").DiscoverMarkup,readonly escapeHtml:(value:string)=>string,readonly createId:()=>string,readonly now:()=>string,readonly onNotice:(message:string)=>void,readonly onError:(message:string)=>void,readonly navigateToLibrary:(sourceId:string)=>void,readonly navigateToUpload:(prefill:import("../features/uploads/page.js").UploadPrefill)=>void,readonly rerender:()=>void}} dependencies
  */
 export function createDiscoveryPage(dependencies) {
   if (
@@ -37,6 +37,7 @@ export function createDiscoveryPage(dependencies) {
     typeof dependencies.onNotice !== "function" ||
     typeof dependencies.onError !== "function" ||
     typeof dependencies.navigateToLibrary !== "function" ||
+    typeof dependencies.navigateToUpload !== "function" ||
     typeof dependencies.rerender !== "function"
   ) throw new TypeError("Discovery page dependencies are invalid.");
   const {
@@ -96,7 +97,7 @@ export function createDiscoveryPage(dependencies) {
   const centralGateway = new DiscoverySearchGatewayClient({
     fetch: requestFetch,
     baseUrl: gatewayBaseUrl,
-    timeoutMs: 15_000,
+    timeoutMs: 30_000,
   });
   const youtubeConnection = createYouTubeConnectionController({
     storage: policyStorage,
@@ -236,35 +237,15 @@ export function createDiscoveryPage(dependencies) {
           if (itemId !== null) void reject(itemId);
         })
       );
-      root.querySelectorAll("[data-discovery-upload]").forEach((element) =>
-        element.addEventListener("submit", (event) => {
-          event.preventDefault();
-          if (!(event.currentTarget instanceof HTMLFormElement)) return;
-          const itemId = event.currentTarget.getAttribute(
-            "data-discovery-upload",
-          );
-          const data = new FormData(event.currentTarget);
-          const areaId = data.get("interest-area");
-          const fileValue = data.get("material");
-          const file = fileValue instanceof File && fileValue.size > 0
-            ? fileValue
-            : null;
-          const contentValue = data.get("content");
-          const content = typeof contentValue === "string" &&
-              contentValue.trim() !== ""
-            ? contentValue
-            : null;
-          const attested = data.get("rights-attestation") === "on";
-          if (
-            itemId !== null && typeof areaId === "string" &&
-            (file !== null || content !== null)
-          ) {
-            void approveAndUpload(itemId, areaId, file, content, attested);
-          }
+      root.querySelectorAll("[data-discovery-open-upload]").forEach((element) =>
+        element.addEventListener("click", () => {
+          const result = openUpload(element.getAttribute("data-discovery-open-upload"));
+          if (!result.ok) { onError("This source is unavailable. Return to Discover and select the source again."); rerender(); }
         })
       );
     },
     search,
+    openUpload,
     approve,
     reject,
   });
@@ -370,7 +351,7 @@ export function createDiscoveryPage(dependencies) {
     );
     searchFailure = result.value.providerFailures.length === 0
       ? null
-      : "Some selected source types could not be searched. Available results are shown.";
+      : result.value.providerFailures.map(({providerId,failure})=>`${providerId}: ${failure.kind}.`).join(" ") + " Available results are shown.";
     if (sourceActionsAvailable) {
       await syncIdentities(centralRouteItems.map((item) =>
         item.candidate.canonicalIdentity
@@ -398,9 +379,13 @@ export function createDiscoveryPage(dependencies) {
       rerender();
       return;
     }
+    if (["video", "feed", "episode", "unknown"].includes(item.candidate.adapter.granularity)) {
+      onError("Extraction is unavailable for this format. Explore the source or provide permitted learning material.");
+      return;
+    }
     pendingDecisionItemId = item.id;
     rerender();
-    const result = await sourceLibrary.approve({
+    const result = await sourceLibrary.extract({
       ...item.candidate,
       identityStatus: "resolved",
       interestAreaIds: [areaId],
@@ -420,74 +405,12 @@ export function createDiscoveryPage(dependencies) {
     rerender();
   }
 
-  /** @param {string} itemId @param {string} areaId @param {File | null} file @param {string | null} content @param {boolean} attested */
-  async function approveAndUpload(itemId, areaId, file, content, attested) {
-    if (pendingDecisionItemId !== null) return;
-    const item = routeItems.get(itemId);
-    if (
-      item === undefined || !attested || (file === null && content === null) ||
-      !interestAreas.some((area) => area.id === areaId)
-    ) {
-      onError(markup.uploadRequired);
-      rerender();
-      return;
-    }
-    pendingDecisionItemId = item.id;
-    rerender();
-    const approved = await sourceLibrary.approve({
-      ...item.candidate,
-      identityStatus: "resolved",
-      interestAreaIds: [areaId],
-      idempotencyKey: `approve:${createId()}`,
-    });
-    if (!approved.ok) {
-      pendingDecisionItemId = null;
-      onError(friendlySource(approved.error, markup));
-      rerender();
-      return;
-    }
-    if (approved.value.workflow === null) {
-      pendingDecisionItemId = null;
-      onError(markup.uploadStoreFailed);
-      rerender();
-      return;
-    }
-    const uploaded = await sourceLibrary.uploadWorkflowMaterial({
-      runId: approved.value.workflow.runId,
-      sourceId: approved.value.source.id,
-      sourceRevision: approved.value.source.revision,
-      sourceUrl: approved.value.source.canonicalUrl,
-      mediaType: file === null ? "text/plain" : materialMediaType(file),
-      fileName: file === null ? "paste.txt" : file.name,
-      rightsAttestation: {
-        ownsOrPermitted: true,
-        storageAllowed: true,
-        transformationAllowed: true,
-        processingAllowed: true,
-        basis: "learner-attested lawful copy",
-        reference: `learner-attestation:${now()}`,
-      },
-      idempotencyKey: `workflow-material:${createId()}`,
-      ...(file === null ? { content } : { file }),
-    });
-    pendingDecisionItemId = null;
-    if (!uploaded.ok) {
-      onError(markup.uploadStoreFailed);
-    } else {
-      onNotice(markup.uploadStored);
-      navigateToLibrary(approved.value.source.id);
-    }
-    rerender();
-  }
-
-  /** @param {File} file @returns {string} */
-  function materialMediaType(file) {
-    const name = file.name.toLowerCase();
-    if (name.endsWith(".pdf")) return "application/pdf";
-    if (name.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    if (name.endsWith(".md")) return "text/markdown";
-    if (name.endsWith(".vtt")) return "text/plain";
-    return file.type.startsWith("text/") ? "text/plain" : file.type || "text/plain";
+  /** @param {string|null} itemId @returns {Result<undefined,{readonly kind:"DiscoveryUploadSourceUnavailable"}>} */
+  function openUpload(itemId) {
+    const item = typeof itemId === "string" ? routeItems.get(itemId) : undefined;
+    if (item === undefined) return { ok: false, error: { kind: "DiscoveryUploadSourceUnavailable" } };
+    dependencies.navigateToUpload({title: item.title});
+    return { ok: true, value: undefined };
   }
 
   /** @param {string} itemId */
@@ -561,12 +484,8 @@ export function createDiscoveryPage(dependencies) {
     const youtube = item.sourceLevel === "video";
     const feed = item.sourceLevel === "feed";
     const id = createId();
-    const retainedTitle = youtube ? "Saved YouTube video" : feed ? "Saved podcast feed" : item.title;
-    const retainedDescription = youtube
-      ? "Saved video link. Upload a permitted transcript to create learning material."
-      : feed
-      ? "Saved podcast feed link. Review eligibility and rights before acquiring material."
-      : item.description ?? "The provider did not supply a description.";
+    const retainedTitle = item.title;
+    const retainedDescription = item.description ?? "";
     return freeze({
       id,
       version: 1,
@@ -591,7 +510,7 @@ export function createDiscoveryPage(dependencies) {
           granularity: item.sourceLevel,
           capabilities: freeze(youtube ? ["metadata", "manual-transcript"] : feed ? ["metadata"] : ["metadata", "bounded-ingestion"]),
         }),
-        identityEvidence: freeze(item.identityEvidence.map((evidence) => freeze({ ...evidence, observedAt }))),
+        identityEvidence: freeze(item.identityEvidence.filter((evidence) => !youtube || ["youtube-api-video-id", "youtube-channel-id"].includes(evidence.attribute)).map((evidence) => freeze({ ...evidence, observedAt }))),
         initialItem: youtube ? freeze({
           itemId: id,
           versionId: policyVersion,
@@ -660,6 +579,7 @@ function friendlySource(failure, failureCopy) {
     failure.kind === "SourceGatewayRejected" &&
     failure.failureKind === "SourceInterestAreaMissing"
   ) return failureCopy.sourceAreaMissing;
+  if (failure.kind === "SourceGatewayRejected") return `Extraction or decision failed: ${failure.failureKind}.`;
   return failureCopy.sourceDecisionFailed;
 }
 

@@ -15,7 +15,8 @@ import {
 /**
  * @typedef {{
  *   readonly provider: string,
- *   readonly name: string
+ *   readonly name: string,
+ *   readonly reasoningEffort?: "none" | "low" | "high"
  * }} AgentModel
  */
 
@@ -264,11 +265,12 @@ function validateConfiguration(value) {
     if (!isNonEmptyText(value[field])) return { kind: "WorkflowConfigurationFieldInvalid", field };
   }
   if (!isRecord(value.model)) return { kind: "WorkflowConfigurationFieldInvalid", field: "model" };
-  const unknownModelField = Object.keys(value.model).find((field) => field !== "provider" && field !== "name");
+  const unknownModelField = Object.keys(value.model).find((field) => field !== "provider" && field !== "name" && field !== "reasoningEffort");
   if (unknownModelField !== undefined) return { kind: "WorkflowConfigurationFieldUnknown", field: `model.${unknownModelField}` };
   if (!isNonEmptyText(value.model.provider) || !isNonEmptyText(value.model.name)) {
     return { kind: "WorkflowConfigurationFieldInvalid", field: "model" };
   }
+  if (value.model.reasoningEffort !== undefined && (typeof value.model.reasoningEffort !== "string" || !["none", "low", "high"].includes(value.model.reasoningEffort))) return { kind: "WorkflowConfigurationFieldInvalid", field: "model.reasoningEffort" };
   if (!isArray(value.allowedTools) || value.allowedTools.length === 0 ||
     value.allowedTools.some((tool) => !isNonEmptyText(tool))) {
     return { kind: "WorkflowConfigurationFieldInvalid", field: "allowedTools" };
@@ -349,7 +351,7 @@ export function createAgentConfigurationLoader(dependencies) {
       if (!parsed) return { ok: false, error: { kind: "WorkflowConfigurationYamlInvalid" } };
       const validation = validateConfiguration(parsed);
       if (validation) return { ok: false, error: validation };
-      const model = /** @type {{ readonly provider: string, readonly name: string }} */ (parsed.model);
+      const model = /** @type {AgentModel} */ (parsed.model);
       if (dependencies.supportedModels !== undefined && !dependencies.supportedModels.has(`${model.provider}/${model.name}`)) {
         return { ok: false, error: { kind: "WorkflowConfigurationModelUnsupported" } };
       }

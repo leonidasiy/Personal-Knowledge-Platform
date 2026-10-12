@@ -30,6 +30,8 @@ import { validateSourceRightsProfile } from "../source-library/rights-profile.js
  * }} WorkflowCounts
  */
 
+/** @typedef {{readonly kind:"user-authorized-link",readonly ownerId:string,readonly sourceId:string,readonly sourceRevision:number,readonly url:string,readonly recordedAt:string}} UserLinkAuthorization */
+
 /**
  * @typedef {{
  *   readonly ownerId: string,
@@ -39,6 +41,7 @@ import { validateSourceRightsProfile } from "../source-library/rights-profile.js
  *   readonly canonicalSourceIdentity: string,
  *   readonly contentSignature: string,
  *   readonly rightsProfile?: SourceRightsProfile | null,
+ *   readonly userAuthorization?: UserLinkAuthorization | null,
  *   readonly materialId?: string | null,
  *   readonly state: WorkflowState,
  *   readonly revision: number,
@@ -182,6 +185,7 @@ function isRun(value) {
     (value.extractionStartedAt === null || isNonEmptyText(value.extractionStartedAt)) &&
     (value.extractionDeadlineAt === null || isNonEmptyText(value.extractionDeadlineAt)) &&
     (value.rightsProfile === undefined || value.rightsProfile === null || validateSourceRightsProfile(value.rightsProfile).ok) &&
+    (value.userAuthorization === undefined || value.userAuthorization === null || validLinkAuthorization(value.userAuthorization, value)) &&
     (value.materialId === undefined || value.materialId === null || isNonEmptyText(value.materialId)) &&
     (value.robotsEvidence === undefined || value.robotsEvidence === null || isRobotsEvidence(value.robotsEvidence)) &&
     (value.decisionRequired === null || value.decisionRequired === "rights-review" || value.decisionRequired === "upload-material" || value.decisionRequired === "generate-or-abandon") &&
@@ -269,8 +273,8 @@ function isAllowedTransition(current, next) {
 
 /** @param {KnowledgeWorkflowRun} run @param {WorkflowRepository} repository @returns {Promise<Result<KnowledgeWorkflowRun, WorkflowFailure>>} */
 async function persistReuse(run, repository) {
-  // An upload's processing grant is owner-scoped, not permission for global reuse.
-  if (run.state !== "completed" || run.materialId != null || typeof repository.markReuse !== "function") return { ok: true, value: run };
+  // Personal processing grants are owner-scoped, not permission for global reuse.
+  if (run.state !== "completed" || run.materialId != null || run.userAuthorization != null || typeof repository.markReuse !== "function") return { ok: true, value: run };
   const marked = await repository.markReuse({ canonicalSourceIdentity: run.canonicalSourceIdentity, sourceRevision: run.sourceRevision, contentSignature: run.contentSignature, configDigests: run.configDigests, counts: run.counts, createdAt: run.createdAt, updatedAt: run.updatedAt });
   return marked.ok ? { ok: true, value: run } : marked;
 }
@@ -298,6 +302,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
       if (command.sourceOrigin !== undefined && command.sourceOrigin !== "private-document") {
         return { ok: false, error: { kind: "WorkflowCommandInvalid", field: "sourceOrigin" } };
       }
+      if (command.userAuthorization !== undefined && command.userAuthorization !== null && !validLinkAuthorization(command.userAuthorization, command)) return {ok:false,error:{kind:"WorkflowCommandInvalid",field:"userAuthorization"}};
       let normalizedRightsProfile = null;
       if (command.rightsProfile !== undefined && command.rightsProfile !== null) {
         const checkedProfile = validateSourceRightsProfile(command.rightsProfile);
@@ -306,16 +311,17 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         normalizedRightsProfile = checkedProfile.value;
       }
       dependencies.logger({ event: "knowledge-workflow.create-entry", ownerId: command.ownerId });
-      const replay = await repository.findByIdempotency(command.ownerId, command.idempotencyKey);
-      if (!replay.ok) return replay;
-      if (replay.value !== null) {
-        if (replay.value.sourceId !== command.sourceId || replay.value.sourceRevision !== command.sourceRevision ||
-          replay.value.canonicalSourceIdentity !== command.canonicalSourceIdentity || replay.value.contentSignature !== command.contentSignature ||
-          fingerprint(replay.value.configDigests) !== fingerprint(command.configDigests) ||
-          fingerprint(replay.value.rightsProfile ?? null) !== fingerprint(normalizedRightsProfile)) {
-          return { ok: false, error: { kind: "WorkflowIdempotencyConflict" } };
-        }
-        return { ok: true, value: freeze({ run: cloneRun(replay.value), reused: true }) };
+      let attemptKey = command.idempotencyKey;
+      /** @param {KnowledgeWorkflowRun} existing */
+      const matches = (existing) => existing.sourceId === command.sourceId && existing.sourceRevision === command.sourceRevision && existing.canonicalSourceIdentity === command.canonicalSourceIdentity && existing.contentSignature === command.contentSignature && fingerprint(existing.configDigests) === fingerprint(command.configDigests) && fingerprint(existing.rightsProfile ?? null) === fingerprint(normalizedRightsProfile) && fingerprint(existing.userAuthorization ?? null) === fingerprint(command.userAuthorization ?? null);
+      while (true) {
+        const replay = await repository.findByIdempotency(command.ownerId, attemptKey);
+        if (!replay.ok) return replay;
+        if (replay.value === null) break;
+        if (!matches(replay.value)) return {ok:false,error:{kind:"WorkflowIdempotencyConflict"}};
+        if (replay.value.state !== "abandoned") return {ok:true,value:freeze({run:cloneRun(replay.value),reused:true})};
+        // Keep cancelled attempts and their data immutable; all writers derive the same next key.
+        attemptKey = `after-cancel:${replay.value.runId}`;
       }
       const reuse = await repository.findGlobalReuse({ canonicalSourceIdentity: command.canonicalSourceIdentity, sourceRevision: command.sourceRevision, contentSignature: command.contentSignature });
       if (!reuse.ok) return reuse;
@@ -329,10 +335,11 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         canonicalSourceIdentity: command.canonicalSourceIdentity,
         contentSignature: command.contentSignature,
         rightsProfile: normalizedRightsProfile,
+        userAuthorization: /** @type {UserLinkAuthorization|null} */(command.userAuthorization ?? null),
         materialId: null,
         state: command.sourceOrigin === "private-document" ? "awaiting-upload" : "source-added",
         revision: 1,
-        idempotencyKey: command.idempotencyKey,
+        idempotencyKey: attemptKey,
         configDigests: command.configDigests,
         robotsEvidence: null,
         extractionStartedAt: null,
@@ -346,7 +353,15 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
       });
       if (!isRun(run)) throw new TypeError("Knowledge workflow run construction violated its contract.");
       const inserted = await repository.insert(run);
-      if (!inserted.ok) return inserted;
+      if (!inserted.ok) {
+        if (inserted.error.kind !== "WorkflowIdempotencyConflict") return inserted;
+        const winner = await repository.findByIdempotency(run.ownerId, run.idempotencyKey);
+        if (!winner.ok) return winner;
+        if (winner.value === null) return {ok:false,error:{kind:"WorkflowPersistenceFailed"}};
+        if (!matches(winner.value)) return {ok:false,error:{kind:"WorkflowIdempotencyConflict"}};
+        dependencies.logger({event:"knowledge-workflow.create-success",ownerId:run.ownerId,runId:winner.value.runId,action:"concurrent-reuse"});
+        return {ok:true,value:freeze({run:cloneRun(winner.value),reused:true})};
+      }
       dependencies.logger({ event: "knowledge-workflow.create-success", ownerId: command.ownerId, runId: run.runId, action: reuse.value === null ? "new-source" : "reuse-candidate" });
       return { ok: true, value: freeze({ run, reused: false }) };
     },
@@ -524,3 +539,8 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
 }
 
 export {};
+
+/** @param {unknown} value @param {Record<string,unknown>} binding @returns {value is UserLinkAuthorization} */
+function validLinkAuthorization(value,binding) {
+ return isRecord(value) && Object.keys(value).length===6 && value.kind==="user-authorized-link" && value.ownerId===binding.ownerId && value.sourceId===binding.sourceId && value.sourceRevision===binding.sourceRevision && value.url===binding.canonicalSourceIdentity && typeof value.recordedAt === "string" && validTimestamp(value.recordedAt);
+}

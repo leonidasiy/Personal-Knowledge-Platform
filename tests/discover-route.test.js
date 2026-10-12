@@ -289,6 +289,8 @@ Deno.test("Discover exposes only safe HTTPS YouTube watch links", () => {
       "javascript:alert(1)",
       "http://www.youtube.com/watch?v=source-1",
       "https://example.test/watch?v=source-1",
+      "https://www.youtube.com.evil.test/watch?v=source-1",
+      "https://user:pass@www.youtube.com/watch?v=source-1",
       "not a URL",
     ]
   ) {
@@ -304,6 +306,12 @@ Deno.test("Discover exposes only safe HTTPS YouTube watch links", () => {
       unsafeUrl + " must never become an actionable link.",
     );
   }
+});
+
+Deno.test("YouTube timestamp fragments retain their existing safe watch behavior", () => {
+  const url = "https://www.youtube.com/watch?v=source-1#t=30";
+  const html = renderDiscoverRoute(model("success", [item({sourceUrl:url, youtubeWatchUrl:url})], {page:"detail",selectedItemId:"observed-item-1"}));
+  assert(html.includes(`href="${url}"`), "Preserve safe timestamp fragments on YouTube watch links.");
 });
 
 Deno.test("Discovery exposes only source approval and rejection without learning claims", () => {
@@ -332,7 +340,7 @@ Deno.test("Discovery exposes only source approval and rejection without learning
   assert(
     html.includes('aria-label="Source action"') &&
       html.includes("Watch on YouTube") &&
-      html.includes("Add to Library") &&
+      html.includes("Extract Knowledge Points") &&
       html.includes('data-source-granularity="individual-video"') &&
       html.includes('data-source-capabilities="metadata,manual-transcript"') &&
       html.includes("data-discovery-reject") &&
@@ -346,9 +354,9 @@ Deno.test("Discovery exposes only source approval and rejection without learning
     "YouTube candidates must state the manual-transcript boundary.",
   );
   assert(
-    html.includes("data-discovery-upload") &&
-      html.includes("I confirm I am permitted to store this transcript"),
-    "YouTube detail must expose an explicit rights-attested transcript workflow.",
+    html.includes("data-discovery-open-upload") &&
+      !html.includes("data-discovery-upload="),
+    "YouTube detail must navigate to the existing rights-attested Upload panel.",
   );
 });
 
@@ -377,7 +385,7 @@ Deno.test("Discover renders the actual feed approval contract with metadata-only
   );
 });
 
-Deno.test("Discover exposes pasted text and document upload for non-YouTube sources", () => {
+Deno.test("Discover navigates non-YouTube material to Upload without an inline form", () => {
   const source = item({
     youtubeWatchUrl: null,
     candidate: Object.freeze({
@@ -390,12 +398,10 @@ Deno.test("Discover exposes pasted text and document upload for non-YouTube sour
     selectedItemId: source.id,
   }));
   assert(
-    html.includes('data-discovery-upload="observed-item-1"') &&
-      html.includes('name="content"') &&
-      html.includes('name="material"') &&
-      html.includes(".pdf") &&
-      html.includes(".pptx"),
-    "Non-YouTube sources must support pasted text, PDF, and PPTX material.",
+    html.includes('data-discovery-open-upload="observed-item-1"') &&
+      !html.includes('name="content"') &&
+      !html.includes('name="material"'),
+    "Material input belongs to the existing Upload panel.",
   );
 });
 
@@ -491,5 +497,36 @@ Deno.test("Discover rejects invalid and unbounded route models", () => {
 Deno.test("Discover describes the supported source search", () => {
   const html = renderDiscoverRoute(model("never-run", []));
   assert(html.includes('>Discover sources</h1>'), "Discover must identify the panel.");
-  assert(html.includes("Search educational websites, podcast feeds, and videos to add sources to your Library."), "Discover must explain available sources.");
+  assert(html.includes("Search websites, podcast feeds, and videos."), "Discover must explain available sources.");
+});
+
+Deno.test("Explore source alone opens the validated source in a secure new tab and retains details", () => {
+  const html = renderDiscoverRoute(model("success", [item({youtubeWatchUrl:null, sourceUrl:"https://publisher.example/actual?x=1&y=2"})]));
+  assert(html.includes('href="#discover/item/observed-item-1"'), "Keep internal details/provenance access.");
+  assert(/<a[^>]*href="https:\/\/publisher.example\/actual\?x=1&amp;y=2"[^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*>Explore source/.test(html), "Explore must be a separate external anchor.");
+  assert(!/<a[^>]*href="#discover\/item[^>]*>(?:(?!<\/a>)[\s\S])*Explore source(?:(?!<\/a>)[\s\S])*<\/a>/.test(html), "Explore must not be inside the internal link.");
+});
+Deno.test("Explore source never links missing or unsafe URLs, including credential-bearing YouTube URLs", () => {
+  for (const sourceUrl of ["", "not a URL", "javascript:alert(1)", "data:text/html,unsafe", "http://publisher.example/", "https://user:pass@publisher.example/", "https://publisher.example/#fragment"]) {
+    const html = renderDiscoverRoute(model("success", [item({youtubeWatchUrl:null, sourceUrl})]));
+    assert(!/<a[^>]*>Explore source/.test(html), "Unsafe or missing source must be unavailable: " + sourceUrl);
+    assert(html.includes("Explore source unavailable"), "Explain unavailable action.");
+  }
+  const html = renderDiscoverRoute(model("success", [item({sourceUrl:"https://user:pass@www.youtube.com/watch?v=1", youtubeWatchUrl:"https://user:pass@www.youtube.com/watch?v=1"})], {page:"detail",selectedItemId:"observed-item-1"}));
+  assert(!html.includes('href="https://user:pass@'), "YouTube must retain the credential guard as well.");
+});
+Deno.test("Explore is unavailable offline while detail and provenance remain accessible", () => {
+  const html = renderDiscoverRoute(model("offline", [item()]));
+  assert(html.includes("Explore source unavailable") && !/<a[^>]*>Explore source/.test(html), "Do not claim an offline network action.");
+  assert(html.includes('href="#discover/item/observed-item-1"'), "Retain cached details.");
+});
+
+Deno.test("raw Discover explains unreviewed results and disables unsupported extraction while retaining Explore", () => {
+  const sample=item();
+  const html=renderDiscoverRoute(model("success",[sample],{page:"detail",selectedItemId:sample.id}));
+  assert(html.includes("Unreviewed provider results"),"Explicit unreviewed notice");
+  assert(html.includes("Extract Knowledge Points"),"Explicit extraction action");
+  assert(/disabled[^>]*>Extract Knowledge Points/.test(html),"Video extraction unavailable");
+  assert(html.includes("Extraction is unavailable for this format"),"Unsupported format explanation");
+  assert(html.includes('target="_blank"'),"Safe Explore retained");
 });

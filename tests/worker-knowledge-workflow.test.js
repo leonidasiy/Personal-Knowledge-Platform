@@ -5,7 +5,7 @@ import { createDiscoveryWorker } from "../worker/handler.js";
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
 
-/** @param {{ readonly sourceFailureKind?: string, readonly sourceState?: string, readonly sourceReused?: boolean, readonly sourceExpired?: boolean, readonly workflowMode?: "throw" | "hang" | "malformed" }} [options] */
+/** @param {{ readonly sourceFailureKind?: string|null, readonly sourceState?: string, readonly sourceReused?: boolean, readonly sourceExpired?: boolean, readonly workflowMode?: "throw" | "hang" | "malformed" }} [options] */
 function makeFixture(options = {}) {
   const source = { id: "source-a", ownerId: "owner-a", origin: "web", submittedUrl: "https://example.test/learn", canonicalUrl: "https://example.test/learn", title: "Learning source", description: "Description", adapter: { id: "adapter", version: "1", granularity: "root", capabilities: ["metadata"] }, interestAreaIds: ["area-a"], identityEvidence: [], state: "active", approvedAt: "2026-08-13T00:00:00.000Z", updatedAt: "2026-08-13T00:00:00.000Z", revision: 1 };
   /** @type {Record<string, unknown>[]} */ const started = [];
@@ -46,7 +46,7 @@ function makeFixture(options = {}) {
         if (options.workflowMode === "malformed") return /** @type {never} */ ({ ok: true });
         return { ok: true, value: { runId: "run-a", state: "extraction-loop", revision: 2, extractionStartedAt: "2026-08-13T00:00:00.000Z", decisionRequired: null, counts: { pages: 1, knowledgePoints: 1, acceptedQuizzes: 0, pendingQuizzes: 0 }, extractionDeadlineAt: "2026-08-13T00:30:00.000Z", failureKind: null } };
       },
-      sourceStatus: async (command) => ({ ok: true, value: { ownerId: /** @type {{ readonly ownerId: string }} */ (command).ownerId, sourceId: /** @type {{ readonly sourceId: string }} */ (command).sourceId, run: { runId: "run-a", state: options.sourceState ?? "awaiting-upload", revision: 3, extractionStartedAt: "2026-08-13T00:00:00.000Z", decisionRequired: options.sourceState === "retryable-failure" ? null : "upload-material", counts: { pages: 1, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0 }, extractionDeadlineAt: options.sourceExpired ? "2026-08-13T00:04:00.000Z" : "2026-08-13T00:30:00.000Z", failureKind: options.sourceFailureKind ?? "KnowledgePagePaywallDetected" } } }),
+      sourceStatus: async (command) => ({ ok: true, value: { ownerId: /** @type {{ readonly ownerId: string }} */ (command).ownerId, sourceId: /** @type {{ readonly sourceId: string }} */ (command).sourceId, run: { runId: "run-a", state: options.sourceState ?? "awaiting-upload", revision: 3, extractionStartedAt: "2026-08-13T00:00:00.000Z", decisionRequired: options.sourceState === "retryable-failure" ? null : "upload-material", counts: { pages: 1, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0 }, extractionDeadlineAt: options.sourceExpired ? "2026-08-13T00:04:00.000Z" : "2026-08-13T00:30:00.000Z", failureKind: options.sourceFailureKind === undefined ? "KnowledgePagePaywallDetected" : options.sourceFailureKind } } }),
       control: async (command) => { const value = /** @type {{ readonly action: string, readonly expectedRevision: number }} */ (command); return { ok: true, value: { state: value.action === "stop" ? "paused" : "per-point-quiz-loop", revision: value.expectedRevision + 1 } }; },
       rightsApproved: async (command) => { rightsApproved.push(/** @type {Record<string, unknown>} */ (command)); return { ok: true, value: { state: "robots-check", revision: 3 } }; },
       material: async (command) => { materials.push(/** @type {Record<string, unknown>} */ (command)); return { ok: true, value: { status: "attached", materialId: "material-a", runId: "run-a", reused: false } }; },
@@ -66,6 +66,7 @@ Deno.test("source approval starts one owner-scoped knowledge workflow after pers
   assertEquals(fixture.started.length, 1);
   assertEquals(fixture.started[0].ownerId, "owner-a");
   assertEquals(fixture.started[0].sourceId, "source-a");
+  assertEquals(/** @type {{ownerId:string}} */(fixture.started[0].userAuthorization).ownerId,"owner-a");
 });
 
 Deno.test("idempotent source approval rechecks the durable workflow launch", async () => {
@@ -236,4 +237,37 @@ Deno.test("rights approval advances the workflow and does not launch the legacy 
   assertEquals(fixture.rightsApproved.length, 1);
   assertEquals(fixture.rightsApproved[0].ownerId, "owner-a");
   assertEquals(fixture.legacyIngestion.length, 0);
+});
+
+Deno.test("Failure-free awaiting-upload reports missing attachment, preserving real access failures", async () => {
+ const fixture=makeFixture({sourceFailureKind:null});
+ const response=await fixture.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a"));
+ const body=await response.json(); assertEquals(response.status,200); assertEquals(body.result.reasonCode,"upload-content");
+ assertEquals(body.result.message.includes("re-upload"),true); assertEquals(body.result.message.includes("scraping"),false);
+});
+
+Deno.test("multipart owner forgery is rejected and obsolete attestation cannot gate owner upload", async () => {
+  const fixture = makeFixture();
+  const form = new FormData();
+  for (const [key,value] of Object.entries({runId:"run-a",sourceId:"source-a",sourceRevision:"1",sourceUrl:"https://example.test/learn",idempotencyKey:"upload-a",content:"Synthetic notes",rightsAttestation:"not JSON"})) form.set(key,value);
+  const send = () => fixture.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/material",{method:"POST",headers:{origin:"https://app.example"},body:form}));
+  const uploaded = await send();
+  assertEquals(uploaded.status,200);
+  assertEquals(fixture.materials[0].ownerId,"owner-a");
+  form.set("ownerId","owner-b");
+  assertEquals((await send()).status,400);
+  assertEquals(fixture.materials.length,1);
+});
+
+Deno.test("explicit Link extraction validates URL and starts the shared owner-bound workflow", async()=>{
+  const fixture=makeFixture();
+  const request=(/** @type {unknown} */ body)=>new Request("https://worker.example/api/source-library/extract",{method:"POST",body:JSON.stringify(body)});
+  const command={title:"Link title",url:"https://example.test/learn",interestAreaId:"area-a",idempotencyKey:"link-1"};
+  for(const url of ["https://127.0.0.1/","https://localhost/","http://example.test/","https://example.test/#unsafe"]){
+    const response=await fixture.worker.fetch(request({...command,url}));assertEquals(response.status,400);
+  }
+  assertEquals(fixture.started.length,0);
+  const response=await fixture.worker.fetch(request(command));assertEquals(response.status,200);assertEquals(fixture.started.length,1);
+  const authorization=/** @type {Record<string,unknown>} */(fixture.started[0].userAuthorization);
+  assertEquals(authorization.kind,"user-authorized-link");assertEquals(authorization.ownerId,"owner-a");assertEquals(fixture.legacyIngestion.length,0);
 });

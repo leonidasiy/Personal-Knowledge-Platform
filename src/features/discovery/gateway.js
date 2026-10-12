@@ -66,7 +66,10 @@ export class DiscoverySearchGatewayClient {
   /** @param {"GET"|"POST"} method @param {string} path @param {unknown|null} body @returns {Promise<Result<unknown,DiscoveryGatewayFailure>>} */
   async request(method, path, body) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.#timeout);
+    /** @type {ReturnType<typeof setTimeout>|undefined} */ let timeout;
+    const deadline=new Promise((resolve)=>{timeout=setTimeout(()=>{controller.abort();resolve(/** @type {Result<never,DiscoveryGatewayFailure>} */({ok:false,error:{kind:"DiscoveryGatewayTimedOut"}}));},this.#timeout);});
+    /** @returns {Promise<Result<unknown,DiscoveryGatewayFailure>>} */
+    const work=async()=>{
     /** @type {Response} */ let response;
     try {
       response = await (0, this.#fetch)(new URL(path, this.#base), {
@@ -80,6 +83,7 @@ export class DiscoverySearchGatewayClient {
         signal: controller.signal,
       });
     } catch (error) {
+      if(timeout!==undefined)clearTimeout(timeout);
       if (controller.signal.aborted) {
         return { ok: false, error: { kind: "DiscoveryGatewayTimedOut" } };
       }
@@ -87,23 +91,25 @@ export class DiscoverySearchGatewayClient {
         return { ok: false, error: { kind: "DiscoveryGatewayUnavailable" } };
       }
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
+    if (controller.signal.aborted) {if(timeout!==undefined)clearTimeout(timeout); return {ok:false,error:{kind:"DiscoveryGatewayTimedOut"}};}
     const statusFailure = /** @type {const} */ ({
       401: "DiscoveryGatewayUnauthenticated",
       403: "DiscoveryGatewayUnauthorized",
     })[response.status];
     if (statusFailure !== undefined) {
+      if(timeout!==undefined)clearTimeout(timeout);
       return { ok: false, error: { kind: statusFailure } };
     }
     /** @type {unknown} */ let document;
     try {
       document = await response.json();
     } catch (error) {
+      if (controller.signal.aborted) return {ok:false,error:{kind:"DiscoveryGatewayTimedOut"}};
       if (error instanceof SyntaxError) return bad();
       throw error;
     }
+    if (controller.signal.aborted) return {ok:false,error:{kind:"DiscoveryGatewayTimedOut"}};
     if (!response.ok) {
       const failureKind = record(document) ? text(document.error) : null;
       return failureKind === null
@@ -116,6 +122,9 @@ export class DiscoverySearchGatewayClient {
         };
     }
     return { ok: true, value: document };
+    };
+    try {return /** @type {Result<unknown,DiscoveryGatewayFailure>} */(await Promise.race([work(),deadline]));}
+    finally {if(timeout!==undefined)clearTimeout(timeout);}
   }
 }
 
@@ -214,34 +223,18 @@ function centralCommand(value) {
 function centralResult(value) {
   if (!record(value) || Object.keys(value).length !== 5 || !Array.isArray(value.items) || value.items.length > 20 ||
     !Array.isArray(value.providerFailures) || value.providerFailures.length > 20 ||
-    text(value.submittedQuery) === null || text(value.providerQuery) === null || text(value.policyVersion) === null) return bad();
-  /** @type {GatewayCentralCandidate[]} */ const items = [];
-  for (const item of value.items) {
-    if (!centralCandidate(item)) return bad();
-    const validated = /** @type {GatewayCentralCandidate} */ (item);
-    items.push(freeze({ ...validated, identityEvidence: freeze(validated.identityEvidence.map((entry) => freeze({ ...entry }))) }));
-  }
-  /** @type {{readonly providerId:string,readonly failure:{readonly kind:string}}[]} */ const providerFailures = [];
-  for (const failure of value.providerFailures) {
-    if (!record(failure) || Object.keys(failure).length !== 2 || text(failure.providerId) === null || !record(failure.failure) || text(failure.failure.kind) === null) return bad();
-    providerFailures.push(freeze({
-      providerId: /** @type {string} */ (failure.providerId),
-      failure: freeze({ kind: /** @type {string} */ (failure.failure.kind) }),
-    }));
-  }
-  return { ok: true, value: freeze({
-    items: freeze(items),
-    providerFailures: freeze(providerFailures),
-    submittedQuery: /** @type {string} */ (value.submittedQuery),
-    providerQuery: /** @type {string} */ (value.providerQuery),
-    policyVersion: /** @type {string} */ (value.policyVersion),
-  }) };
+    text(value.submittedQuery) === null || text(value.providerQuery) === null || text(value.policyVersion) === null ||
+    !value.items.every(centralCandidate) || !value.providerFailures.every(failure => record(failure) && Object.keys(failure).length === 2 && text(failure.providerId) !== null && record(failure.failure) && text(failure.failure.kind) !== null)) return bad();
+  return {ok:true,value:freeze(/** @type {GatewayCentralSearchResult} */(value))};
 }
 
-/** @param {unknown} value */
+/** @param {unknown} value @param {readonly string[]} choices @returns {value is string} */
+function choice(value,choices) { return typeof value === "string" && choices.includes(value); }
+
+/** @param {unknown} value @returns {value is GatewayCentralCandidate} */
 function centralCandidate(value) {
   return record(value) && Object.keys(value).length === 9 && text(value.providerId) !== null && text(value.resultKind) !== null &&
-    ["site", "document", "feed", "episode", "video", "unknown"].includes(String(value.sourceLevel)) && text(value.title) !== null &&
+    choice(value.sourceLevel, ["site", "document", "feed", "episode", "video", "unknown"]) && text(value.title) !== null &&
     (value.description === null || typeof value.description === "string") && secureUrl(value.canonicalUrl) !== null &&
     (value.publisherLabel === null || text(value.publisherLabel) !== null) &&
     (value.publishedAt === null || instant(value.publishedAt) !== null) && Array.isArray(value.identityEvidence) && value.identityEvidence.length > 0 &&
@@ -267,7 +260,7 @@ function instant(value) {
 /** @param {unknown} value */
 function secureUrl(value) {
   return typeof value === "string" && URL.canParse(value) &&
-      new URL(value).protocol === "https:"
+      new URL(value).protocol === "https:" && new URL(value).username === "" && new URL(value).password === "" && new URL(value).hash === ""
     ? value
     : null;
 }

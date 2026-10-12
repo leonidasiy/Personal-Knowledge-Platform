@@ -1,6 +1,7 @@
 // @ts-check
 
 import { createKnowledgeWorkflowMaterialService } from "../src/features/knowledge-workflows/material-service.js";
+import { D1KnowledgeWorkflowMaterialRepository } from "../worker/knowledge-workflow-material-d1.js";
 
 /** @import { StoredMaterial } from "../src/features/knowledge-workflows/material-service.js" */
 
@@ -15,7 +16,7 @@ function input(overrides = {}) {
 }
 
 /** @param {Uint8Array} bytes */
-async function digest(bytes) { return `sha256:${bytes.byteLength}`; }
+async function digest(bytes) { return `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map(byte => byte.toString(16).padStart(2, "0")).join("")}`; }
 
 /** @param {Record<string, unknown>} [run] @param {{ readonly kind: string } | Error | null} [statusFailure] */
 function fixture(run = {}, statusFailure = null) {
@@ -44,6 +45,57 @@ function fixture(run = {}, statusFailure = null) {
   });
   return { service, records, staged, removed, attached };
 }
+
+/** @param {import("../src/features/knowledge-workflows/material.js").AuthorizedMaterial} material */
+function fingerprint(material) {
+ return JSON.stringify([material.ownerId, material.runId, material.sourceId, material.sourceRevision, material.mode, material.mediaType, material.fileName, material.contentDigest, material.provenance]);
+}
+
+Deno.test("legacy material replay preserves persisted authorization without a checkbox", async () => {
+ const f = fixture(); const created = await f.service.upload(input()); if (!created.ok) throw new Error(created.error.kind);
+ const stored = f.records.get("owner-a:material-a"); if (!stored) throw new Error("Missing fixture record.");
+ const material = { ...stored.material, provenance: { kind: /** @type {const} */("authorized-user-material"), attestationReference: "legacy-grant", basis: "text:learner-provided copy", processingAllowed: /** @type {const} */(true) } };
+ const legacy = { ...stored, material, fingerprint: fingerprint(material) }; f.records.set("owner-a:material-a", legacy);
+ for (const rightsAttestation of [undefined, input().rightsAttestation]) {
+  const replay = await f.service.upload(input({ rightsAttestation }));
+  if (!replay.ok || !replay.value.reused) throw new Error(replay.ok ? "Replay was not reused." : replay.error.kind);
+ }
+ if (f.records.get("owner-a:material-a") !== legacy || f.staged.length !== 1) throw new Error("Replay rewrote history or bytes.");
+ for (const change of [{ bytes: new TextEncoder().encode("B specific concept.") }, { fileName: "other.txt" }, { mode: "image" }, { runId: "run-b" }, { ownerId: "owner-b" }, { sourceId: "source-b" }, { sourceRevision: 2 }, { sourceUrl: "https://example.test/other" }]) {
+  const result = await f.service.upload(input(change));
+  if (result.ok) throw new Error("Different material replay accepted.");
+ }
+});
+
+Deno.test("legacy material replay verifies D1 provenance projection and terminal reuse", async () => {
+ const run = { state: "awaiting-upload" }; const f = fixture(run);
+ const result = await f.service.upload(input()); if (!result.ok) throw new Error(result.error.kind);
+ const stored = f.records.get("owner-a:material-a"); if (!stored) throw new Error("Missing record.");
+ const material = { ...stored.material, provenance: { ...stored.material.provenance, basis: "text:legacy grant", attestationReference: "legacy-reference" } };
+ const row = { material_id: stored.materialId, command_fingerprint: fingerprint(material), object_key: stored.objectKey, material_json: JSON.stringify(material), created_at: stored.createdAt };
+ const repository = new D1KnowledgeWorkflowMaterialRepository({ database: { prepare() { return { bind() { return this; }, async first() { return row; }, async run() { return { success: true, meta: { changes: 1 } }; } }; } }, logger: () => {} });
+ const projected = await repository.replay("owner-a", "material-a"); if (!projected.ok || !projected.value) throw new Error("D1 projection unavailable.");
+ if (projected.value.material.provenance.processingAllowed !== undefined) throw new Error("Fixture must exercise the historical D1 projection.");
+ const legacy = { ...stored, ...projected.value }; f.records.set("owner-a:material-a", legacy); run.state = "completed";
+ const replay = await f.service.upload(input({ rightsAttestation: undefined }));
+ if (!replay.ok || !replay.value.reused || f.staged.length !== 1 || f.attached.length !== 1 || f.records.get("owner-a:material-a") !== legacy) throw new Error("Terminal D1 replay changed history or storage.");
+ for (const fingerprint of ["{malformed", "[]", JSON.stringify([material.ownerId, material.runId])]) {
+  f.records.set("owner-a:material-a", { ...legacy, fingerprint });
+  const corrupt = await f.service.upload(input({ rightsAttestation: undefined }));
+  if (corrupt.ok || corrupt.error.kind !== "WorkflowMaterialIdempotencyConflict") throw new Error("Malformed fingerprint accepted.");
+ }
+});
+
+Deno.test("legacy material replay rejects corrupt provenance and fingerprints", async () => {
+ for (const provenance of [{ kind: "authorized-user-material", attestationReference: "", basis: "text:legacy", processingAllowed: true }, { kind: "authorized-user-material", attestationReference: "legacy", basis: "text:legacy", processingAllowed: false }]) {
+  const f = fixture(); await f.service.upload(input()); const stored = f.records.get("owner-a:material-a"); if (!stored) throw new Error("Missing record.");
+  // Persisted rows are an external boundary; deliberately inject malformed data.
+  const material = { ...stored.material, provenance }; const corrupt = JSON.parse(JSON.stringify({ ...stored, material, fingerprint: fingerprint(stored.material) }));
+  f.records.set("owner-a:material-a", corrupt);
+  const result = await f.service.upload(input({ rightsAttestation: undefined }));
+  if (result.ok || result.error.kind !== "WorkflowMaterialIdempotencyConflict") throw new Error("Corrupt legacy replay accepted.");
+ }
+});
 
 Deno.test("material service stages, records, and attaches authorized text without logging content", async () => {
   const fixtureValue = fixture();

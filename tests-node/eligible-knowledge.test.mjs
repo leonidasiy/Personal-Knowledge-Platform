@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { D1SourceLibraryRepository } from '../worker/source-library-d1.js';
 import { createLearningBatchService } from '../worker/learning-batches-d1.js';
+import { createHash } from 'node:crypto';
 
 function fixture() {
   const db = new DatabaseSync(':memory:');
@@ -17,7 +18,7 @@ function fixture() {
     CREATE TABLE knowledge_classifications (owner_id TEXT, knowledge_id TEXT, classification_json TEXT, revision INTEGER);
     CREATE TABLE source_classifications (owner_id TEXT, source_id TEXT, topic TEXT, main_subject TEXT, classification_revision INTEGER);
     CREATE TABLE learner_preference_feedback (owner_id TEXT, knowledge_id TEXT, preference REAL);
-    CREATE TABLE knowledge_workflow_media_assets (owner_id TEXT, knowledge_id TEXT, revoked_at TEXT, asset_id TEXT, kind TEXT, attribution TEXT);
+    CREATE TABLE knowledge_workflow_media_assets (owner_id TEXT, knowledge_id TEXT, revoked_at TEXT, asset_id TEXT, kind TEXT, attribution TEXT, run_id TEXT, source_revision INTEGER, binding_json TEXT, digest TEXT);
     CREATE VIRTUAL TABLE knowledge_points_search_fts USING fts5(owner_id UNINDEXED, knowledge_id UNINDEXED, source_id UNINDEXED, summary, source_title, source_topic);
   `);
   function seed(id, options = {}) {
@@ -94,5 +95,29 @@ test('all knowledge read paths exclude Unicode whitespace summaries', async () =
     const collection = await learning.listKnowledge('owner');
     assert.equal(collection.ok, true);
     assert.deepEqual(collection.value.items.map(item => item.knowledgeId), ['99-eligible']);
+  } finally { db.close(); }
+});
+
+test('knowledge cards retain frozen text and publish only exact owner/run/fact-bound supporting media', async () => {
+  const { db, seed, learning } = fixture();
+  try {
+    seed('supported');
+    seed('no-image');
+    const point = JSON.parse(db.prepare('SELECT point_json FROM extraction_knowledge_points WHERE knowledge_id=?').get('supported').point_json);
+    const hash = 'sha256:' + createHash('sha256').update(JSON.stringify({ summary: point.summary, normalizedHash: point.normalizedHash, evidenceAnchors: point.evidenceAnchors })).digest('hex');
+    const binding = { kind: 'webpage-support', ownerId: 'owner', runId: 'supported', sourceRevision: 1, factHash: hash, originalDigest: 'sha256:original', imageId: 'fixture-image', evidence: 'Visible quantities support the comparison.' };
+    db.prepare('INSERT INTO knowledge_workflow_media_assets VALUES(?,?,?,?,?,?,?,?,?,?)').run('owner', 'supported', null, 'supporting-asset', 'image', 'Fixture attribution', 'supported', 1, JSON.stringify(binding), binding.originalDigest);
+    for (const defect of ['none', 'owner', 'run', 'revision', 'fact', 'original', 'unverified']) {
+      const current = { ...binding, ...(defect === 'owner' ? { ownerId: 'foreign' } : defect === 'run' ? { runId: 'foreign' } : defect === 'revision' ? { sourceRevision: 2 } : defect === 'fact' ? { factHash: 'sha256:changed' } : defect === 'original' ? { originalDigest: 'sha256:changed' } : {}) };
+      db.prepare('UPDATE knowledge_workflow_media_assets SET binding_json=?').run(defect === 'unverified' ? null : JSON.stringify(current));
+      const result = await learning.listKnowledge('owner');
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.value.items.length, 2);
+      const supported = result.value.items.find(item => item.knowledgeId === 'supported');
+      assert.equal(supported.summary, point.summary);
+      assert.equal(supported.media?.assetId ?? null, defect === 'none' ? 'supporting-asset' : null, defect);
+      assert.equal(result.value.items.find(item => item.knowledgeId === 'no-image').media, null);
+    }
+    assert.equal(db.prepare('SELECT point_json FROM extraction_knowledge_points WHERE knowledge_id=?').get('supported').point_json, JSON.stringify(point));
   } finally { db.close(); }
 });

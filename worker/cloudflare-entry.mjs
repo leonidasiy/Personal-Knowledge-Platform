@@ -1,4 +1,3 @@
-import puppeteer from "@cloudflare/puppeteer";
 import { createCloudflareDiscoveryWorker } from "./main.js";
 import { D1QuizRepository } from "./knowledge-workflow-content-d1.js";
 import { createKnowledgeWorkflowRestrictionReaper } from "./knowledge-workflow-reaper.js";
@@ -25,10 +24,6 @@ export default {
           waitUntil: (promise) => context.waitUntil(promise),
           randomBytes: (length) =>
             globalThis.crypto.getRandomValues(new Uint8Array(length)),
-          browserLauncher: {
-            limits: (binding) => puppeteer.limits(binding),
-            launch: (binding) => puppeteer.launch(binding),
-          },
         }),
     });
     return routeWithWorkerVersion(

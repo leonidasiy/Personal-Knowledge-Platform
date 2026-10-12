@@ -1,3 +1,6 @@
+import { prepareSubmittedLink } from "../src/features/source-library/submitted-link.js";
+import { validateApprovalCommand } from "../src/features/source-library/service.js";
+import { validatePublisherDestination } from "./destination-policy.js";
 // @ts-check
 
 import { isRecord, validateRssAcquisitionCommand } from "./contracts.js";
@@ -152,7 +155,8 @@ export function createDiscoveryWorker(configuration, dependencies) {
         url.pathname === "/api/discovery/search/capabilities";
       const sourceUploadContext = url.pathname === "/api/source-library/upload-context";
       const sourceRename = url.pathname === "/api/source-library/rename";
-      const sourceAction = sourceLibraryAction(url.pathname);
+      const sourceExtraction = url.pathname === "/api/source-library/extract";
+      const sourceAction = sourceExtraction ? "approve" : sourceLibraryAction(url.pathname);
       const privateDocumentCreate = url.pathname === "/api/source-library/private-documents";
       const privateDocumentId = url.pathname.match(/^\/api\/private-documents\/([^/]+)$/)?.[1] ?? null;
       const sourceRightsApproval = url.pathname === "/api/source-library/rights/approve";
@@ -214,7 +218,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         const { source, runId, failureKind } = result.value;
         const resolved = workflowStatusReason(failureKind, "awaiting-upload", null);
         const audioVideo = [source.adapter.granularity, ...source.adapter.capabilities].some(value => /audio|video|podcast|episode/u.test(value.toLowerCase()));
-        const reason = resolved?.reasonCode === "rights-not-verified" && audioVideo
+        const reason = audioVideo && (resolved?.reasonCode === "rights-not-verified" || resolved?.reasonCode === "upload-content")
           ? "This source contains audio or video, but native audio/video transcription is not available yet. Upload an authorized transcript or text/document instead."
           : resolved?.message;
         if (reason === undefined) return sourceRenameFailureResponse({ kind: "SourceUploadContextReadFailed" });
@@ -571,10 +575,20 @@ export function createDiscoveryWorker(configuration, dependencies) {
               : "body",
           });
         }
-        const ownedCommand = Object.freeze({
-          ...document,
-          ownerId: authenticated.value.ownerId,
-        });
+        let approvalInput = document;
+        if (sourceExtraction) {
+          if (dependencies.knowledgeWorkflow == null) return knowledgeWorkflowFailureResponse({kind:"KnowledgeWorkflowUnavailable"});
+          if (Object.hasOwn(document,"url")) {
+            const prepared = prepareSubmittedLink(document, dependencies.now?.() ?? new Date().toISOString());
+            if (!prepared.ok) return json({error:prepared.error.kind,field:prepared.error.field},400);
+            approvalInput = prepared.value;
+          }
+          const checked = validateApprovalCommand({...approvalInput,ownerId:authenticated.value.ownerId});
+          if (!checked.ok) return sourceFailureResponse(checked.error);
+          if (!validatePublisherDestination(checked.value.canonicalUrl).ok) return json({error:"SourceExtractionUrlInvalid"},400);
+          if (!checked.value.adapter.capabilities.includes("bounded-ingestion")) return json({error:"SourceExtractionFormatUnsupported"},422);
+        }
+        const ownedCommand = Object.freeze({...approvalInput,ownerId:authenticated.value.ownerId});
       const result = sourceAction === "approve"
           ? await dependencies.sourceLibrary.approve(ownedCommand)
           : sourceAction === "revise"
@@ -600,7 +614,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         let workflowStart = null;
         if (result.ok && sourceAction === "approve" && dependencies.knowledgeWorkflow !== null && dependencies.knowledgeWorkflow !== undefined) {
           const rightsProfile = dependencies.sourceRightsProfileFor?.(result.value.source.canonicalUrl) ?? null;
-          workflowStart = await dependencies.knowledgeWorkflow.start({ ownerId: authenticated.value.ownerId, sourceId: result.value.source.id, sourceRevision: result.value.source.revision, canonicalSourceIdentity: result.value.source.canonicalUrl, contentSignature: `source-revision:${result.value.source.canonicalUrl}:${result.value.source.revision}`, configDigests: {}, idempotencyKey: `knowledge-workflow:${result.value.source.id}:${result.value.source.revision}`, rightsProfile });
+          workflowStart = await dependencies.knowledgeWorkflow.start({ ownerId: authenticated.value.ownerId, sourceId: result.value.source.id, sourceRevision: result.value.source.revision, canonicalSourceIdentity: result.value.source.canonicalUrl, contentSignature: `source-revision:${result.value.source.canonicalUrl}:${result.value.source.revision}`, configDigests: {}, idempotencyKey: `knowledge-workflow:${result.value.source.id}:${result.value.source.revision}`, userAuthorization: {kind:"user-authorized-link",ownerId:authenticated.value.ownerId,sourceId:result.value.source.id,sourceRevision:result.value.source.revision,url:result.value.source.canonicalUrl,recordedAt:result.value.source.approvedAt}, rightsProfile });
           if (!workflowStart.ok) return knowledgeWorkflowFailureResponse(workflowStart.error);
         }
         if (result.ok && sourceAction === "approve" && workflowStart === null && !result.value.reused && result.value.job !== null && dependencies.sourceIngestion !== null && dependencies.sourceIngestion !== undefined && result.value.source.adapter.capabilities.includes("bounded-ingestion")) {
@@ -847,7 +861,7 @@ function isKnowledgeSearchResults(value) {
 
 /** @param {unknown} value @returns {value is LibrarySource} */
 function isLibrarySourceRecord(value) {
-  return isRecord(value) && isNonEmptyText(value.id) && isNonEmptyText(value.ownerId) && isPublicHttpsUrl(value.submittedUrl) && isPublicHttpsUrl(value.canonicalUrl) && isNonEmptyText(value.title) && isNonEmptyText(value.description) && isRecord(value.adapter) && isNonEmptyText(value.adapter.id) && isNonEmptyText(value.adapter.version) && isNonEmptyText(value.adapter.granularity) && Array.isArray(value.adapter.capabilities) && value.adapter.capabilities.every(isNonEmptyText) && Array.isArray(value.interestAreaIds) && value.interestAreaIds.every(isNonEmptyText) && Array.isArray(value.identityEvidence) && value.state === "active" && isIsoDateTime(value.approvedAt) && isIsoDateTime(value.updatedAt) && isPositiveInteger(value.revision);
+  return isRecord(value) && isNonEmptyText(value.id) && isNonEmptyText(value.ownerId) && isPublicHttpsUrl(value.submittedUrl) && isPublicHttpsUrl(value.canonicalUrl) && isNonEmptyText(value.title) && typeof value.description === "string" && isRecord(value.adapter) && isNonEmptyText(value.adapter.id) && isNonEmptyText(value.adapter.version) && isNonEmptyText(value.adapter.granularity) && Array.isArray(value.adapter.capabilities) && value.adapter.capabilities.every(isNonEmptyText) && Array.isArray(value.interestAreaIds) && value.interestAreaIds.every(isNonEmptyText) && Array.isArray(value.identityEvidence) && value.state === "active" && isIsoDateTime(value.approvedAt) && isIsoDateTime(value.updatedAt) && isPositiveInteger(value.revision);
 }
 
 /** @param {unknown} value @returns {value is { readonly id: string, readonly ownerId: string, readonly title: string, readonly provenance: string }} */
@@ -949,7 +963,9 @@ function centralSearchFailureResponse(failure) {
       isRecord(entry) && isRecord(entry.failure) &&
       entry.failure.kind === "SearchProviderQuotaExceeded"
     );
-  const status = failure.kind === "CentralSearchAllProvidersFailed"
+  const status = failure.kind === "CentralSearchTimedOut"
+    ? 503
+    : failure.kind === "CentralSearchAllProvidersFailed"
     ? quotaOnly ? 429 : 503
     : failure.kind === "CentralSearchProviderDisabled"
     ? 409
@@ -1155,7 +1171,7 @@ function knowledgeWorkflowFailureResponse(failure) {
     ? 404
     : failure.kind === "WorkflowControlStale" || failure.kind === "WorkflowIdempotencyConflict" || failure.kind === "WorkflowControlInvalid" || failure.kind === "WorkflowMaterialIdempotencyConflict" || failure.kind === "WorkflowMaterialConflict"
     ? 409
-    : failure.kind === "KnowledgeWorkflowUnavailable" || failure.kind === "KnowledgeWorkflowDependencyFailed" || failure.kind === "KnowledgeWorkflowResultInvalid" || failure.kind === "WorkflowPersistenceFailed" || failure.kind === "WorkflowStatusProjectionInvalid" || failure.kind === "WorkflowSourceStatusProjectionInvalid" || failure.kind === "WorkflowCleanupFailed" || failure.kind === "WorkflowInstanceControlFailed" || failure.kind === "WorkflowInstanceEventFailed" || failure.kind === "WorkflowMaterialPersistenceFailed" || failure.kind === "WorkflowMaterialStorageFailed" || failure.kind === "WorkflowMaterialCleanupFailed" || failure.kind === "WorkflowMaterialAttachFailed" || failure.kind === "BackfillResponseInvalid" || failure.kind === "BackfillSourceListFailed" || failure.kind === "BackfillSourceInvalid" || failure.kind === "BackfillStartFailed" || failure.kind === "BackfillReuseInvalidationFailed" || failure.kind === "BackfillMarkerReadFailed" || failure.kind === "BackfillMarkerWriteFailed" || failure.kind === "BackfillContentResetFailed" || failure.kind === "ReplayResponseInvalid" || failure.kind === "ReplaySourceListFailed" || failure.kind === "ReplaySourceInvalid" || failure.kind === "ReplayStartFailed" || failure.kind === "ReplayReuseInvalidationFailed" || failure.kind === "ReplayMarkerReadFailed" || failure.kind === "ReplayMarkerWriteFailed" || failure.kind === "ReplayContentResetFailed"
+    : failure.kind === "KnowledgeWorkflowUnavailable" || failure.kind === "KnowledgeWorkflowDependencyFailed" || failure.kind === "KnowledgeWorkflowResultInvalid" || failure.kind === "WorkflowPersistenceFailed" || failure.kind === "WorkflowStatusProjectionInvalid" || failure.kind === "WorkflowSourceStatusProjectionInvalid" || failure.kind === "WorkflowCleanupFailed" || failure.kind === "ImageWarningReadFailed" || failure.kind === "WorkflowInstanceControlFailed" || failure.kind === "WorkflowInstanceEventFailed" || failure.kind === "WorkflowMaterialPersistenceFailed" || failure.kind === "WorkflowMaterialStorageFailed" || failure.kind === "WorkflowMaterialCleanupFailed" || failure.kind === "WorkflowMaterialAttachFailed" || failure.kind === "BackfillResponseInvalid" || failure.kind === "BackfillSourceListFailed" || failure.kind === "BackfillSourceInvalid" || failure.kind === "BackfillStartFailed" || failure.kind === "BackfillReuseInvalidationFailed" || failure.kind === "BackfillMarkerReadFailed" || failure.kind === "BackfillMarkerWriteFailed" || failure.kind === "BackfillContentResetFailed" || failure.kind === "ReplayResponseInvalid" || failure.kind === "ReplaySourceListFailed" || failure.kind === "ReplaySourceInvalid" || failure.kind === "ReplayStartFailed" || failure.kind === "ReplayReuseInvalidationFailed" || failure.kind === "ReplayMarkerReadFailed" || failure.kind === "ReplayMarkerWriteFailed" || failure.kind === "ReplayContentResetFailed"
     ? 503
     : failure.kind === "KnowledgeWorkflowDependencyTimedOut"
     ? 504
@@ -1184,6 +1200,7 @@ function publicReplayResult(value, ownerId) {
 
 /** @param {string | null} failureKind @param {string} state @param {number | null} remainingMs @returns {{ readonly reasonCode: "paywall-or-login" | "robots-blocked" | "robots-check-unavailable" | "audio-video-transcription-unavailable" | "rights-not-verified" | "upload-content" | "retryable-failure", readonly message: string } | null} */
 function workflowStatusReason(failureKind, state, remainingMs) {
+  if (state === "awaiting-upload" && failureKind === null) return Object.freeze({reasonCode:"upload-content",message:"This source is awaiting material attachment. If the previous upload is missing, re-upload the material to start processing."});
   const normalized = (failureKind ?? "").toLowerCase();
   if (state === "extraction-loop" && remainingMs === 0) return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped after its processing deadline elapsed. Retry processing to try again." });
   if (/extractionplaninvalid/u.test(normalized)) return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped because the planner returned an invalid ExtractionPlan after one correction attempt (ExtractionPlanInvalid). Retry processing to try again." });
@@ -1203,7 +1220,9 @@ function publicSourceWorkflowStatus(value, ownerId, nowValue) {
   const run = value.run === null ? null : publicWorkflowStatus(value.run, nowValue);
   if (value.run !== null && run === null) return null;
   const reason = run === null ? null : workflowStatusReason(run.failureKind, run.state, run.remainingMs);
-  return Object.freeze({ sourceId: value.sourceId, run, reasonCode: reason?.reasonCode ?? null, message: reason?.message ?? null });
+  const warnings=value.imageWarnings ?? [];
+  if(!Array.isArray(warnings)||!warnings.every(isNonEmptyText))return null;
+  return Object.freeze({ sourceId: value.sourceId, run, reasonCode: reason?.reasonCode ?? null, message: [reason?.message,...warnings].filter(Boolean).join(" ") || null });
 }
 
 /** @param {unknown} value @returns {{ readonly robotsUrl: string, readonly targetUrl: string, readonly httpStatus: number, readonly availability: "present" | "absent" | "unavailable", readonly content: string, readonly checkedAt: string, readonly matchedRule: string | null } | null} */
@@ -1245,6 +1264,7 @@ async function readWorkflowMaterialRequest(request, maximumRequestBytes, maximum
   if (contentType.startsWith("multipart/form-data")) {
     let form;
     try { form = await request.formData(); } catch (error) { return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } }; }
+    if (form.has("ownerId")) return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
     const file = form.get("file") ?? form.get("material");
     const textContent = form.get("content");
     let bytes;
@@ -1259,11 +1279,9 @@ async function readWorkflowMaterialRequest(request, maximumRequestBytes, maximum
       bytes = new TextEncoder().encode(textContent);
       if (bytes.byteLength > maximumMaterialBytes) return { ok: false, error: { kind: "MaterialByteLimitExceeded" } };
     } else return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
-    const parsed = formRightsAttestation(form);
-    if (!parsed.ok) return parsed;
     const mode = stringFormValue(form, "mode") ?? "text";
     if (mode !== "text" && mode !== "image") return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } };
-    const command = Object.freeze({ runId: stringFormValue(form, "runId"), sourceId: stringFormValue(form, "sourceId"), sourceRevision: Number(stringFormValue(form, "sourceRevision")), sourceUrl: stringFormValue(form, "sourceUrl"), mediaType, fileName, mode, idempotencyKey: stringFormValue(form, "idempotencyKey"), rightsAttestation: parsed.value, bytes });
+    const command = Object.freeze({ runId: stringFormValue(form, "runId"), sourceId: stringFormValue(form, "sourceId"), sourceRevision: Number(stringFormValue(form, "sourceRevision")), sourceUrl: stringFormValue(form, "sourceUrl"), mediaType, fileName, mode, idempotencyKey: stringFormValue(form, "idempotencyKey"), bytes });
     return { ok: true, value: /** @type {Record<string, unknown> & { readonly bytes: Uint8Array }} */ (command) };
   }
   const declaredLength = Number(request.headers.get("content-length"));
@@ -1293,14 +1311,6 @@ async function readWorkflowMaterialRequest(request, maximumRequestBytes, maximum
 
 /** @param {FormData} form @param {string} name @returns {string | null} */
 function stringFormValue(form, name) { const value = form.get(name); return typeof value === "string" && value.trim() !== "" ? value.trim() : null; }
-/** @param {FormData} form @returns {Result<Record<string, unknown>, { readonly kind: string }>} */
-function formRightsAttestation(form) {
-  const encoded = stringFormValue(form, "rightsAttestation");
-  if (encoded !== null) {
-    try { const value = JSON.parse(encoded); return isRecord(value) ? { ok: true, value } : { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } }; } catch (error) { return { ok: false, error: { kind: "WorkflowMaterialCommandInvalid" } }; }
-  }
-  return { ok: true, value: { ownsOrPermitted: form.get("ownsOrPermitted") === "true" || form.get("ownsOrPermitted") === "on", storageAllowed: form.get("storageAllowed") === "true" || form.get("storageAllowed") === "on", transformationAllowed: form.get("transformationAllowed") === "true" || form.get("transformationAllowed") === "on", processingAllowed: form.get("processingAllowed") === "true" || form.get("processingAllowed") === "on", basis: stringFormValue(form, "basis"), reference: stringFormValue(form, "reference") } };
-}
 /** @param {string} value @param {number} maximumBytes @returns {Uint8Array | null} */
 function decodeBase64(value, maximumBytes) {
   if (value.length > Math.ceil(maximumBytes * 4 / 3) + 4 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value) || value.length % 4 === 1) return null;

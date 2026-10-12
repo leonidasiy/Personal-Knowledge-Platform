@@ -33,7 +33,7 @@ import { isWorkflowRobotsEvidence } from "./workflow.js";
 /** @typedef {{ readonly run: KnowledgeWorkflowRun, readonly rootUrl: string, readonly rightsAssessment?: RightsDecision }} WorkflowExecutionCommand */
 /** @typedef {{ readonly check: (command: { readonly rights: RightsDecision, readonly targetUrl?: string }) => Promise<Result<unknown, unknown>> }} WorkflowRobots */
 /** @typedef {{ readonly run: (command: { readonly run: KnowledgeWorkflowRun, readonly rights: RightsDecision, readonly robots: unknown }) => Promise<Result<{ readonly state: "completed" | "paused" | "awaiting-time-limit-decision", readonly scratchpad: unknown, readonly knowledgePointCount: number, readonly pagesProcessed: number }, unknown>> }} WorkflowExtraction */
-/** @typedef {{ readonly list: (scope: { readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number }) => Promise<Result<readonly KnowledgePoint[], unknown>> }} WorkflowKnowledge */
+/** @typedef {{ readonly reviewedEmpty?: (scope:{readonly ownerId:string,readonly runId:string,readonly sourceId:string,readonly sourceRevision:number})=>Promise<Result<boolean,unknown>>, readonly list: (scope: { readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number }) => Promise<Result<readonly KnowledgePoint[], unknown>> }} WorkflowKnowledge */
 /** @typedef {{ readonly run: (command: { readonly ownerId: string, readonly runId: string, readonly points: readonly KnowledgePoint[] }) => Promise<Result<QuizRunResult, unknown>> }} WorkflowQuiz */
 /** @typedef {{ readonly ensure: (command: { readonly ownerId: string, readonly sourceId: string, readonly sourceRevision: number, readonly points: readonly KnowledgePoint[] }) => Promise<Result<null, unknown>> }} WorkflowClassification */
 /** @typedef {{ readonly close: () => Promise<Result<null, unknown>> }} WorkflowCleanup */
@@ -162,10 +162,15 @@ export function createKnowledgeWorkflowExecutor(dependencies) {
         let points;
         try { points = await dependencies.knowledge.list({ ownerId: current.ownerId, runId: current.runId, sourceId: current.sourceId, sourceRevision: current.sourceRevision }); } catch (error) { return fail(operationFailure("knowledge", "WorkflowKnowledgeLoadFailed", error, "per-point-quiz-loop", "KnowledgeRepositoryRejected"), dependencies, current.runId); }
         if (!points.ok) return fail(operationFailure("knowledge", "WorkflowKnowledgeLoadFailed", points.error, "per-point-quiz-loop"), dependencies, current.runId);
-        if (points.value.length === 0) return fail({ stage: "quiz", causeKind: "KnowledgeSetEmpty", resumableState: "per-point-quiz-loop" }, dependencies, current.runId);
+        if (points.value.length === 0 && current.counts.knowledgePoints === 0) {
+          let empty;
+          try { empty=dependencies.knowledge.reviewedEmpty===undefined?{ok:true,value:false}:await dependencies.knowledge.reviewedEmpty({ownerId:current.ownerId,runId:current.runId,sourceId:current.sourceId,sourceRevision:current.sourceRevision}); } catch(error) { return fail(operationFailure("knowledge","WorkflowKnowledgeLoadFailed",error,"per-point-quiz-loop"),dependencies,current.runId); }
+          if(!empty.ok)return fail(operationFailure("knowledge","WorkflowKnowledgeLoadFailed",empty.error,"per-point-quiz-loop"),dependencies,current.runId);
+          if(!empty.value)return fail({stage:"quiz",causeKind:"KnowledgeSetEmpty",resumableState:"per-point-quiz-loop"},dependencies,current.runId);
+        }
         if (!points.value.every((point) => knowledgeScopeMatches(point, current))) return fail({ stage: "quiz", causeKind: "WorkflowKnowledgeScopeInvalid", resumableState: "per-point-quiz-loop" }, dependencies, current.runId);
         let classification;
-        try { classification = await dependencies.classification.ensure({ ownerId: current.ownerId, sourceId: current.sourceId, sourceRevision: current.sourceRevision, points: points.value }); } catch (error) { return fail(operationFailure("classification", "WorkflowSourceClassificationFailed", error, "per-point-quiz-loop", "SourceClassificationDependencyRejected"), dependencies, current.runId); }
+        try { classification = points.value.length === 0 ? {ok:true,value:null} : await dependencies.classification.ensure({ ownerId: current.ownerId, sourceId: current.sourceId, sourceRevision: current.sourceRevision, points: points.value }); } catch (error) { return fail(operationFailure("classification", "WorkflowSourceClassificationFailed", error, "per-point-quiz-loop", "SourceClassificationDependencyRejected"), dependencies, current.runId); }
         if (!classification.ok) return fail(operationFailure("classification", "WorkflowSourceClassificationFailed", classification.error, "per-point-quiz-loop"), dependencies, current.runId);
         let quiz;
         try { quiz = await dependencies.quiz.run({ ownerId: current.ownerId, runId: current.runId, points: points.value }); } catch (error) { return fail(operationFailure("quiz", "WorkflowQuizFailed", error, "per-point-quiz-loop", "QuizGenerationRejected"), dependencies, current.runId); }

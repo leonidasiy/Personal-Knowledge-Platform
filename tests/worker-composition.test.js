@@ -246,11 +246,12 @@ Deno.test("Missing YouTube configuration disables only YouTube", async () => {
   );
 });
 
-Deno.test("Production composition exposes configured central providers and applies one educational query policy", async () => {
+Deno.test("Production composition exposes configured central providers and never invokes source assessment without query augmentation", async () => {
   /** @type {URL[]} */ const providerUrls = [];
   const result = createCloudflareDiscoveryWorker(
     {
       ...environment({ fetch: async () => new Response(JSON.stringify({ used: 1 })) }),
+      OPENROUTER_API_KEY: "synthetic-model-key",
       BRAVE_SEARCH_API_KEY: "brave-server-secret",
       TADDY_USER_ID: "user-7",
       TADDY_API_KEY: "taddy-secret",
@@ -261,6 +262,7 @@ Deno.test("Production composition exposes configured central providers and appli
         if (url.pathname.endsWith("/cdn-cgi/access/certs")) {
           return Response.json({ keys: [accessJwk] });
         }
+        if (url.hostname === "openrouter.ai") throw new Error("Search must not invoke a model");
         providerUrls.push(url);
         assertEquals(
           new Headers(init?.headers).get("x-subscription-token"),
@@ -299,11 +301,11 @@ Deno.test("Production composition exposes configured central providers and appli
   assertEquals(providerUrls.length, 1);
   assertEquals(
     providerUrls[0].searchParams.get("q"),
-    "vocaloid tutorial lesson course educational",
+    "vocaloid",
   );
   const searchedBody = /** @type {Record<string,unknown>} */ (await searched.json());
   const searchResult = /** @type {Record<string,unknown>} */ (searchedBody.result);
-  assertEquals(searchResult.policyVersion, "educational-v1");
+  assertEquals(searchResult.policyVersion, "raw-provider-v1");
 });
 
 Deno.test("Production composition advertises optional providers as disabled when their credentials are absent", async () => {
@@ -1011,6 +1013,9 @@ Deno.test("YouTube composition reserves durable quota before official metadata c
         scope: oauthScopes,
       }));
     }
+    if (url === "https://openrouter.ai/api/v1/chat/completions") {
+      throw new Error("Link-only search must not invoke a model");
+    }
     if (url.includes("/youtube/v3/search")) {
       events.push("youtube-search");
       return new Response(JSON.stringify({
@@ -1020,7 +1025,7 @@ Deno.test("YouTube composition reserves durable quota before official metadata c
             title: "Harmony tutorial",
             channelTitle: "Publisher",
             publishedAt: "2026-07-01T00:00:00Z",
-            description: "not retained",
+            description: "Worked examples of functional harmony",
           },
         }],
       }));
@@ -1037,7 +1042,7 @@ Deno.test("YouTube composition reserves durable quota before official metadata c
     throw new Error(`Unexpected outbound URL: ${url}`);
   });
   const result = createCloudflareDiscoveryWorker(
-    environment(quota),
+    {...environment(quota), OPENROUTER_API_KEY:"synthetic-model-key"},
     {
       fetch: platformFetch,
       now: () => now,
@@ -1061,7 +1066,7 @@ Deno.test("YouTube composition reserves durable quota before official metadata c
   if (isRecord(body) && isRecord(body.result) && Array.isArray(body.result.items)) {
     const candidate = body.result.items[0];
     assert(isRecord(candidate), "Expected a YouTube candidate.");
-    if (isRecord(candidate)) assertEquals(candidate.description, null);
+    if (isRecord(candidate)) assertEquals(candidate.description, "Worked examples of functional harmony");
   }
   assert(
     events.every((event) =>
@@ -1545,3 +1550,16 @@ function quotaStorageFixture() {
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+Deno.test("abandon terminates without rolling back preexisting shared data",async()=>{
+  let rollback;
+  await deliverKnowledgeWorkflowControl({terminate:async options=>{rollback=options?.rollback;}},"abandon");
+  assertEquals(rollback,false);
+});
+
+Deno.test("concurrent launch duplicate creation verifies and reuses the winning platform instance",async()=>{
+ const instances=new Map();
+ const binding={get:async(/** @type {string} */id)=>{const instance=instances.get(id);if(!instance)throw new Error("not found");return instance;},create:async(/** @type {{id:string}} */ options)=>{await Promise.resolve();if(instances.has(options.id))throw new Error("duplicate instance");const instance={id:options.id,pause:async()=>{},resume:async()=>{},terminate:async()=>{},sendEvent:async()=>{},status:async()=>({status:"running"})};instances.set(options.id,instance);return instance;}};
+ const results=await Promise.all([reconcileKnowledgeWorkflowLaunch(binding,{runId:"same-attempt",state:"source-added"},{},false),reconcileKnowledgeWorkflowLaunch(binding,{runId:"same-attempt",state:"source-added"},{},true)]);
+ assertEquals(results.every(result=>result.ok),true);assertEquals(instances.size,1);
+});

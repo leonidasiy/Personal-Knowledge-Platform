@@ -1,6 +1,7 @@
 // @ts-check
 
 import { isRecord } from "../src/features/source-library/contracts.js";
+import { matchesPrivateDocumentReplay, sourceApprovalFingerprint } from "../src/features/source-library/repository.js";
 
 /** @import { LibrarySource, Result, SourceInterestArea, SourceLibraryFailure, SourceIngestionJob, SourceSearchHit, KnowledgeSearchHit, SourceSuppression } from "../src/features/source-library/contracts.js" */
 /** @import { ApprovalCommit, RevisionCommit, SuppressionCommit, TransitionCommit } from "../src/features/source-library/repository.js" */
@@ -320,7 +321,9 @@ export class D1SourceLibraryRepository {
         commit.event.idempotencyKey,
       );
       if (replay !== null) {
-        if (replay.command_fingerprint !== commit.fingerprint) {
+        const source = await this.#source(commit.source.ownerId, replay.source_id);
+        if (source === null) throw new TypeError("D1 source idempotency invariant is broken.");
+        if (sourceApprovalFingerprint(replay.command_fingerprint, commit.source.adapter.id) !== commit.fingerprint && !matchesPrivateDocumentReplay(commit, replay.command_fingerprint, source)) {
           return {
             ok: false,
             error: {
@@ -328,13 +331,6 @@ export class D1SourceLibraryRepository {
               idempotencyKey: commit.event.idempotencyKey,
             },
           };
-        }
-        const source = await this.#source(
-          commit.source.ownerId,
-          replay.source_id,
-        );
-        if (source === null) {
-          throw new TypeError("D1 source idempotency invariant is broken.");
         }
         return { ok: true, value: freeze({ source, job: null, reused: true }) };
       }
@@ -438,6 +434,29 @@ export class D1SourceLibraryRepository {
     } catch (error) {
       if (error instanceof TypeError) throw error;
       if (error instanceof Error) {
+        // A concurrent transaction may have committed the exact command while this batch rolled back.
+        try {
+          const winner = await this.#idempotency(commit.source.ownerId,commit.event.idempotencyKey);
+          if (winner !== null && sourceApprovalFingerprint(winner.command_fingerprint, commit.source.adapter.id) !== commit.fingerprint) return {ok:false,error:{kind:"SourceIdempotencyConflict",idempotencyKey:commit.event.idempotencyKey}};
+          if (winner !== null) {
+            const source = await this.#source(commit.source.ownerId,winner.source_id);
+            if (source !== null && source.state === "active" && source.canonicalUrl === commit.source.canonicalUrl) {
+              console.info(JSON.stringify({event:"source-approval-concurrent-reuse",ownerId:source.ownerId,sourceId:source.id}));
+              return {ok:true,value:freeze({source,job:null,reused:true})};
+            }
+          } else {
+            const source = await this.#canonical(commit.source.ownerId,commit.source.canonicalUrl);
+            if (source !== null && source.state === "active") {
+              // Preserve the existing canonical-source reuse contract for concurrent distinct request keys.
+              await this.#batch([this.#eventStatement({...commit.event,sourceId:source.id,sourceRevision:source.revision},commit.fingerprint)]);
+              console.info(JSON.stringify({event:"source-approval-concurrent-canonical-reuse",ownerId:source.ownerId,sourceId:source.id}));
+              return {ok:true,value:freeze({source,job:null,reused:true})};
+            }
+          }
+        } catch (readError) {
+          if (!(readError instanceof Error)) throw readError;
+          console.error(JSON.stringify({event:"source-approval-reconciliation-failure",ownerId:commit.source.ownerId,failureKind:"SourceApprovalPersistenceFailed"}));
+        }
         return {
           ok: false,
           error: { kind: "SourceApprovalPersistenceFailed" },

@@ -1,8 +1,9 @@
 role: question-evaluator
-version: question-evaluator-v4
+version: question-evaluator-v5
 model:
   provider: openrouter
-  name: z-ai/glm-5.3-flash
+  name: mistralai/mistral-large-4-0
+  reasoningEffort: none
 procedureVersion: evaluator-procedure-v1
 promptVersion: evaluator-prompt-v3
 inputSchema: quiz-evaluation-handoff-v1

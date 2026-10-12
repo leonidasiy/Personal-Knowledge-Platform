@@ -1,4 +1,5 @@
 // @ts-check
+import { createShellMarkup } from "../../shell-markup.js";
 
 import { SUBJECTS } from "../knowledge-subjects/public.js";
 import { subjectPresentation } from "../knowledge-subjects/presentation.js";
@@ -20,6 +21,7 @@ import { LearningBatchGatewayClient } from "./batches-gateway.js";
  */
 
 const freeze = Object.freeze;
+const feedMarkup = createShellMarkup("feed-markup");
 
 /** @param {LearnerControllerDependencies} dependencies */
 export function createLearnerController(dependencies) {
@@ -160,7 +162,7 @@ export function createLearnerController(dependencies) {
   }
 
   function renderFeed() {
-    return `<section class="daily-page" aria-label="Your daily selection"><div class="daily-hero"><div class="hero-copy"><h1>Make room for a new thought.</h1><p>Five ideas to explore at your own pace. Read, connect, then try bringing them back.</p></div><div class="idea-art" aria-hidden="true"><svg class="field-art" viewBox="0 0 520 355" fill="none"><rect x="40" y="24" width="426" height="292" rx="3" fill="var(--surface-subtle)" transform="rotate(-5 253 170)"/><rect x="58" y="20" width="420" height="294" rx="3" fill="var(--surface)" stroke="var(--border)" transform="rotate(4 268 167)"/><path d="M100 90h320M100 130h320M100 170h320M100 210h320M100 250h320M140 60v215M200 60v215M260 60v215M320 60v215M380 60v215" stroke="var(--border)" opacity=".4"/><g stroke="var(--action)" stroke-width="1.6" transform="translate(268 160) rotate(-22)"><ellipse rx="156" ry="55"/><ellipse rx="145" ry="68"/><ellipse rx="128" ry="82"/><ellipse rx="106" ry="99"/><ellipse rx="81" ry="118"/><ellipse rx="53" ry="129"/><ellipse rx="25" ry="137"/></g><circle cx="400" cy="143" r="8" fill="var(--action)"/></svg><svg class="observatory-art" viewBox="0 0 470 350" fill="none"><g stroke="var(--border)"><ellipse cx="238" cy="169" rx="162" ry="110" transform="rotate(-18 238 169)" stroke-dasharray="3 8"/><circle cx="238" cy="169" r="135" opacity=".4"/><path d="m85 220 63-129 90 78 136-49-30 145-106-96-153 51m63-129 196 174"/></g><g fill="var(--surface)" stroke="var(--action)" stroke-width="1.5"><circle cx="238" cy="169" r="43"/><circle cx="148" cy="91" r="24"/><circle cx="374" cy="120" r="21"/><circle cx="344" cy="265" r="29"/><circle cx="85" cy="220" r="18"/></g><g fill="var(--action)"><circle cx="238" cy="169" r="9"/><circle cx="148" cy="91" r="5"/><circle cx="374" cy="120" r="4"/><circle cx="344" cy="265" r="6"/><circle cx="85" cy="220" r="4"/></g><g fill="var(--text-muted)" font-size="11"><text x="205" y="231">Your curiosity</text><text x="109" y="47">Patterns</text><text x="351" y="83">Rhythm</text><text x="318" y="315">Nature</text><text x="40" y="260">Motion</text></g></svg></div></div>${renderFeedHeading()}<div class="daily-grid">${renderFeedBody()}</div></section>`;
+    return feedMarkup(0) + `${renderFeedHeading()}<div class="daily-grid">${renderFeedBody()}</div></section>`;
   }
 
   function renderFeedHeading() {
@@ -185,7 +187,7 @@ export function createLearnerController(dependencies) {
     const presentation = subjectPresentation(classification?.mainSubject ?? null);
     const subject = presentation === null ? "" : ` data-subject="${escapeHtml(classification?.mainSubject ?? "")}"`;
     const mark = presentation === null ? "" : `<svg class="subject-mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="${presentation.path}"/></svg>`;
-    const media = card.media === null || card.media.url.startsWith("/assets/fallback-media/") ? "" : `<figure class="card-media"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true"><figcaption class="media-attribution">${escapeHtml(card.media.attribution)}</figcaption></figure>`;
+    const media = card.media === null || card.media.url.startsWith("/assets/fallback-media/") ? "" : `<figure class="card-media"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true"><figcaption class="media-attribution">${card.media.purpose === "illustration" ? "Illustration — facts are supported by the source text<br>" : ""}${escapeHtml(card.media.attribution)}</figcaption></figure>`;
     return `<article class="learning-card"${subject} data-reveal="knowledge:${escapeHtml(card.knowledgeId)}" data-knowledge-id="${escapeHtml(card.knowledgeId)}"><div class="card-body"><p class="card-knowledge">${escapeHtml(card.summary)}</p>${media}<h3 class="card-source"><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">${escapeHtml(card.title)}</a></h3><p class="card-subject">${mark}${escapeHtml(presentation?.label ?? "Unclassified")}</p>${classification ? `<p>${escapeHtml(classification.topic)}</p>` : ""}<div class="card-context">${classificationEditor(card)}<details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details></div><div class="preference-controls"><button class="button preference-more" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}">More like this</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Less like this</button><button class="button quiet" type="button" data-action="remove-learner-knowledge" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Remove</button></div></div></article>`;
   }
 

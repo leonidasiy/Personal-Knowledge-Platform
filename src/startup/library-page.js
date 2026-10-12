@@ -5,7 +5,7 @@ import {
   SourceLibraryGatewayClient,
 } from "../features/source-library/gateway.js";
 import { LearningBatchGatewayClient } from "../features/learning-generation/batches-gateway.js";
-import { renderLibraryRoute, librarySourceSubjects } from "../routes/library.js";
+import { renderLibraryRoute, renderProcessingStatus, librarySourceSubjects } from "../routes/library.js";
 import { isSubjectId } from "../features/knowledge-subjects/public.js";
 import { BUNDLE_TYPE, packImageBundle } from "../features/knowledge-workflows/image-upload.js";
 import { renderPdfPageImages } from "./pdf-image-pages.js";
@@ -98,6 +98,13 @@ export function createLibraryPage(dependencies) {
   /** @type {LibraryKnowledgeCard[]} */ let knowledge = [];
   /** @type {LibraryKnowledgeSearchCard[]} */ let knowledgeSearchResults = [];
   /** @type {WorkflowSourceStatus[]} */ let workflowStatuses = [];
+  /** @type {Map<string,Parameters<SourceLibraryGatewayClient["cancelWorkflow"]>[0]>} */ const cancellationRetries=new Map();
+  const trackedSourceIds = new Set();
+  let uploading = false;
+  let statusDiscoveryPending = false;
+  let statusUnavailable = false;
+  let statusRetryAllowed = true;
+  /** @type {string|null} */ let statusDiscoveryCursor = null;
   /** @type {string | null} */ let pendingKnowledgeId = null;
   /** @type {Promise<void> | null} */ let read = null;
   /** @type {Promise<void> | null} */ let knowledgeRead = null;
@@ -140,7 +147,6 @@ export function createLibraryPage(dependencies) {
         searchScope = "knowledge";
         knowledgeSearchResults = [];
         message = null;
-        workflowStatuses = [];
         rerender();
       } else state = "loading";
       const result = await gateway.browse({
@@ -149,6 +155,10 @@ export function createLibraryPage(dependencies) {
       });
       if (!result.ok) {
         setFailure(result.error, !reset && items.length > 0);
+        statusUnavailable = true;
+        statusDiscoveryPending = reset;
+        recordStatusFailure(result.error);
+        if (statusRetryAllowed) scheduleWorkflowStatusRefresh(workflowStatusGeneration);
         return;
       }
       items = reset
@@ -156,6 +166,8 @@ export function createLibraryPage(dependencies) {
         : merge(items, result.value.items);
       interestAreas = [...result.value.interestAreas];
       nextCursor = result.value.nextCursor;
+      if (reset) { statusDiscoveryCursor = nextCursor; statusDiscoveryPending = false; }
+      for (const source of result.value.items) trackedSourceIds.add(source.id);
       state = items.length === 0 ? "empty" : "success";
       message = null;
       rerender();
@@ -179,7 +191,6 @@ export function createLibraryPage(dependencies) {
     const priorSearchScope = searchScope;
     const priorItems = items;
     const priorKnowledgeSearchResults = knowledgeSearchResults;
-    stopWorkflowStatusPolling();
     query = rawQuery.trim();
     const rawScope = data.get("searchScope");
     searchScope = rawScope === "sources" ? "sources" : "knowledge";
@@ -231,7 +242,10 @@ export function createLibraryPage(dependencies) {
         : items.length === 0
         ? "empty"
         : "success";
-      if (searchScope === "sources") { knowledge = []; await Promise.all([loadKnowledge(), loadWorkflowStatuses()]); }
+      if (searchScope === "sources") {
+        for (const source of items) trackedSourceIds.add(source.id);
+        knowledge = []; await Promise.all([loadKnowledge(), loadWorkflowStatuses()]);
+      }
     })().finally(() => {
       read = null;
       rerender();
@@ -265,53 +279,58 @@ export function createLibraryPage(dependencies) {
   }
 
   async function loadWorkflowStatuses() {
+    if (workflowStatusRead !== null) {
+      const readingGeneration = workflowStatusReadGeneration;
+      await workflowStatusRead;
+      if (readingGeneration !== workflowStatusGeneration) await loadWorkflowStatuses();
+      return;
+    }
     const generation = workflowStatusGeneration;
-    if (
-      workflowStatusRead !== null &&
-      workflowStatusReadGeneration === generation
-    ) return await workflowStatusRead;
     const currentRead = (async () => {
-      const results = await Promise.all(
-        items.map((source) => gateway.workflowStatus(source.id)),
-      );
-      if (generation !== workflowStatusGeneration) return;
-      const sourceIds = new Set(items.map((source) => source.id));
-      const known = new Map(
-        workflowStatuses
-          .filter((status) => sourceIds.has(status.sourceId))
-          .map((status) => [status.sourceId, status]),
-      );
       let failed = false;
-      for (const result of results) {
-        if (result.ok) known.set(result.value.sourceId, result.value);
-        else failed = true;
+      statusRetryAllowed = true;
+      const seenCursors = new Set();
+      while (statusDiscoveryPending || statusDiscoveryCursor !== null) {
+        const cursor = statusDiscoveryPending ? null : statusDiscoveryCursor;
+        if (seenCursors.has(cursor)) { failed = true; break; }
+        seenCursors.add(cursor);
+        const page = await gateway.browse({limit:20,cursor});
+        if (generation !== workflowStatusGeneration) return;
+        if (!page.ok) { recordStatusFailure(page.error); failed = true; break; }
+        for (const source of page.value.items) trackedSourceIds.add(source.id);
+        statusDiscoveryPending = false;
+        statusDiscoveryCursor = page.value.nextCursor;
       }
-      workflowStatuses = items.flatMap((source) => {
-        const status = known.get(source.id);
-        return status === undefined ? [] : [status];
-      });
-      if (failed) {
-        onError(
-          "One or more source processing statuses could not be loaded. Refresh the Library to try again.",
-        );
-      }
+      const results = await Promise.all([...trackedSourceIds].map(sourceId => gateway.workflowStatus(sourceId)));
       if (generation !== workflowStatusGeneration) return;
-      if (countProcessingWorkflowStatuses(workflowStatuses) > 0) {
-        scheduleWorkflowStatusRefresh(generation);
-      } else {
-        cancelWorkflowStatusRefresh();
+      const known = new Map(workflowStatuses.map(status => [status.sourceId,status]));
+      for (const result of results) {
+        if (result.ok) known.set(result.value.sourceId,result.value);
+        else { recordStatusFailure(result.error); failed = true; }
       }
+      workflowStatuses = statusRetryAllowed ? [...known.values()] : [];
+      statusUnavailable = failed;
+      if (failed) onError("Status unavailable.");
+      if (statusRetryAllowed && (failed || countProcessingWorkflowStatuses(workflowStatuses) > 0)) scheduleWorkflowStatusRefresh(generation);
+      else cancelWorkflowStatusRefresh();
       rerender();
     })();
     workflowStatusRead = currentRead;
     workflowStatusReadGeneration = generation;
-    try {
-      await currentRead;
-    } finally {
-      if (workflowStatusRead === currentRead) {
-        workflowStatusRead = null;
-        workflowStatusReadGeneration = -1;
-      }
+    try { await currentRead; }
+    finally {
+      if (workflowStatusRead === currentRead) { workflowStatusRead = null; }
+    }
+  }
+
+  /** @param {import("../features/source-library/gateway.js").SourceGatewayFailure} failure */
+  function recordStatusFailure(failure) {
+    if (failure.kind === "SourceGatewayUnauthenticated" || failure.kind === "SourceGatewayUnauthorized") {
+      trackedSourceIds.clear();
+      statusDiscoveryCursor = null;
+      statusDiscoveryPending = false;
+      workflowStatuses = [];
+      statusRetryAllowed = false;
     }
   }
 
@@ -326,7 +345,7 @@ export function createLibraryPage(dependencies) {
     if (
       generation !== workflowStatusGeneration ||
       workflowStatusRefreshHandle !== null ||
-      countProcessingWorkflowStatuses(workflowStatuses) === 0
+      (!statusRetryAllowed || !statusUnavailable && countProcessingWorkflowStatuses(workflowStatuses) === 0)
     ) return;
     workflowStatusRefreshHandle = schedule(() => {
       workflowStatusRefreshHandle = null;
@@ -369,11 +388,13 @@ export function createLibraryPage(dependencies) {
       workflowStatuses = workflowStatuses.filter((status) =>
         status.sourceId !== source.id
       );
+      trackedSourceIds.delete(source.id);
       state = items.length === 0 ? "empty" : "success";
       onNotice(
         "Source, knowledge, paired questions, media, and schedules removed. Activity history is preserved.",
       );
     }
+    await loadWorkflowStatuses();
     rerender();
   }
 
@@ -409,9 +430,11 @@ export function createLibraryPage(dependencies) {
 
   /** @param {HTMLButtonElement} button */
   async function retryWorkflow(button) {
-    const runId = button.getAttribute("data-library-workflow-retry");
+    const cancel=button.hasAttribute("data-library-workflow-cancel");
+    const attribute=cancel?"data-library-workflow-cancel":"data-library-workflow-retry";
+    const runId = button.getAttribute(attribute);
     const expectedRevision = Number(
-      button.getAttribute("data-library-workflow-retry-revision"),
+      button.getAttribute(`${attribute}-revision`),
     );
     if (
       runId === null || runId.trim() === "" ||
@@ -420,20 +443,22 @@ export function createLibraryPage(dependencies) {
     const status = workflowStatuses.find((candidate) =>
       candidate.run?.runId === runId
     );
-    if (status?.run?.state !== "retryable-failure") return;
+    if (status?.run == null || pendingSourceId !== null || (cancel ? !cancellationRetries.has(runId) && ["completed","abandoned"].includes(status.run.state) : status.run.state !== "retryable-failure")) return;
+    pendingSourceId=status.sourceId;rerender();
     stopWorkflowStatusPolling();
-    const result = await gateway.retryWorkflow({
-      runId,
-      expectedRevision,
-      idempotencyKey: `workflow-retry:${createId()}`,
-    });
+    const command=cancellationRetries.get(runId) ?? {runId,expectedRevision,idempotencyKey:`workflow-${cancel?"cancel":"retry"}:${createId()}`};
+    if(cancel)cancellationRetries.set(runId,command);
+    const result = await gateway[cancel?"cancelWorkflow":"retryWorkflow"](command);
+    pendingSourceId=null;
     if (!result.ok) {
-      onError(friendly(result.error));
+      onError(cancel ? `Cancellation failed: ${result.error.kind === "SourceGatewayRejected" ? result.error.failureKind : result.error.kind}.` : friendly(result.error));
+      await loadWorkflowStatuses();
       rerender();
       return;
     }
+    if(cancel)cancellationRetries.delete(runId);
     onNotice(
-      "Retry started. The Library will refresh its processing status automatically.",
+      cancel ? "Processing canceled. Attempt data cleaned." : "Retry started. The Library will refresh its processing status automatically.",
     );
     rerender();
     await loadWorkflowStatuses();
@@ -457,8 +482,7 @@ export function createLibraryPage(dependencies) {
     if (
       !(form instanceof FormData) ||
       (sourceId !== "" &&
-        (source === undefined || run?.state !== "awaiting-upload")) ||
-      form.get("attested") !== "on"
+        (source === undefined || run?.state !== "awaiting-upload"))
     ) {
       uploadFailure(
         uploadCopy(1),
@@ -467,7 +491,7 @@ export function createLibraryPage(dependencies) {
     }
     const files = /** @type {File[]} */ (form.getAll("file").filter((item) => item instanceof File && item.size > 0));
     const file = files[0] ?? null;
-    const mode = form.get("imageProcessing") === "on" ? "image" : "text";
+    const mode = files.length > 0 && files.every(file => /\.(?:png|jpe?g|webp|gif)$/iu.test(file.name)) || form.get("imageProcessing") === "on" ? "image" : "text";
     if (files.length > 100 || files.reduce((total, item) => total + item.size, 0) > 104_857_600) return uploadFailure(uploadCopy(2));
     const pasted = form.get("content");
     const content = typeof pasted === "string" ? pasted.trim() : "";
@@ -514,7 +538,10 @@ export function createLibraryPage(dependencies) {
     const pageRange = form.get("pageRange") ?? "";
     if (typeof pageRange !== "string" || pageRange.length > 300 || pageRange.trim() !== "" && (mode !== "image" || mediaType !== "application/pdf")) return uploadFailure(uploadCopy(11));
     pendingSourceId = sourceId;
+    uploading = true;
+    if (source) trackedSourceIds.add(source.id);
     stopWorkflowStatusPolling();
+    rerender();
     try {
       let id;
       let uploadFile = file;
@@ -558,24 +585,16 @@ export function createLibraryPage(dependencies) {
           "Upload fingerprinting failed. The document has not been sent.",
         );
       }
-      const rightsAttestation = {
-        ownsOrPermitted: true,
-        storageAllowed: true,
-        transformationAllowed: true,
-        processingAllowed: true,
-        basis: "learner-attested lawful copy",
-        reference: `learner-attestation:${id}`,
-      };
       let runId = run?.runId;
       if (sourceId === "") {
         const created = await gateway.createPrivateDocument({
           title,
           fileName,
-          rightsAttestation,
           idempotencyKey: `private-document:${id}`,
         });
         if (!created.ok) return uploadFailure(friendly(created.error));
         source = created.value.source;
+        trackedSourceIds.add(source.id);
         runId = created.value.runId;
         if (!items.some((item) => item.id === source?.id)) items.push(source);
       }
@@ -592,7 +611,6 @@ export function createLibraryPage(dependencies) {
         mode,
         mediaType: uploadMediaType,
         fileName: uploadFile?.name ?? fileName,
-        rightsAttestation,
         idempotencyKey: `workflow-material:${runId}:${id}`,
         ...(uploadFile === null ? { content } : { file: uploadFile }),
       });
@@ -604,10 +622,12 @@ export function createLibraryPage(dependencies) {
         "Content uploaded. Knowledge and question processing will continue.";
       uploadSucceeded = true;
       onNotice(uploadMessage);
-      pendingSourceId = null;
-      if (context === null) await loadWorkflowStatuses();
+      if (!items.some(item => item.id === source.id)) items.push(source);
     } finally {
       pendingSourceId = null;
+      uploading = false;
+      rerender();
+      await loadWorkflowStatuses();
     }
   }
 
@@ -660,7 +680,7 @@ export function createLibraryPage(dependencies) {
         }
       })
     );
-    root.querySelectorAll("[data-library-workflow-retry]").forEach((element) =>
+    root.querySelectorAll("[data-library-workflow-retry], [data-library-workflow-cancel]").forEach((element) =>
       element.addEventListener("click", () => {
         if (typeof element.getAttribute === "function") {
           void retryWorkflow(/** @type {HTMLButtonElement} */ (element));
@@ -677,6 +697,7 @@ export function createLibraryPage(dependencies) {
   /** @param {LibraryBatchModel | Record<string, unknown>} _queue */
   function render(_queue) {
     return renderLibraryRoute({
+      cancellationRetries:[...cancellationRetries.keys()],
       collection: collection(),
       knowledge,
       knowledgeSearchResults,
@@ -706,7 +727,8 @@ export function createLibraryPage(dependencies) {
     items = items.map(source => source.id === sourceId ? freeze({...source,title}) : source);
     knowledgeSearchResults = knowledgeSearchResults.map(point => point.sourceId === sourceId ? {...point,sourceTitle:title} : point);
   }
-  return freeze({ load, search, uploadMaterial, bind, render, renamed, uploadResult: () => ({ok:uploadSucceeded,message:uploadMessage}) });
+  return freeze({ load, search, uploadMaterial, bind, render, renamed,
+    renderProcessingStatus: () => renderProcessingStatus({workflowStatuses,escapeHtml,uploading,unavailable:statusUnavailable}), uploadResult: () => ({ok:uploadSucceeded,message:uploadMessage}) });
 }
 
 /** @param {import("../features/source-library/gateway.js").SourceGatewayFailure} failure */

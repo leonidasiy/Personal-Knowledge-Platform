@@ -495,7 +495,7 @@
  *   readonly kind: "ManualUploadPersistenceFailed"
  * } | {
  *   readonly kind: "ManualUploadEvidenceRevoked"
- * }} SourceIngestionFailure
+ * } | import("../../../acquisition/contracts.ts").Failure } SourceIngestionFailure
  */
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */

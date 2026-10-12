@@ -1,4 +1,5 @@
 // @ts-check
+import { createShellMarkup } from "../shell-markup.js";
 
 import { countProcessingWorkflowStatuses } from "../features/source-library/gateway.js";
 import { isRecord } from "../features/source-library/contracts.js";
@@ -27,6 +28,7 @@ import { SUBJECTS, isSubjectId } from "../features/knowledge-subjects/public.js"
  *   readonly knowledge?: readonly { readonly knowledgeId: string, readonly sourceId: string, readonly summary: string, readonly questionLocked: boolean, readonly primarySubject?: string | null, readonly sourceTopic?: string | null }[],
  *   readonly knowledgeSearchResults?: readonly { readonly knowledgeId: string, readonly sourceId: string, readonly sourceTitle: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds?: readonly string[], readonly questionLocked: boolean, readonly score: number, readonly matchedBy: "exact" | "semantic" | "combined" }[],
  *   readonly workflowStatuses?: readonly WorkflowSourceStatus[],
+ *   readonly cancellationRetries?: readonly string[],
  *   readonly escapeHtml: (value: string) => string,
  *   readonly formatDate: (value: string) => string
  * }} LibraryRouteModel
@@ -35,19 +37,20 @@ import { SUBJECTS, isSubjectId } from "../features/knowledge-subjects/public.js"
 /** @param {LibraryRouteModel} model */
 export function renderLibraryRoute(model) {
   validate(model);
-  return shellMarkup(0, renderProcessingStatus(model), renderCollection(model));
+  return shellMarkup(0, "", renderCollection(model));
 }
 
-/** @param {LibraryRouteModel} model */
-function renderProcessingStatus(model) {
-  const count = countProcessingWorkflowStatuses(model.workflowStatuses ?? []);
-  if (count === 0) return "";
-  const noun = count === 1 ? "source" : "sources";
-  const active = (model.workflowStatuses ?? []).find((status) => status.run !== null && status.run.state !== "completed");
-  const stage = count === 1 && active?.run !== null && active?.run !== undefined
-    ? workflowStageMessage(active.run.state).replace(/^Processing:\s*/u, "")
-    : null;
-  return shellMarkup(1, count, noun, stage === null ? "" : ` · ${model.escapeHtml(stage)}`);
+/** @param {{readonly workflowStatuses?: readonly WorkflowSourceStatus[], readonly escapeHtml:(value:string)=>string, readonly uploading?:boolean, readonly unavailable?:boolean}} model */
+export function renderProcessingStatus(model) {
+  const statuses = model.workflowStatuses ?? [];
+  const count = countProcessingWorkflowStatuses(statuses);
+  if (!model.uploading && !model.unavailable && count === 0) return "";
+  const active = statuses.find(status => countProcessingWorkflowStatuses([status]) > 0);
+  const stage = count === 1 && active?.run ? workflowStageMessage(active.run.state).replace(/^Processing:\s*/u, "") : null;
+  const processing = `Processing ${count} ${count === 1 ? "source" : "sources"}${stage === null ? "" : ` · ${stage}`}`;
+  const label = model.uploading ? `Uploading…${count && !model.unavailable ? ` · ${processing}` : ""}`
+    : model.unavailable ? `Status unavailable${count ? ` · Last confirmed: ${processing}` : ""}` : processing;
+  return shellMarkup(1, model.unavailable && !model.uploading ? "" : '<span class="library-processing-spinner" aria-hidden="true">⟳</span>', model.escapeHtml(label));
 }
 
 /** @param {LibraryRouteModel} model */
@@ -135,6 +138,7 @@ function renderSource(model, source) {
   const workflowRetry = workflowStatus?.reasonCode === "retryable-failure" && workflowStatus.run !== null
     ? shellMarkup(17, escapeHtml(workflowStatus.run.runId), workflowStatus.run.revision)
     : "";
+  const workflowCancel=workflowStatus?.run != null && (model.cancellationRetries?.includes(workflowStatus.run.runId) || !["completed","abandoned"].includes(workflowStatus.run.state)) ? shellMarkup(48,escapeHtml(workflowStatus.run.runId),workflowStatus.run.revision,pending?"disabled":"") : "";
   const upload = workflowStatus?.run?.state === "awaiting-upload"
     ? shellMarkup(18, escapeHtml(`#upload?${new URLSearchParams({sourceId:source.id,runId:workflowStatus.run.runId,title:source.title,revision:String(source.revision),reason:workflowMessage ?? shellMarkup(38)})}`))
     : "";
@@ -142,7 +146,7 @@ function renderSource(model, source) {
   const related = knowledge.length === 0
     ? ""
     : shellMarkup(19, sourceId, sourceId, escapeHtml(knowledgeOverview(knowledge)));
-  return shellMarkup(20, sourceId, sourceId, escapeHtml(source.adapter.id), escapeHtml(source.title), escapeHtml(source.description), escapeHtml(source.adapter.granularity), capabilities === "" ? "" : ` · ${escapeHtml(capabilities)}`, formatDate(source.approvedAt), workflowNotice, upload, workflowRetry, escapeHtml(source.canonicalUrl), related, sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
+  return shellMarkup(20, sourceId, sourceId, escapeHtml(source.adapter.id), escapeHtml(source.title), escapeHtml(source.description), escapeHtml(source.adapter.granularity), capabilities === "" ? "" : ` · ${escapeHtml(capabilities)}`, formatDate(source.approvedAt), workflowNotice, upload, workflowRetry + workflowCancel, escapeHtml(source.canonicalUrl), related, sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
 }
 
 /** @param {readonly { readonly summary: string, readonly sourceTopic?: string|null }[]} knowledge @returns {string} */
@@ -209,15 +213,4 @@ function isKnowledgeSearchResult(value) {
 
 export {};
 
-/** Static markup is part of the cached shell; values are escaped by callers.
- * @param {number} index @param {...(string|boolean|number)} values */
-function shellMarkup(index, ...values) {
-  const content = document.getElementById("library-markup")?.textContent;
-  if (!content) throw new TypeError("ShellMarkupUnavailable:library-markup");
-  const templates = JSON.parse(content);
-  const parts = templates[index];
-  if (!Array.isArray(parts) || parts.length !== values.length + 1 || parts.some(part => typeof part !== "string")) {
-    throw new TypeError("ShellMarkupInvalid:library-markup");
-  }
-  return parts.reduce((html, part, slot) => html + (slot === 0 ? "" : values[slot - 1]) + part, "");
-}
+const shellMarkup = createShellMarkup("library-markup");

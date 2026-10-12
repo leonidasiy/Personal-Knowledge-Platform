@@ -1,6 +1,6 @@
 // @ts-check
 
-import { createQuizActorCritic } from "../src/features/knowledge-workflows/quiz.js";
+import { createQuizActorCritic, QUIZ_MAX_ATTEMPTS } from "../src/features/knowledge-workflows/quiz.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
@@ -87,6 +87,41 @@ Deno.test("quiz actor-critic revises after feedback and continues sequentially",
   assertEquals(fixture.generatorCalls, 5);
   assertEquals(fixture.evaluatorCalls, 5);
   assertEquals(fixture.attempts.filter((attempt) => attempt.knowledgeId === "knowledge-b").length, 3);
+});
+
+Deno.test("quiz gets three corrective retries, keeps final success and discards exhausted pairs", async () => {
+  const fixture=setup();
+  /** @type {(string|null)[]} */ const feedback=[];
+  const actor=createQuizActorCritic({generator:{async generate({knowledge,attempt,feedback:previous}){feedback.push(previous);return {ok:true,value:{id:`draft-${knowledge.id}-${attempt}`,knowledgeId:knowledge.id,knowledgeRevision:knowledge.sourceRevision,kind:"single-choice",prompt:"Which relationship follows from the evidence?",options:["A","B"],answer:"A",citedEvidenceUrls:["https://example.test/a"]}};}},evaluator:{async evaluate({knowledge,attempt}){return {ok:true,value:{score:knowledge.id==="knowledge-a"&&attempt===4?9:7,reasons:["Evidence checked"],feedback:"Make the distinction explicit.",groundingProblems:[]}};}},repository:fixture.repository,now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
+  const result=await actor.run({ownerId:"owner-a",runId:"run-four",points:points()});
+  if(!result.ok)throw new Error(result.error.kind);
+  assertEquals(fixture.attempts.length,8);
+  assertEquals(fixture.published.length,1);
+  assertEquals(fixture.purged.length,1);
+  assertEquals(result.value.dispositions[0].status,"accepted");
+  assertEquals(result.value.dispositions[0].attempts,4);
+  assertEquals(result.value.dispositions[1].status,"abandoned");
+  assertEquals(result.value.dispositions[1].attempts,4);
+  assertEquals(feedback[0],null);
+  assertEquals(feedback[1],"Make the distinction explicit.");
+  assertEquals(result.value.statistics?.retryRate,1);
+  assertEquals(result.value.statistics?.extraAttempts,6);
+  assertEquals(result.value.statistics?.quizDropRate,0.5);
+  assertEquals(result.value.statistics?.exhaustedDropPoints,1);
+  const resumed=createQuizActorCritic({generator:{async generate(){throw new Error("MustNotRegenerate");}},evaluator:{async evaluate(){throw new Error("MustNotReevaluate");}},repository:{...fixture.repository,findPublished:async()=>({ok:true,value:{status:"published",attempt:4}})},now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
+  const reused=await resumed.run({ownerId:"owner-a",runId:"run-four",points:[points()[0]]});
+  if(!reused.ok)throw new Error(reused.error.kind);
+  assertEquals(reused.value.dispositions[0].attempts,4);
+});
+
+Deno.test("four-attempt quiz policy propagates operational failures without dropping knowledge", async () => {
+  const fixture=setup();
+  const actor=createQuizActorCritic({generator:{async generate(){return {ok:false,error:{kind:"ProviderUnavailable"}};}},evaluator:{async evaluate(){throw new Error("MustNotEvaluate");}},repository:fixture.repository,now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
+  const result=await actor.run({ownerId:"owner-a",runId:"run-external",points:[points()[0]]});
+  if(result.ok)throw new Error("Expected operational failure");
+  assertEquals(result.error.kind,"QuizGeneratorFailed");
+  assertEquals(fixture.purged.length,0);
+  assertEquals(fixture.attempts.length,0);
 });
 
 Deno.test("quiz generation receives the persisted knowledge classification unchanged", async () => {
@@ -195,22 +230,25 @@ Deno.test("accepted quiz kinds are published directly after actor-critic approva
 });
 
 Deno.test("malformed evaluator output discards the knowledge point after generation", async () => {
-  const fixture = setup();
-  const actor = createQuizActorCritic({
-    generator: { async generate(command) { return { ok: true, value: { id: `draft-${command.attempt}`, knowledgeId: command.knowledge.id, knowledgeRevision: 1, kind: "single-choice", prompt: "Specific?", options: ["yes", "no"], answer: "yes", citedEvidenceUrls: ["https://example.test/a"] } }; } },
-    evaluator: { async evaluate() { return { ok: true, value: { score: 10 } }; } },
-    repository: fixture.repository,
-    now: () => "2026-08-13T00:00:00.000Z",
-    logger: () => {},
-    maxAttempts: 3,
-  });
-  const result = await actor.run({ ownerId: "owner-a", runId: "run-malformed", points: [points()[0]] });
-  assertEquals(result.ok, true);
-  assertEquals(fixture.attempts.length, 3);
-  assertEquals(fixture.restricted.length, 0);
-  assertEquals(fixture.purged.length, 1);
-  if (!result.ok) return;
-  assertEquals(result.value.dispositions[0].restrictedUntil, null);
+  for (const grade of [{score:10},{score:9,reasons:["Synthetic supported reason"],feedback:["Use one concise answer term."],groundingProblems:[]}]) {
+    const fixture = setup();
+    const actor = createQuizActorCritic({
+      generator: { async generate(command) { return { ok: true, value: { id: `draft-${command.attempt}`, knowledgeId: command.knowledge.id, knowledgeRevision: 1, kind: "single-choice", prompt: "Specific?", options: ["yes", "no"], answer: "yes", citedEvidenceUrls: ["https://example.test/a"] } }; } },
+      evaluator: { async evaluate() { return { ok: true, value: grade }; } },
+      repository: fixture.repository,
+      now: () => "2026-08-13T00:00:00.000Z",
+      logger: () => {},
+      maxAttempts: 3,
+    });
+    const result = await actor.run({ ownerId: "owner-a", runId: "run-malformed", points: [points()[0]] });
+    assertEquals(result.ok, true);
+    assertEquals(fixture.attempts.length, 3);
+    assertEquals(fixture.restricted.length, 0);
+    assertEquals(fixture.published.length, 0);
+    assertEquals(fixture.purged.length, 1);
+    if (!result.ok) return;
+    assertEquals(result.value.dispositions[0].restrictedUntil, null);
+  }
 });
 
 Deno.test("legacy delayed purge still refuses before restriction expiry", async () => {

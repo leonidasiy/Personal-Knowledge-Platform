@@ -8,15 +8,18 @@
 /** @typedef {{readonly providerId:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean,readonly maximumResults:number,readonly timeoutMs:number}} TaddySearchConfiguration */
 /** @typedef {{readonly userId:string,readonly apiKey:string}} TaddyCredentials */
 /** @typedef {{readonly uuid:string,readonly priority:string,readonly priorityReason:string|null,readonly dateLastRefreshed:number}} FeedRefreshEvidence */
-/** @typedef {{readonly uuids:readonly string[],readonly rankings:Map<string,number>}} TaddySearchResult */
+/** @typedef {{readonly uuids:readonly string[],readonly rankings:Map<string,number>,readonly originals:Map<string,Record<string,unknown>>}} TaddySearchResult */
 
 const ENDPOINT = "https://api.taddy.org";
 const SEARCH_SELECTION =
-  `{searchForTerm(term:__TERM__,filterForTypes:PODCASTSERIES,limitPerPage:__LIMIT__,includeSearchOperator:OR,isSafeMode:true){searchId podcastSeries{uuid}rankingDetails{id uuid rankingScore}}}`;
+  `{searchForTerm(term:__TERM__,filterForTypes:PODCASTSERIES,limitPerPage:__LIMIT__,includeSearchOperator:OR,isSafeMode:true){searchId podcastSeries{uuid name description authorName websiteUrl rssUrl}rankingDetails{id uuid rankingScore}}}`;
 const DETAILS_SELECTION =
   `{getMultiplePodcastSeries(uuids:__UUIDS__){
       uuid
       name
+      description
+      authorName
+      websiteUrl
       rssUrl
       isBlocked
       feedRefreshDetails { uuid priority priorityReason dateLastRefreshed }
@@ -45,8 +48,9 @@ export function createTaddySearchProvider(configuration, dependencies) {
   });
   return Object.freeze({
     descriptor,
-    /** @param {SearchProviderCommand} command @returns {Promise<Result<readonly TaddyCandidate[],SearchProviderFailure>>} */
-    async search(command) {
+    /** @param {SearchProviderCommand} command @param {import("./discovery-search.js").SearchExecution} [execution] @returns {Promise<Result<readonly TaddyCandidate[],SearchProviderFailure>>} */
+    async search(command, execution) {
+      if (execution !== undefined && (!(execution.signal instanceof AbortSignal) || typeof execution.remainingMs !== "function")) throw new TypeError("Invalid Taddy execution budget.");
       if (!commandValid(command, descriptor.id)) {
         throw new TypeError("Invalid Taddy search command.");
       }
@@ -61,8 +65,9 @@ export function createTaddySearchProvider(configuration, dependencies) {
           error: { kind: "SearchProviderCredentialRejected" },
         };
       }
-      const signal = dependencies.timeoutSignal(configuration.timeoutMs);
-      if (!(signal instanceof AbortSignal)) {
+      const providerSignal = dependencies.timeoutSignal(configuration.timeoutMs);
+      const signal = execution === undefined ? providerSignal : AbortSignal.any([providerSignal,execution.signal]);
+      if (!(providerSignal instanceof AbortSignal)) {
         throw new TypeError(
           "Taddy timeout dependency returned an invalid signal.",
         );
@@ -92,7 +97,7 @@ export function createTaddySearchProvider(configuration, dependencies) {
       if (!detailsResponse.ok) return detailsResponse;
       const detailsDocument = await readDocument(detailsResponse.value);
       if (!detailsDocument.ok) return detailsDocument;
-      return parseDetailsDocument(detailsDocument.value, descriptor, searchResult.value.rankings);
+      return parseDetailsDocument(detailsDocument.value, descriptor, searchResult.value);
     },
   });
 }
@@ -191,19 +196,22 @@ function parseSearchDocument(value) {
     if (!record(entry) || !uuid(entry.uuid) || typeof entry.rankingScore !== "number" || !Number.isFinite(entry.rankingScore) || entry.rankingScore < 0 || rankings.has(entry.uuid)) return invalid();
     rankings.set(entry.uuid, entry.rankingScore);
   }
+  /** @type {Map<string,Record<string,unknown>>} */ const originals = new Map();
   /** @type {string[]} */ const uuids = [];
   /** @type {Set<string>} */ const seen = new Set();
   for (const item of value.data.searchForTerm.podcastSeries) {
-    if (!record(item) || Object.keys(item).length !== 1 || !uuid(item.uuid) || seen.has(item.uuid) || !rankings.has(item.uuid)) return invalid();
+    if (!record(item) || Object.keys(item).some(key => !["uuid","name","description","authorName","websiteUrl","rssUrl"].includes(key)) || !uuid(item.uuid) || seen.has(item.uuid) || !rankings.has(item.uuid)) return invalid();
     seen.add(item.uuid);
     uuids.push(item.uuid);
+    originals.set(item.uuid,item);
   }
   if (rankings.size !== seen.size) return invalid();
-  return { ok: true, value: Object.freeze({ uuids: Object.freeze(uuids), rankings }) };
+  return { ok: true, value: Object.freeze({ uuids: Object.freeze(uuids), rankings, originals }) };
 }
 
-/** @param {unknown} value @param {SearchProviderDescriptor} descriptor @param {Map<string,number>} rankings @returns {Result<readonly TaddyCandidate[],SearchProviderFailure>} */
-function parseDetailsDocument(value, descriptor, rankings) {
+/** @param {unknown} value @param {SearchProviderDescriptor} descriptor @param {TaddySearchResult} search @returns {Result<readonly TaddyCandidate[],SearchProviderFailure>} */
+function parseDetailsDocument(value, descriptor, search) {
+  const rankings=search.rankings;
   if (!record(value)) return invalid();
   if (value.errors !== undefined) {
     const failure = graphqlFailure(value.errors, "details");
@@ -216,11 +224,11 @@ function parseDetailsDocument(value, descriptor, rankings) {
   for (const item of value.data.getMultiplePodcastSeries) {
     if (!record(item) || !uuid(item.uuid) || seen.has(item.uuid) || !rankings.has(item.uuid)) return invalid();
     seen.add(item.uuid);
-    const parsed = parseSeries(item, descriptor, rankings);
+    const parsed = parseSeries({...item,...search.originals.get(item.uuid)}, descriptor, rankings);
     if (!parsed.ok) return parsed;
-    if (!candidates.has(parsed.value.canonicalUrl)) candidates.set(parsed.value.canonicalUrl, parsed.value);
+    candidates.set(item.uuid, parsed.value);
   }
-  return { ok: true, value: Object.freeze([...candidates.values()]) };
+  return { ok: true, value: Object.freeze(search.uuids.map(uuid => /** @type {TaddyCandidate} */(candidates.get(uuid)))) };
 }
 
 /** @param {unknown} value @param {SearchProviderDescriptor} descriptor @param {Map<string,number>} rankings @returns {Result<TaddyCandidate,SearchProviderFailure>} */
@@ -229,6 +237,9 @@ function parseSeries(value, descriptor, rankings) {
     !record(value) || !uuid(value.uuid) || !boundedText(value.name, 500) ||
     !(value.rssUrl === null || typeof value.rssUrl === "string") ||
     !(value.isBlocked === null || typeof value.isBlocked === "boolean") ||
+    !(value.description === undefined || value.description === null || boundedText(value.description, 20_000)) ||
+    !(value.authorName === undefined || value.authorName === null || boundedText(value.authorName, 500)) ||
+    !(value.websiteUrl === undefined || value.websiteUrl === null || secure(value.websiteUrl)) ||
     !refreshValid(value.feedRefreshDetails)
   ) return invalid();
   const refresh = value.feedRefreshDetails;
@@ -267,16 +278,19 @@ function parseSeries(value, descriptor, rankings) {
       provenanceUrl: value.rssUrl,
     }),
   ];
+  for (const [field, attribute] of [["description", "taddy-series-description"], ["authorName", "taddy-author-name"], ["websiteUrl", "taddy-publisher-website"]]) {
+    if (typeof value[field] === "string") evidence.push(Object.freeze({attribute,value: value[field],provenanceUrl}));
+  }
   return {
     ok: true,
     value: Object.freeze({
       providerId: descriptor.id,
       resultKind: descriptor.resultKind,
       sourceLevel: "feed",
-      title: value.name.trim(),
-      description: null,
+      title: value.name,
+      description: typeof value.description === "string" ? value.description : null,
       canonicalUrl: value.rssUrl,
-      publisherLabel: null,
+      publisherLabel: typeof value.authorName === "string" ? value.authorName : null,
       publishedAt: null,
       identityEvidence: Object.freeze(evidence),
     }),
@@ -390,7 +404,7 @@ function positive(value) {
 /** @param {unknown} value @returns {value is string} */
 function secure(value) {
   return typeof value === "string" && URL.canParse(value) &&
-    new URL(value).protocol === "https:";
+    new URL(value).protocol === "https:" && new URL(value).username === "" && new URL(value).password === "" && new URL(value).hash === "";
 }
 /** @param {unknown} value @returns {value is string} */
 function headerValue(value) {

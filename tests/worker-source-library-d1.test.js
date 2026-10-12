@@ -197,6 +197,27 @@ Deno.test("D1 private-document approval omits the unrelated crawler job", async 
   assertEquals(database.batches[0].some((statement) => statement.query.includes("source_ingestion_jobs")), false);
 });
 
+Deno.test("D1 service retries a legacy private document without rewriting provenance", async () => {
+ const database = new DatabaseFixture();
+ const command = { ownerId: "owner-a", title: "Legacy", fileName: "legacy.txt", idempotencyKey: "legacy-private", applicationOrigin: "https://app.example/" };
+ const basis = "learner-attested lawful copy", reference = "legacy-grant";
+ const url = "https://app.example/api/private-documents/source%3A1";
+ const evidence = [{ attribute: "owner-attested-processing", value: "storage, transformation, and processing allowed", provenanceUrl: url, observedAt: source.approvedAt }, { attribute: "processing-basis", value: basis, provenanceUrl: url, observedAt: source.approvedAt }, { attribute: "processing-reference", value: reference, provenanceUrl: url, observedAt: source.approvedAt }, { attribute: "file-name", value: command.fileName, provenanceUrl: url, observedAt: source.approvedAt }];
+ database.rows.set("idempotency:owner-a|legacy-private", { source_id: source.id, command_fingerprint: JSON.stringify({ ...command, basis, reference }) });
+ database.rows.set(`source:owner-a|${source.id}`, { ...sourceRow(), title: command.title, description: command.fileName, submitted_url: url, canonical_url: url, adapter_json: JSON.stringify({ id: "private-document", version: "v1", granularity: "document", capabilities: ["owner-private-document", "processing-attested"] }), identity_evidence_json: JSON.stringify(evidence), interest_area_ids_json: "[]" });
+ const { SourceLibraryService } = await import("../src/features/source-library/service.js");
+ const service = new SourceLibraryService({ repository: new D1SourceLibraryRepository(database), createId: () => "new", now: () => source.approvedAt, ingestionPolicyVersion: "v1" });
+ const result = await service.createPrivateDocument(command);
+ if (!result.ok || !result.value.reused) throw new Error(result.ok ? "Expected reuse." : result.error.kind);
+ assertEquals(JSON.stringify(result.value.source.identityEvidence), JSON.stringify(evidence));
+ assertEquals(database.batches.length, 0);
+ const different = await service.createPrivateDocument({ ...command, fileName: "different.txt" });
+ if (different.ok || different.error.kind !== "SourceIdempotencyConflict") throw new Error("D1 accepted changed replay.");
+ database.rows.set("idempotency:owner-a|legacy-private", { source_id: source.id, command_fingerprint: "{malformed" });
+ const malformed = await service.createPrivateDocument(command);
+ if (malformed.ok || malformed.error.kind !== "SourceIdempotencyConflict") throw new Error("D1 accepted malformed history.");
+});
+
 Deno.test("D1 individual-resource approval atomically includes its initial item version", async () => {
   const database = new DatabaseFixture();
   database.rows.set("area:owner-a|area-a", { interest_area_id: "area-a" });
@@ -304,7 +325,6 @@ Deno.test("D1 approval and revision require owner-scoped configured interest are
     ownerId: "owner-a",
     sourceId: source.id,
     expectedRevision: 1,
-    idempotencyKey: "revise-1",
     title: "Revised",
     description: "Revised description.",
     interestAreaIds: ["wrong-owner-area"],

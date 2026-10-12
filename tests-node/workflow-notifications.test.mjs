@@ -1,3 +1,4 @@
+import { WEBPAGE_IMAGE_POLICY } from '../worker/webpage-image-budget.js';
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
@@ -213,6 +214,7 @@ test("actual workflow entry sends before retention/waits and preserves extractio
     const actions = [];
     const noOp = () => ({});
     const bindings = {
+      WEBPAGE_IMAGE_POLICY,
       WorkflowEntrypoint: class {},
       puppeteer: {},
       D1KnowledgeWorkflowRepository: class {},
@@ -225,6 +227,9 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       isWorkflowRetryStage,
       createKnowledgeWorkflowLogger: () => noOp,
       createKnowledgeWorkflowBrowser: noOp,
+      createAcquisitionClient: () => ({mediaCapability:{}}),
+      createAcquisitionWorkflowBrowser: noOp,
+      ACQUISITION_POLICY: {},
       createMediaPublicEgress: noOp,
       createMediaPipeline: noOp,
       createOpenSourceImageSearch: noOp,

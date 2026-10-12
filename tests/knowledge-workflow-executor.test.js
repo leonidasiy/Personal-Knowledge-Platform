@@ -38,14 +38,14 @@ Deno.test("executor waits for rights before robots and runs extraction then quiz
   assertEquals(calls.slice(1).join(","), "robots,transition:extraction-loop,extraction,transition:extraction-finalized,transition:per-point-quiz-loop,knowledge,quiz,transition:completed");
 });
 
-Deno.test("executor preserves pause and timeout decisions and rejects an empty knowledge set", async () => {
+Deno.test("executor preserves pause and timeout decisions and completes a reviewed empty knowledge set", async () => {
   /** @type {import("../src/features/knowledge-workflows/executor.js").WorkflowExecutorDependencies} */
   const base = {
     classification: { ensure: async () => ({ ok: true, value: null }) },
     transition: async ({ run: current, nextState }) => ({ ok: true, value: { ...current, state: nextState, revision: current.revision + 1 } }),
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => ({ ok: true, value: { state: "paused", scratchpad: {}, knowledgePointCount: 0, pagesProcessed: 0 } }) },
-    knowledge: { list: async () => ({ ok: true, value: [] }) },
+    knowledge: { list: async () => ({ ok: true, value: [] }), reviewedEmpty:async()=>({ok:true,value:true}) },
     quiz: { run: async () => ({ ok: true, value: { dispositions: [] } }) },
     logger: () => {},
   };
@@ -54,9 +54,13 @@ Deno.test("executor preserves pause and timeout decisions and rejects an empty k
   assertEquals(result.ok, true);
   if (result.ok) assertEquals(result.value.state, "paused");
   const empty = createKnowledgeWorkflowExecutor({ ...base, extraction: { run: async () => ({ ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 0, pagesProcessed: 1 } }) } });
-  const failed = await empty.run({ run: run("extraction-loop"), rootUrl: "https://example.test/learn", rightsAssessment: rights() });
-  assertEquals(failed.ok, false);
-  if (!failed.ok) assertEquals(failed.error.causeKind, "KnowledgeSetEmpty");
+  const completed = await empty.run({ run: run("extraction-loop"), rootUrl: "https://example.test/learn", rightsAssessment: rights() });
+  assertEquals(completed.ok, true);
+  if (completed.ok) assertEquals(completed.value.state, "completed");
+  const unexplained = createKnowledgeWorkflowExecutor({ ...base, knowledge: { list:async()=>({ok:true,value:[]}), reviewedEmpty:async()=>({ok:true,value:false}) }, extraction: { run:async()=>({ok:true,value:{state:"completed",scratchpad:{},knowledgePointCount:0,pagesProcessed:1}}) } });
+  const rejected = await unexplained.run({run:run("extraction-loop"),rootUrl:"https://example.test/learn",rightsAssessment:rights()});
+  assertEquals(rejected.ok,false);
+  if(!rejected.ok)assertEquals(rejected.error.causeKind,"KnowledgeSetEmpty");
 });
 
 Deno.test("executor turns a hard browser access block into an upload-required outcome", async () => {

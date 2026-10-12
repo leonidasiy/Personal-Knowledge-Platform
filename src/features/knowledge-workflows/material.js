@@ -10,7 +10,9 @@ import { BUNDLE_TYPE, imageSignature, parseImageBundle } from "./image-upload.js
 /** @typedef {{ readonly id: string, readonly title: string, readonly text: string, readonly locator: string }} MaterialSection */
 /** @typedef {{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number, readonly sourceUrl: string, readonly mediaType: string, readonly fileName: string, readonly mode: "text" | "image", readonly contentDigest: string, readonly sections: readonly MaterialSection[], readonly media: readonly MaterialMedia[], readonly provenance: { readonly kind: "authorized-user-material", readonly attestationReference: string, readonly basis: string, readonly processingAllowed?: true } }} AuthorizedMaterial */
 
-/** @typedef {{ readonly kind: "MaterialCommandInvalid", readonly field: string } | { readonly kind: "MaterialRightsAttestationMissing" } | { readonly kind: "MaterialContentTypeUnsupported", readonly mediaType: string } | { readonly kind: "MaterialImageModeUnsupported", readonly mediaType: string } | { readonly kind: "MaterialImageInvalid" | "MaterialImageBundleInvalid" } | { readonly kind: "MaterialByteLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialTextLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialEncodingInvalid" } | { readonly kind: "MaterialDigestUnavailable" } | { readonly kind: "MaterialPdfInvalid" } | { readonly kind: "MaterialPdfEncrypted" } | { readonly kind: "MaterialPdfCleanupFailed" } | { readonly kind: "MaterialPdfPageLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialPdfTextExtractionUnavailable" } | { readonly kind: "MaterialPptxInvalid" } | { readonly kind: "MaterialPptxTextExtractionUnavailable" } | { readonly kind: "MaterialPptxCompressionUnsupported" } | { readonly kind: "MaterialArchiveTooLarge" }} MaterialFailure */
+/** @typedef {{ readonly kind: "MaterialCommandInvalid", readonly field: string } | { readonly kind: "MaterialRightsAttestationMissing" } | { readonly kind: "MaterialContentTypeUnsupported", readonly mediaType: string } | { readonly kind: "MaterialImageModeUnsupported", readonly mediaType: string } | { readonly kind: "MaterialImageInvalid" | "MaterialImageBundleInvalid" } | { readonly kind: "MaterialByteLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialTextLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialEncodingInvalid" } | { readonly kind: "MaterialDigestUnavailable" } | { readonly kind: "MaterialPdfInvalid" } | { readonly kind: "MaterialPdfEncrypted" } | { readonly kind: "MaterialPdfCleanupFailed" } | { readonly kind: "MaterialPdfPageLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialPdfTextExtractionUnavailable" } | { readonly kind: "MaterialPdfSelectionMissing" | "MaterialPdfSelectionAmbiguous" } | { readonly kind: "MaterialPdfSelectionInvalid" | "MaterialPdfSelectionConflict", readonly field: string } | { readonly kind: "MaterialPptxInvalid" } | { readonly kind: "MaterialPptxTextExtractionUnavailable" } | { readonly kind: "MaterialPptxCompressionUnsupported" } | { readonly kind: "MaterialArchiveTooLarge" }} MaterialFailure */
+
+/** @typedef {{ readonly sourceDigest: string, readonly physicalPage: number, readonly textCodepointRange: readonly [number, number], readonly excerptDigest: string }} PdfTextSelection */
 
 /** @typedef {{ readonly digest: (bytes: Uint8Array) => Promise<string>, readonly maximumBytes: number, readonly maximumCharacters: number }} MaterialDependencies */
 
@@ -34,7 +36,24 @@ function timestamp(value) { return text(value) && Number.isFinite(Date.parse(val
 /** @param {unknown} value @returns {boolean} */
 function secureUrl(value) { return text(value) && URL.canParse(value) && new URL(value).protocol === "https:"; }
 
-/** @param {unknown} input @returns {Result<{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number, readonly sourceUrl: string, readonly mediaType: string, readonly fileName: string, readonly mode: "text" | "image", readonly bytes: Uint8Array, readonly rightsAttestation: MaterialRightsAttestation, readonly idempotencyKey: string }, MaterialFailure>} */
+/** @param {unknown} selection @param {string} sourceDigest @returns {Result<PdfTextSelection, MaterialFailure>} */
+export function validatePdfTextSelection(selection, sourceDigest) {
+  if (!text(sourceDigest)) throw new TypeError("PDF selection source digest is invalid.");
+  if (selection === undefined || selection === null) return { ok: false, error: { kind: "MaterialPdfSelectionMissing" } };
+  if (Array.isArray(selection)) return { ok: false, error: { kind: "MaterialPdfSelectionAmbiguous" } };
+  if (!record(selection) || Object.keys(selection).sort().join(",") !== "excerptDigest,physicalPage,sourceDigest,textCodepointRange" ||
+    typeof selection.sourceDigest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(selection.sourceDigest) ||
+    typeof selection.excerptDigest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(selection.excerptDigest) || !positiveInteger(selection.physicalPage) ||
+    !Array.isArray(selection.textCodepointRange) || selection.textCodepointRange.length !== 2 ||
+    !Number.isSafeInteger(selection.textCodepointRange[0]) || selection.textCodepointRange[0] < 0 ||
+    !Number.isSafeInteger(selection.textCodepointRange[1]) || selection.textCodepointRange[1] <= selection.textCodepointRange[0])
+    return { ok: false, error: { kind: "MaterialPdfSelectionInvalid", field: "physicalPage/textCodepointRange/digests" } };
+  if (selection.sourceDigest !== sourceDigest) return { ok: false, error: { kind: "MaterialPdfSelectionConflict", field: "sourceDigest" } };
+  return { ok: true, value: freeze({ sourceDigest: selection.sourceDigest, physicalPage: selection.physicalPage,
+    textCodepointRange: freeze(/** @type {[number, number]} */ ([selection.textCodepointRange[0], selection.textCodepointRange[1]])), excerptDigest: selection.excerptDigest }) };
+}
+
+/** @param {unknown} input @returns {Result<{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number, readonly sourceUrl: string, readonly mediaType: string, readonly fileName: string, readonly mode: "text" | "image", readonly bytes: Uint8Array, readonly rightsAttestation: MaterialRightsAttestation, readonly idempotencyKey: string, readonly pdfTextSelection?: PdfTextSelection }, MaterialFailure>} */
 function validateCommand(input) {
   if (!record(input)) return invalid("command");
   const candidate = /** @type {Record<string, unknown>} */ (input);
@@ -42,8 +61,7 @@ function validateCommand(input) {
   if (!positiveInteger(candidate.sourceRevision)) return invalid("sourceRevision");
   if (!secureUrl(candidate.sourceUrl)) return invalid("sourceUrl");
   if (!(candidate.bytes instanceof Uint8Array)) return invalid("bytes");
-  if (!record(candidate.rightsAttestation) || candidate.rightsAttestation.ownsOrPermitted !== true || candidate.rightsAttestation.storageAllowed !== true || candidate.rightsAttestation.transformationAllowed !== true || candidate.rightsAttestation.processingAllowed !== true || !text(candidate.rightsAttestation.basis) || !text(candidate.rightsAttestation.reference)) return { ok: false, error: { kind: "MaterialRightsAttestationMissing" } };
-  const attestation = /** @type {MaterialRightsAttestation} */ (candidate.rightsAttestation);
+  const attestation = {basis:"user-owned upload authorization",reference:`user-upload:${candidate.idempotencyKey}`};
   const ownerId = /** @type {string} */ (candidate.ownerId);
   const runId = /** @type {string} */ (candidate.runId);
   const sourceId = /** @type {string} */ (candidate.sourceId);
@@ -51,8 +69,8 @@ function validateCommand(input) {
   const mediaType = /** @type {string} */ (candidate.mediaType);
   const fileName = /** @type {string} */ (candidate.fileName);
   const idempotencyKey = /** @type {string} */ (candidate.idempotencyKey);
-  const mode = candidate.mode === undefined ? "text" : candidate.mode;
-  if (mode !== "text" && mode !== "image") return invalid("mode");
+  if (candidate.mode !== undefined && candidate.mode !== "text" && candidate.mode !== "image") return invalid("mode");
+  const mode = imageTypes.has(mediaType.trim().toLowerCase()) || mediaType.trim().toLowerCase() === BUNDLE_TYPE ? "image" : candidate.mode === "image" ? "image" : "text";
   const sourceRevision = /** @type {number} */ (candidate.sourceRevision);
   const bytes = /** @type {Uint8Array} */ (candidate.bytes);
   return { ok: true, value: freeze({ ownerId: ownerId.trim(), runId: runId.trim(), sourceId: sourceId.trim(), sourceRevision, sourceUrl: new URL(sourceUrl).href, mediaType: mediaType.trim().toLowerCase(), fileName: fileName.trim(), mode, bytes, rightsAttestation: freeze({ ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: attestation.basis.trim(), reference: attestation.reference.trim() }), idempotencyKey: idempotencyKey.trim() }) };
@@ -69,12 +87,17 @@ export async function parseAuthorizedMaterial(command, dependencies) {
   if (!textTypes.has(value.mediaType) && value.mediaType !== pdfType && value.mediaType !== pptxType && value.mediaType !== BUNDLE_TYPE && !imageTypes.has(value.mediaType)) return { ok: false, error: { kind: "MaterialContentTypeUnsupported", mediaType: value.mediaType } };
   if (value.mode === "image" && value.mediaType !== BUNDLE_TYPE && !imageTypes.has(value.mediaType)) return { ok: false, error: { kind: "MaterialImageModeUnsupported", mediaType: value.mediaType } };
   if (value.mode === "text" && value.mediaType === BUNDLE_TYPE) return { ok: false, error: { kind: "MaterialImageModeUnsupported", mediaType: value.mediaType } };
+  if (Object.hasOwn(/** @type {object} */ (command), "pdfTextSelection") && value.mediaType !== pdfType) return invalid("pdfTextSelection/mediaType");
   let digest;
   try { digest = await dependencies.digest(value.bytes); } catch (error) { return { ok: false, error: { kind: "MaterialDigestUnavailable" } }; }
   if (!text(digest)) return { ok: false, error: { kind: "MaterialDigestUnavailable" } };
   if (value.mode === "image") return value.mediaType === BUNDLE_TYPE ? parseBundledImages(value, digest) : parseImage(value, digest);
   if (textTypes.has(value.mediaType)) return parseText(value, digest, dependencies.maximumCharacters);
-  if (value.mediaType === pdfType) return await parsePdf(value, digest, dependencies.maximumCharacters);
+  if (value.mediaType === pdfType) {
+    const selected = Object.hasOwn(/** @type {object} */ (command), "pdfTextSelection") ? validatePdfTextSelection(/** @type {Record<string, unknown>} */ (command).pdfTextSelection, digest) : null;
+    if (selected !== null && !selected.ok) return selected;
+    return await parsePdf({ ...value, ...(selected?.ok ? { pdfTextSelection: selected.value } : {}) }, digest, dependencies);
+  }
   return await parsePptx(value, digest, dependencies.maximumCharacters, dependencies.maximumBytes);
 }
 
@@ -103,10 +126,12 @@ function parseBundledImages(value, digest) {
   return { ok: true, value: material(value, digest, sections, media, "image-bundle") };
 }
 
-/** @param {ReturnType<typeof validateCommand> extends infer T ? T extends { readonly ok: true, readonly value: infer V } ? V : never : never} value @param {string} digest @param {number} maximumCharacters @returns {Promise<Result<AuthorizedMaterial, MaterialFailure>>} */
-async function parsePdf(value, digest, maximumCharacters) {
+/** @param {ReturnType<typeof validateCommand> extends infer T ? T extends { readonly ok: true, readonly value: infer V } ? V : never : never} value @param {string} digest @param {MaterialDependencies} dependencies @returns {Promise<Result<AuthorizedMaterial, MaterialFailure>>} */
+async function parsePdf(value, digest, dependencies) {
   /** @type {ReturnType<Awaited<ReturnType<typeof getResolvedPDFJS>>["getDocument"]> | null} */
   let loadingTask = null;
+  const { maximumCharacters } = dependencies;
+  const selection = value.pdfTextSelection;
   /** @type {Result<AuthorizedMaterial, MaterialFailure> | null} */
   let result = null;
   try {
@@ -126,19 +151,30 @@ async function parsePdf(value, digest, maximumCharacters) {
     loadingTask = pdfjs.getDocument(options);
     const document = await loadingTask.promise;
     if (!positiveInteger(document.numPages)) result = { ok: false, error: { kind: "MaterialPdfInvalid" } };
-    else if (document.numPages > MAXIMUM_PDF_PAGES) result = { ok: false, error: { kind: "MaterialPdfPageLimitExceeded", maximum: MAXIMUM_PDF_PAGES } };
+    else if (selection !== undefined && selection.physicalPage > document.numPages) result = { ok: false, error: { kind: "MaterialPdfSelectionInvalid", field: "physicalPage" } };
+    else if (selection === undefined && document.numPages > MAXIMUM_PDF_PAGES) result = { ok: false, error: { kind: "MaterialPdfPageLimitExceeded", maximum: MAXIMUM_PDF_PAGES } };
     else {
       const sections = [];
       let totalCharacters = 0;
-      for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      for (let pageNumber = selection?.physicalPage ?? 1; pageNumber <= (selection?.physicalPage ?? document.numPages); pageNumber += 1) {
         const page = await document.getPage(pageNumber);
         const textContent = await page.getTextContent();
         const strings = [];
         for (const item of textContent.items) if (textItem(item)) strings.push(item.str + (item.hasEOL ? "\n" : ""));
-        const content = normalizeText(strings.join(""));
+        let content = selection === undefined ? normalizeText(strings.join("")) : strings.join("").trim();
+        if (selection !== undefined) {
+          const codepoints = Array.from(content), [start, end] = selection.textCodepointRange;
+          if (end > codepoints.length) { result = { ok: false, error: { kind: "MaterialPdfSelectionInvalid", field: "textCodepointRange" } }; break; }
+          content = codepoints.slice(start, end).join("");
+          let excerptDigest;
+          try { excerptDigest = await dependencies.digest(new TextEncoder().encode(content)); }
+          catch (error) { if (!(error instanceof Error)) throw error; result = { ok: false, error: { kind: "MaterialDigestUnavailable" } }; break; }
+          if (!text(excerptDigest)) { result = { ok: false, error: { kind: "MaterialDigestUnavailable" } }; break; }
+          if (excerptDigest !== selection.excerptDigest) { result = { ok: false, error: { kind: "MaterialPdfSelectionConflict", field: "excerptDigest" } }; break; }
+        }
         totalCharacters += content.length;
         if (totalCharacters > maximumCharacters) { result = { ok: false, error: { kind: "MaterialTextLimitExceeded", maximum: maximumCharacters } }; break; }
-        sections.push(freeze({ id: `page-${pageNumber}`, title: `Page ${pageNumber}`, text: content, locator: `page:${pageNumber}` }));
+        sections.push(freeze({ id: `page-${pageNumber}`, title: `Page ${pageNumber}`, text: content, locator: selection === undefined ? `page:${pageNumber}` : `pdf:page=${pageNumber};text-codepoints=${selection.textCodepointRange[0]}:${selection.textCodepointRange[1]}` }));
       }
       if (result === null) result = totalCharacters === 0 ? { ok: false, error: { kind: "MaterialPdfTextExtractionUnavailable" } } : { ok: true, value: material(value, digest, sections, [], "pdf") };
     }

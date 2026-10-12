@@ -33,6 +33,10 @@
  * @typedef {{
  *   readonly url: string,
  *   readonly selector: string,
+ *   readonly blockId?: string,
+ *   readonly visibleEvidence?: string,
+ *   readonly quote?: string,
+ *   readonly clause?: string,
  *   readonly quoteDigest?: string
  * }} EvidenceAnchor
  */
@@ -62,6 +66,7 @@
 /**
  * @typedef {{
  *   readonly url: string,
+ *   readonly responseUrl?: string,
  *   readonly title: string,
  *   readonly byteCount: number,
  *   readonly redirects: number,
@@ -100,6 +105,7 @@
  *   readonly frontier?: readonly string[],
  *   readonly discoveredUrls?: readonly string[],
  *   readonly acceptedHashes: readonly string[],
+ *   readonly reviewedCandidateCount?: number,
  *   readonly similarityEvidence: readonly { readonly candidateHash: string, readonly comparedLocalHash: string, readonly score: number, readonly decision: SimilarityEvidence["decision"] }[],
  *   readonly coverage: readonly string[],
  *   readonly unresolvedGaps: readonly ExtractionGap[],
@@ -186,6 +192,7 @@
  *   readonly checkRobots?: (targetUrl: string) => Promise<Result<unknown, unknown>>,
  *   readonly scratchpad: ScratchpadRepository,
  *   readonly knowledge: KnowledgeRepository,
+ *   readonly reviewer?: { readonly review: (point: KnowledgePoint, observation: PageObservation) => Promise<Result<KnowledgePoint | null, { readonly kind: string }>> },
  *   readonly memory?: ExtractionMemory,
  *   readonly now: () => string,
  *   readonly nowMs: () => number,
@@ -230,7 +237,7 @@ function validStopDecision(value) {
 }
 
 /** @param {unknown} value @returns {value is EvidenceAnchor} */
-function validAnchor(value) { return isRecord(value) && (JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["selector", "url"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["quoteDigest", "selector", "url"])) && publicHttps(value.url) && text(value.selector) && (value.quoteDigest === undefined || text(value.quoteDigest)); }
+function validAnchor(value) { return isRecord(value) && (JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["selector", "url"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["selector", "url", "visibleEvidence"]) && text(value.visibleEvidence) && value.visibleEvidence.length <= 500 || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["quoteDigest", "selector", "url"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["blockId", "clause", "quote", "quoteDigest", "selector", "url"])) && publicHttps(value.url) && text(value.selector) && (value.quoteDigest === undefined || text(value.quoteDigest)) && (value.blockId === undefined || text(value.blockId) && text(value.quote) && text(value.clause)); }
 /** @param {unknown} value @returns {value is SimilarityEvidence} */
 function validSimilarity(value) { return isRecord(value) && JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["comparedLocalHash", "decision", "score"]) && text(value.comparedLocalHash) && typeof value.score === "number" && value.score >= 0 && value.score <= 1 && (value.decision === "distinct" || value.decision === "merge" || value.decision === "ambiguous"); }
 /** @param {unknown} value @returns {value is VisualMediaReference} */
@@ -238,15 +245,15 @@ function validVisualMediaReference(value) { return isRecord(value) && JSON.strin
 /** @param {unknown} value @returns {value is KnowledgeCandidate} */
 function validCandidate(value) { return isRecord(value) && (JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "similarity", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["classification", "coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["classification", "coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "similarity", "summary"])) && text(value.summary) && text(value.normalizedHash) && Array.isArray(value.evidenceAnchors) && value.evidenceAnchors.length > 0 && value.evidenceAnchors.every(validAnchor) && Array.isArray(value.coverageGoalIds) && value.coverageGoalIds.every(text) && Array.isArray(value.mediaCandidates) && value.mediaCandidates.length <= 1 && (value.similarity === undefined || validSimilarity(value.similarity)); }
 /** @param {unknown} value @returns {value is PageObservation} */
-function validObservation(value) { return isRecord(value) && publicHttps(value.url) && text(value.title) && nonNegativeInteger(value.byteCount) && nonNegativeInteger(value.redirects) && Array.isArray(value.links) && value.links.every(publicHttps) && timestamp(value.observedAt) && Array.isArray(value.candidates) && value.candidates.every(validCandidate) && (value.notes === undefined || (text(value.notes) && value.notes.length <= 2_000)); }
+function validObservation(value) { return isRecord(value) && publicHttps(value.url) && (value.responseUrl===undefined||publicHttps(value.responseUrl)) && text(value.title) && nonNegativeInteger(value.byteCount) && nonNegativeInteger(value.redirects) && Array.isArray(value.links) && value.links.every(publicHttps) && timestamp(value.observedAt) && Array.isArray(value.candidates) && value.candidates.every(validCandidate) && (value.notes === undefined || (typeof value.notes === "string" && value.notes.length <= 2_000)); }
 
 /** @param {unknown} value @returns {value is ExtractionPageNote} */
-function validPageNote(value) { return isRecord(value) && publicHttps(value.url) && text(value.title) && text(value.note) && value.note.length <= 2_000 && timestamp(value.observedAt) && nonNegativeInteger(value.linkCount) && nonNegativeInteger(value.candidateCount); }
+function validPageNote(value) { return isRecord(value) && publicHttps(value.url) && (value.responseUrl===undefined||publicHttps(value.responseUrl)) && text(value.title) && text(value.note) && value.note.length <= 2_000 && timestamp(value.observedAt) && nonNegativeInteger(value.linkCount) && nonNegativeInteger(value.candidateCount); }
 
 /** @param {unknown} value @returns {value is ExtractionScratchpad} */
 function validScratchpad(value) {
   return isRecord(value) && text(value.ownerId) && text(value.runId) && text(value.sourceId) && positiveInteger(value.sourceRevision) &&
-    Array.isArray(value.processedUrls) && value.processedUrls.every(publicHttps) && (value.frontier === undefined || (Array.isArray(value.frontier) && value.frontier.every(publicHttps))) && (value.discoveredUrls === undefined || (Array.isArray(value.discoveredUrls) && value.discoveredUrls.every(publicHttps))) && Array.isArray(value.acceptedHashes) && value.acceptedHashes.every(text) &&
+    Array.isArray(value.processedUrls) && value.processedUrls.every(publicHttps) && (value.frontier === undefined || (Array.isArray(value.frontier) && value.frontier.every(publicHttps))) && (value.discoveredUrls === undefined || (Array.isArray(value.discoveredUrls) && value.discoveredUrls.every(publicHttps))) && Array.isArray(value.acceptedHashes) && value.acceptedHashes.every(text) && (value.reviewedCandidateCount === undefined || nonNegativeInteger(value.reviewedCandidateCount)) &&
     Array.isArray(value.similarityEvidence) && value.similarityEvidence.every((entry) => isRecord(entry) && text(entry.candidateHash) && text(entry.comparedLocalHash) && typeof entry.score === "number" && entry.score >= 0 && entry.score <= 1 && (entry.decision === "distinct" || entry.decision === "merge" || entry.decision === "ambiguous")) &&
     Array.isArray(value.coverage) && value.coverage.every(text) && Array.isArray(value.unresolvedGaps) && value.unresolvedGaps.every(validGap) && nonNegativeInteger(value.consecutiveNoveltyZero) && (value.pageNotes === undefined || (Array.isArray(value.pageNotes) && value.pageNotes.length <= 100 && value.pageNotes.every(validPageNote))) && positiveInteger(value.revision) &&
     (value.pendingBatch === undefined || (isRecord(value.pendingBatch) && text(value.pendingBatch.key) && validPlan(value.pendingBatch.plan) && Array.isArray(value.pendingBatch.observations) && value.pendingBatch.observations.length > 0 && value.pendingBatch.observations.length <= 5 && value.pendingBatch.observations.every(validObservation) && new Set(value.pendingBatch.observations.map((page) => page.url)).size === value.pendingBatch.observations.length));
@@ -353,8 +360,8 @@ export function createExtractionRunner(dependencies) {
         if (observedMs >= command.deadlineAtMs) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "time-limit" }) };
         const nextUrl = scratchpad.pendingBatch?.observations[0]?.url ?? pendingFrontierUrl(currentPlan, scratchpad);
         if (nextUrl === null) {
-          if (scratchpad.acceptedHashes.length === 0) return fail({ kind: "KnowledgeSetEmpty" }, dependencies, command.runId);
-          if (planIsComplete(currentPlan, scratchpad)) {
+          if (scratchpad.acceptedHashes.length === 0 && !((scratchpad.reviewedCandidateCount??0) > 0)) return fail({ kind: "KnowledgeSetEmpty" }, dependencies, command.runId);
+          if (planIsComplete(currentPlan, scratchpad) || scratchpad.acceptedHashes.length === 0 && (scratchpad.reviewedCandidateCount ?? 0) > 0) {
             dependencies.logger({ event: "knowledge-extraction-success", runId: command.runId });
             return { ok: true, value: freeze({ state: "completed", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "agent-complete" }) };
           }
@@ -406,8 +413,10 @@ export function createExtractionRunner(dependencies) {
         const observation = acquired.value;
         if (!validObservation(observation)) return fail({ kind: "ExtractionObservationInvalid", field: "observation" }, dependencies, command.runId);
         if (observation.url !== destination.href || new URL(observation.url).origin !== root.origin || !withinPath(root, new URL(observation.url))) return fail({ kind: "UnsafeDestination" }, dependencies, command.runId);
-        if (observation.candidates.some((candidate) => candidate.evidenceAnchors.some((anchor) => anchor.url !== observation.url))) return fail({ kind: "ExtractionObservationInvalid", field: "evidenceAnchors" }, dependencies, command.runId);
+        if(observation.responseUrl!==undefined&&(new URL(observation.responseUrl).origin!==root.origin||!withinPath(root,new URL(observation.responseUrl))))return fail({kind:"UnsafeDestination"},dependencies,command.runId);
+        if (observation.candidates.some((candidate) => candidate.evidenceAnchors.some((anchor) => anchor.url !== (observation.responseUrl??observation.url)))) return fail({ kind: "ExtractionObservationInvalid", field: "evidenceAnchors" }, dependencies, command.runId);
         const coverageGoalIds = new Set(currentPlan.coverageGoals.map((goal) => goal.id));
+        if(observation.responseUrl!==undefined&&(new URL(observation.responseUrl).origin!==root.origin||!withinPath(root,new URL(observation.responseUrl))))return fail({kind:"UnsafeDestination"},dependencies,command.runId);
         if (observation.candidates.some((candidate) => candidate.coverageGoalIds.some((goalId) => !coverageGoalIds.has(goalId)))) return fail({ kind: "ExtractionObservationInvalid", field: "coverageGoalIds" }, dependencies, command.runId);
         if (observation.byteCount > dependencies.policy.maximumPageBytes) return fail({ kind: "ExtractionLimitExceeded", limit: "page-bytes" }, dependencies, command.runId);
         if (observation.redirects > dependencies.policy.maximumRedirects) return fail({ kind: "ExtractionLimitExceeded", limit: "redirects" }, dependencies, command.runId);
@@ -416,17 +425,26 @@ export function createExtractionRunner(dependencies) {
         if (!pageMemory.ok) return pageMemory;
         let novel = 0;
         for (const candidate of observation.candidates) {
-          if (scratchpad.acceptedHashes.includes(candidate.normalizedHash)) continue;
-          if (candidate.similarity?.decision === "ambiguous") return fail({ kind: "KnowledgeDuplicateAmbiguous" }, dependencies, command.runId);
+          if (dependencies.reviewer === undefined && scratchpad.acceptedHashes.includes(candidate.normalizedHash)) continue;
+          if (dependencies.reviewer === undefined && candidate.similarity?.decision === "ambiguous") return fail({ kind: "KnowledgeDuplicateAmbiguous" }, dependencies, command.runId);
           if (candidate.similarity !== undefined) scratchpad = cloneScratchpad({ ...scratchpad, similarityEvidence: [...scratchpad.similarityEvidence, { candidateHash: candidate.normalizedHash, comparedLocalHash: candidate.similarity.comparedLocalHash, score: candidate.similarity.score, decision: candidate.similarity.decision }] });
-          if (candidate.similarity?.decision === "merge") continue;
-          const point = /** @type {KnowledgePoint} */ (freeze({ id: `knowledge:${command.sourceId}:${command.sourceRevision}:${candidate.normalizedHash}`, sourceId: command.sourceId, sourceRevision: command.sourceRevision, summary: candidate.summary, normalizedHash: candidate.normalizedHash, evidenceAnchors: freeze(candidate.evidenceAnchors.map((anchor) => freeze({ ...anchor }))), coverageGoalIds: freeze([...candidate.coverageGoalIds]), mediaCandidates: freeze([...candidate.mediaCandidates]), attribution: freeze({ sourceUrl: observation.url }), extractionVersion }));
+          if (dependencies.reviewer === undefined && candidate.similarity?.decision === "merge") continue;
+          let point = /** @type {KnowledgePoint} */ (freeze({ id: `knowledge:${command.sourceId}:${command.sourceRevision}:${candidate.normalizedHash}`, sourceId: command.sourceId, sourceRevision: command.sourceRevision, summary: candidate.summary, normalizedHash: candidate.normalizedHash, evidenceAnchors: freeze(candidate.evidenceAnchors.map((anchor) => freeze({ ...anchor }))), coverageGoalIds: freeze([...candidate.coverageGoalIds]), mediaCandidates: freeze([...candidate.mediaCandidates]), attribution: freeze({ sourceUrl: observation.responseUrl??observation.url }), extractionVersion }));
+          if (dependencies.reviewer !== undefined) {
+            let reviewed;
+            try { reviewed = await dependencies.reviewer.review(point, observation); } catch (error) { return fail({ kind: "KnowledgePersistenceFailed", causeKind: "KnowledgeReviewFailed" }, dependencies, command.runId); }
+            if (!reviewed.ok) return fail({kind:"KnowledgePersistenceFailed",causeKind:reviewed.error.kind},dependencies,command.runId);
+            scratchpad = cloneScratchpad({...scratchpad,reviewedCandidateCount:(scratchpad.reviewedCandidateCount??0)+1});
+            if (reviewed.value === null) continue;
+            point = reviewed.value;
+            if (!validCandidate({summary:point.summary,normalizedHash:point.normalizedHash,evidenceAnchors:point.evidenceAnchors,coverageGoalIds:point.coverageGoalIds,mediaCandidates:point.mediaCandidates}) || point.sourceId !== command.sourceId || point.sourceRevision !== command.sourceRevision || point.evidenceAnchors.some(anchor=>!candidate.evidenceAnchors.some(original=>original.url===anchor.url&&original.selector===anchor.selector&&original.blockId===anchor.blockId&&original.quoteDigest===anchor.quoteDigest&&original.quote===anchor.quote)) || point.coverageGoalIds.some(id=>!candidate.coverageGoalIds.includes(id)) || point.attribution.sourceUrl !== (observation.responseUrl??observation.url)) return fail({kind:"KnowledgePersistenceFailed",causeKind:"KnowledgeReviewOutputInvalid"},dependencies,command.runId);
+          }
           let appended;
           try { appended = await dependencies.knowledge.append(point); } catch (error) { const causeKind = isRecord(error) && text(error.kind) ? error.kind : "KnowledgeRepositoryRejected"; return fail({ kind: "KnowledgePersistenceFailed", causeKind }, dependencies, command.runId); }
           if (!appended.ok) { const causeKind = isRecord(appended.error) && text(appended.error.kind) ? appended.error.kind : undefined; return fail({ kind: "KnowledgePersistenceFailed", ...(causeKind === undefined || causeKind === "KnowledgePersistenceFailed" ? {} : { causeKind }) }, dependencies, command.runId); }
           const acceptedMemory = await remember(dependencies.memory, "durable-fact", "source", { phase: "knowledge-accepted", knowledgeId: point.id, normalizedHash: point.normalizedHash, evidenceDigests: point.evidenceAnchors.flatMap((anchor) => anchor.quoteDigest === undefined ? [] : [anchor.quoteDigest]).slice(0, 50), coverageGoalIds: point.coverageGoalIds.slice(0, 50), sourceUrl: observation.url }, dependencies, command.runId);
           if (!acceptedMemory.ok) return acceptedMemory;
-          scratchpad = cloneScratchpad({ ...scratchpad, acceptedHashes: [...scratchpad.acceptedHashes, candidate.normalizedHash], coverage: [...new Set([...scratchpad.coverage, ...candidate.coverageGoalIds])] });
+          scratchpad = cloneScratchpad({ ...scratchpad, acceptedHashes: [...new Set([...scratchpad.acceptedHashes, point.normalizedHash])], coverage: [...new Set([...scratchpad.coverage, ...point.coverageGoalIds])] });
           novel += 1;
         }
         const nextZero = novel === 0 ? scratchpad.consecutiveNoveltyZero + 1 : 0;
@@ -472,8 +490,8 @@ export function createExtractionRunner(dependencies) {
           if (!unresolvedMemory.ok) return unresolvedMemory;
         }
         if (currentPlan.stopDecision.decision === "complete") {
-          if (pendingFrontierUrl(currentPlan, scratchpad) !== null || !coverageComplete(currentPlan, scratchpad) || currentPlan.unresolvedGaps.some((gap) => gap.priority === "high")) return fail({ kind: "ExtractionCoverageIncomplete" }, dependencies, command.runId);
-          if (scratchpad.acceptedHashes.length === 0) return fail({ kind: "KnowledgeSetEmpty" }, dependencies, command.runId);
+          if (pendingFrontierUrl(currentPlan, scratchpad) !== null || (!(scratchpad.acceptedHashes.length === 0 && (scratchpad.reviewedCandidateCount??0) > 0) && (!coverageComplete(currentPlan, scratchpad) || currentPlan.unresolvedGaps.some((gap) => gap.priority === "high")))) return fail({ kind: "ExtractionCoverageIncomplete" }, dependencies, command.runId);
+          if (scratchpad.acceptedHashes.length === 0 && !((scratchpad.reviewedCandidateCount??0) > 0)) return fail({ kind: "KnowledgeSetEmpty" }, dependencies, command.runId);
           dependencies.logger({ event: "knowledge-extraction-success", runId: command.runId });
           return { ok: true, value: freeze({ state: "completed", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "agent-complete" }) };
         }

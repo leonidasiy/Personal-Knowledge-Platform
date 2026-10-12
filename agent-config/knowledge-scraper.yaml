@@ -1,8 +1,9 @@
 role: knowledge-scraper
-version: knowledge-scraper-v8
+version: knowledge-scraper-v9
 model:
   provider: openrouter
   name: z-ai/glm-5.3-flash
+  reasoningEffort: high
 procedureVersion: scraper-procedure-v4
 promptVersion: scraper-prompt-v7
 inputSchema: extraction-handoff-v1

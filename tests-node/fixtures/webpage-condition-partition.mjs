@@ -1,0 +1,3 @@
+/** Synthetic test protocol only; never convert historical provider outputs. */
+export const syntheticRelationshipUnits=candidates=>candidates.map((candidate,index)=>({condition:null,relationship:typeof candidate?.summary==='string'&&candidate.summary.trim()?candidate.summary:'Synthetic malformed child.',childNormalizedHash:typeof candidate?.normalizedHash==='string'&&candidate.normalizedHash.trim()?candidate.normalizedHash:'synthetic-invalid-child-'+index}));
+export const syntheticPartitionReviews=reviews=>reviews.map(review=>({...review,...(Array.isArray(review?.candidates)?{relationshipUnits:syntheticRelationshipUnits(review.candidates)}:{})}));

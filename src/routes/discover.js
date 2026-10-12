@@ -2,7 +2,7 @@
 
 /** @typedef {"never-run" | "loading" | "partial" | "error" | "offline" | "empty" | "success"} DiscoverRouteState */
 /** @typedef {"link-only" | "learner-notes" | "publisher-transcript" | "user-original"} DiscoverEvidenceStatus */
-/** @typedef {{readonly route:string,readonly controls:string,readonly missingDetail:string,readonly selectDetail:string,readonly evidenceBoundary:string,readonly statePanel:string,readonly results:string,readonly resultRow:string,readonly youtubeConnected:string,readonly youtubeDisconnected:string,readonly youtubeUnavailable:string,readonly failureMessages:Readonly<Record<string,string>>,readonly youtubeSource:import("../startup/discovery-runtime.js").YouTubeSourceContract,readonly sourceUnavailable:string,readonly sourceLink:string,readonly detail:string,readonly youtubePolicy:string,readonly manualUpload:string,readonly decisionActions:string,readonly sourceAreaRequired:string,readonly sourceAlreadyAdded:string,readonly sourceAdded:string,readonly uploadRequired:string,readonly uploadReadFailed:string,readonly uploadStoreFailed:string,readonly uploadStored:string,readonly sourceRejected:string,readonly enterDiscoveryValue:string,readonly sourceReconnect:string,readonly sourceSignIn:string,readonly sourceAreaMissing:string,readonly sourceDecisionFailed:string}} DiscoverMarkup */
+/** @typedef {{readonly exploreUnavailable:string,readonly exploreLink:string,readonly provider:string,readonly podcast:string,readonly extractionUnavailable:string,readonly decisionUnavailable:string,readonly offlineNotice:string,readonly stateNotice:string,readonly youtubeNotice:string,readonly workspace:string,readonly neverRunState:string,readonly loadingState:string,readonly emptyState:string,readonly errorState:string,readonly offlineState:string,readonly partialState:string,readonly route:string,readonly controls:string,readonly missingDetail:string,readonly selectDetail:string,readonly evidenceBoundary:string,readonly statePanel:string,readonly results:string,readonly resultRow:string,readonly youtubeConnected:string,readonly youtubeDisconnected:string,readonly youtubeUnavailable:string,readonly failureMessages:Readonly<Record<string,string>>,readonly youtubeSource:import("../startup/discovery-runtime.js").YouTubeSourceContract,readonly sourceUnavailable:string,readonly sourceLink:string,readonly detail:string,readonly youtubePolicy:string,readonly manualUpload:string,readonly decisionActions:string,readonly sourceAreaRequired:string,readonly sourceAlreadyAdded:string,readonly sourceAdded:string,readonly uploadRequired:string,readonly uploadReadFailed:string,readonly uploadStoreFailed:string,readonly uploadStored:string,readonly sourceRejected:string,readonly enterDiscoveryValue:string,readonly sourceReconnect:string,readonly sourceSignIn:string,readonly sourceAreaMissing:string,readonly sourceDecisionFailed:string}} DiscoverMarkup */
 
 /**
  * @typedef {{
@@ -85,8 +85,7 @@ export function renderDiscoverRoute(model) {
 
   const content = model.items.length === 0
     ? renderEmptyState(model)
-    : '<div class="discover-workspace">' + renderResults(model) +
-      renderDetail(model, selected, selectedMissing) + "</div>";
+    : template(model,"workspace",{results:renderResults(model),detail:renderDetail(model,selected,selectedMissing)});
   return template(model, "route", {
     state: model.state,
     page: model.page,
@@ -105,9 +104,7 @@ function renderDiscoveryControls(model) {
       ? " checked"
       : "";
     const unavailable = provider.enabled ? "" : " disabled";
-    return `<label><input type="checkbox" name="provider" value="${
-      remoteText(model, provider.id)
-    }"${checked}${unavailable}>${remoteText(model, provider.label)}</label>`;
+    return template(model,"provider",{id:remoteText(model,provider.id),checked,unavailable,label:remoteText(model,provider.label)});
   }).join("");
   const limits = [5, 10, 20].map((limit) =>
     `<option value="${limit}"${model.search.limit === limit ? " selected" : ""}>${limit}</option>`
@@ -119,7 +116,7 @@ function renderDiscoveryControls(model) {
     limitOptions: limits,
   });
   return controls + (model.search.selectedProviderIds.includes("youtube")
-    ? '<div class="discover-notice" data-youtube-connection></div>'
+    ? model.markup.youtubeNotice
     : "");
 }
 
@@ -128,56 +125,28 @@ function renderStateNotice(model) {
   const message = model.stateMessage === null
     ? ""
     : remoteText(model, model.stateMessage);
-  if (model.state === "offline") {
-    return '<div class="discover-notice" role="status" id="discover-offline-message"><p>' +
-      message + "</p></div>";
-  }
-  const partial = model.state === "partial";
-  if (!partial && model.state !== "error") return "";
-  return `<div class="discover-notice${partial ? "" : " error"}" role="${
-    partial ? "status" : "alert"
-  }"><p>${message}</p></div>`;
+  if (model.state === "offline") return template(model,"offlineNotice",{message});
+  const partial=model.state === "partial";
+  return partial || model.state === "error" ? template(model,"stateNotice",{message,error:partial?"":" error",role:partial?"status":"alert"}) : "";
 }
 
 /** @param {DiscoverRouteModel} model */
 function renderEmptyState(model) {
-  if (model.state === "success") {
-    throw new TypeError("DiscoverItemMissing");
-  }
-  const content = {
-    "never-run": [
-      "Explore learning sources",
-      "Search educational websites, podcast feeds, and videos.",
-      "",
-    ],
-    loading: [
-      "Checking your sources",
-      "Results appear when the run completes.",
-      "",
-      'role="status" aria-live="polite" aria-busy="true"',
-    ],
-    empty: [
-      "No results found",
-      "No visible items were returned.",
-      "",
-    ],
-    error: ["Discovery is unavailable", "No saved results."],
-    offline: ["No offline results", "Connect to run discovery."],
-    partial: ["No completed results", "No visible items were returned."],
-  }[model.state];
-  return statePanel(model, content[0], content[1], content[2], content[3]);
-}
-
-/** @param {DiscoverRouteModel} model @param {string} title @param {string} message @param {string} [action] @param {string} [attributes] */
-function statePanel(model, title, message, action = "", attributes = "") {
-  return template(model, "statePanel", { attributes, title, message, action });
+  if(model.state === "success")throw new TypeError("DiscoverItemMissing");
+  const state=model.state === "never-run" ? "neverRun" : model.state;
+  return template(model,/** @type {keyof DiscoverMarkup} */(`${state}State`),{});
 }
 
 /** @param {DiscoverRouteModel} model */
 function renderResults(model) {
   const rows = model.items.map((item) => {
     const selected = item.id === model.selectedItemId;
+    const url = item.youtubeWatchUrl === null
+      ? validatedSourceUrl(item.sourceUrl)
+      : validatedYouTubeWatchUrl(item.sourceUrl);
+    const exploreAction=model.state === "offline" || url === null ? model.markup.exploreUnavailable : template(model,"exploreLink",{url:remoteText(model,url),title:remoteText(model,item.title)});
     return template(model, "resultRow", {
+      exploreAction,
       urlId: remoteText(model, encodeURIComponent(item.id)),
       itemId: remoteText(model, item.id),
       selected: selected ? 'aria-current="true"' : "",
@@ -221,9 +190,7 @@ function renderDetail(model, selected, selectedMissing) {
     evidence: evidenceLabel(selected.evidenceStatus),
     podcast: selected.podcastReferenceLabel === null
       ? ""
-      : `<div><dt>Podcast references</dt><dd>${
-        remoteText(model, selected.podcastReferenceLabel)
-      }</dd></div>`,
+      : template(model,"podcast",{reference:remoteText(model,selected.podcastReferenceLabel)}),
     boundary: model.markup.evidenceBoundary,
     sourceAction: renderSourceAction(
       model,
@@ -238,6 +205,7 @@ function renderDetail(model, selected, selectedMissing) {
 /** @param {DiscoverRouteModel} model @param {DiscoverRouteItem} item @param {boolean} offline */
 function renderDecisionActions(model, item, offline) {
   const pending = model.pendingId === item.id;
+  const unsupported = item.youtubeWatchUrl !== null || ["video", "feed", "episode", "unknown"].includes(item.candidate.adapter.granularity);
   const unavailable = offline || !model.canAct || pending;
   const areas = model.areas.map((area) =>
     `<option value="${remoteText(model, area.id)}">${
@@ -247,30 +215,24 @@ function renderDecisionActions(model, item, offline) {
   const youtubePolicy = item.youtubeWatchUrl === null
     ? ""
     : model.markup.youtubePolicy;
-  const manualUpload =
-    item.youtubeWatchUrl === null || item.candidate.initialItem !== null
-      ? template(model, "manualUpload", {
-        itemId: remoteText(model, item.id),
-        areas,
-        areaDisabled: model.areas.length === 0 ? "disabled" : "",
-        submitDisabled: unavailable || model.areas.length === 0
-          ? "disabled"
-          : "",
-        submitLabel: pending ? "Uploading..." : "Add source and upload",
-      })
-      : "";
+  const manualUpload = template(model, "manualUpload", {
+    itemId: remoteText(model, item.id),
+    submitDisabled: pending ? "disabled" : "",
+  });
   return youtubePolicy + template(model, "decisionActions", {
     itemId: remoteText(model, item.id),
     sourceGranularity: remoteText(model, item.candidate.adapter.granularity),
     sourceCapabilities: remoteText(model, item.candidate.adapter.capabilities.join(",")),
     areas,
     areaDisabled: model.areas.length === 0 ? "disabled" : "",
-    submitDisabled: unavailable || model.areas.length === 0 ? "disabled" : "",
-    submitLabel: pending ? "Saving..." : "Add to Library",
+    submitDisabled: unsupported || unavailable || model.areas.length === 0 ? "disabled" : "",
+    submitLabel: pending ? "Starting…" : "Extract Knowledge Points",
     rejectDisabled: unavailable ? "disabled" : "",
-    unavailable: model.canAct
+    unavailable: unsupported
+      ? model.markup.extractionUnavailable
+      : model.canAct
       ? ""
-      : "<p>Connect the private source service to save a decision.</p>",
+      : model.markup.decisionUnavailable,
   }) + manualUpload;
 }
 
@@ -307,6 +269,7 @@ function validatedYouTubeWatchUrl(value) {
   const parsed = new URL(value);
   if (
     parsed.protocol !== "https:" ||
+    parsed.username !== "" || parsed.password !== "" ||
     !YOUTUBE_WATCH_HOSTS.has(parsed.hostname.toLowerCase())
   ) return null;
   return parsed.href;

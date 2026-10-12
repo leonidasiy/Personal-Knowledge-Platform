@@ -6,6 +6,8 @@
  * @typedef {{
  *   readonly videoId: string,
  *   readonly title: string,
+ *   readonly description: string | null,
+ *   readonly channelId: string | null,
  *   readonly publisherLabel: string,
  *   readonly publishedAt: string,
  *   readonly canonicalUrl: string,
@@ -74,8 +76,10 @@ export class YouTubeDiscoveryAdapter {
     this.#quotaDayFormatter = formatter;
   }
 
-  /** @param {unknown} input @returns {Promise<Result<readonly YouTubeCandidate[], WorkerFailure>>} */
-  async search(input) {
+  /** @param {unknown} input @param {AbortSignal} [signal] @returns {Promise<Result<readonly YouTubeCandidate[], WorkerFailure>>} */
+  async search(input, signal) {
+    if (signal !== undefined && !(signal instanceof AbortSignal)) throw new TypeError("Invalid YouTube search signal.");
+    if (signal?.aborted) return {ok:false,error:{kind:"YouTubeUpstreamUnavailable"}};
     if (
       typeof input !== "object" || input === null || Array.isArray(input) ||
       typeof /** @type {Record<string, unknown>} */ (input).query !==
@@ -102,6 +106,7 @@ export class YouTubeDiscoveryAdapter {
       quotaDay,
     });
     if (!searchReservation.ok) return searchReservation;
+    if (signal?.aborted) return {ok:false,error:{kind:"YouTubeUpstreamUnavailable"}};
     const searchUrl = new URL("https://www.googleapis.com/youtube/v3/search");
     searchUrl.search = new URLSearchParams({
       key: credential.value,
@@ -114,6 +119,7 @@ export class YouTubeDiscoveryAdapter {
     const searched = await fetchYouTube(
       this.#dependencies.fetch,
       searchUrl,
+      signal,
     );
     if (!searched.ok) return searched;
     const searchDocument = await readJson(searched.value);
@@ -123,11 +129,13 @@ export class YouTubeDiscoveryAdapter {
     if (summaries.value.length === 0) {
       return { ok: true, value: Object.freeze([]) };
     }
+    if (signal?.aborted) return {ok:false,error:{kind:"YouTubeUpstreamUnavailable"}};
     const generalReservation = await this.#dependencies.reserveGeneralRead({
       quotaDay,
       units: 1,
     });
     if (!generalReservation.ok) return generalReservation;
+    if (signal?.aborted) return {ok:false,error:{kind:"YouTubeUpstreamUnavailable"}};
     const statusUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
     statusUrl.search = new URLSearchParams({
       key: credential.value,
@@ -139,6 +147,7 @@ export class YouTubeDiscoveryAdapter {
     const statuses = await fetchYouTube(
       this.#dependencies.fetch,
       statusUrl,
+      signal,
     );
     if (!statuses.ok) return statuses;
     const statusDocument = await readJson(statuses.value);
@@ -152,7 +161,7 @@ export class YouTubeDiscoveryAdapter {
     for (const summary of summaries.value) {
       const status = statusById.value.get(summary.videoId);
       if (
-        status === undefined || !status.embeddable ||
+        status === undefined ||
         status.madeForKids === null
       ) continue;
       candidates.push(Object.freeze({
@@ -191,13 +200,15 @@ function quotaDayFor(date, formatter) {
 /**
  * @param {typeof fetch} fetchDependency
  * @param {URL} url
+ * @param {AbortSignal} [signal]
  * @returns {Promise<Result<Response, WorkerFailure>>}
  */
-async function fetchYouTube(fetchDependency, url) {
+async function fetchYouTube(fetchDependency, url, signal) {
   /** @type {Response} */
   let response;
   try {
     response = await fetchDependency(url, {
+      signal,
       headers: {
         accept: "application/json",
       },
@@ -256,7 +267,7 @@ async function readJson(response) {
   }
 }
 
-/** @param {unknown} value @returns {Result<readonly { readonly videoId: string, readonly title: string, readonly publisherLabel: string, readonly publishedAt: string }[], WorkerFailure>} */
+/** @param {unknown} value @returns {Result<readonly { readonly videoId: string, readonly title: string, readonly description: string|null, readonly channelId: string|null, readonly publisherLabel: string, readonly publishedAt: string }[], WorkerFailure>} */
 function parseSearchItems(value) {
   if (!isRecord(value) || !Array.isArray(value.items)) {
     return { ok: false, error: { kind: "YouTubeResponseInvalid" } };
@@ -270,6 +281,9 @@ function parseSearchItems(value) {
     const title = item.snippet.title;
     const publisherLabel = item.snippet.channelTitle;
     const publishedAt = item.snippet.publishedAt;
+    if ((item.snippet.description !== undefined && typeof item.snippet.description !== "string") || (item.snippet.channelId !== undefined && (typeof item.snippet.channelId !== "string" || item.snippet.channelId.trim() === ""))) return {ok:false,error:{kind:"YouTubeResponseInvalid"}};
+    const description = typeof item.snippet.description === "string" ? item.snippet.description : null;
+    const channelId = typeof item.snippet.channelId === "string" ? item.snippet.channelId : null;
     if (
       ![videoId, title, publisherLabel, publishedAt].every((entry) =>
         typeof entry === "string" && entry.trim() !== ""
@@ -277,7 +291,7 @@ function parseSearchItems(value) {
     ) {
       return { ok: false, error: { kind: "YouTubeResponseInvalid" } };
     }
-    items.push(Object.freeze({ videoId, title, publisherLabel, publishedAt }));
+    items.push(Object.freeze({ videoId, title, description, channelId, publisherLabel, publishedAt }));
   }
   return { ok: true, value: Object.freeze(items) };
 }

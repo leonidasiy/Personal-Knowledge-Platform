@@ -620,7 +620,7 @@ Deno.test("Discover remains a lazy destination with one bounded search command",
       discoveryPage.includes("centralGateway.capabilities()") &&
       discoveryPage.includes("centralGateway.search(command)") &&
       discoveryPage.includes('form.getAll("provider")') &&
-      discoveryPage.includes("sourceLibrary.approve(") &&
+      discoveryPage.includes("sourceLibrary.extract(") &&
       discoveryPage.includes("sourceLibrary.reject(") &&
       discoveryPage.includes("sourceLibrary.suppressed(") &&
       !discoveryPage.includes("data-discovery-rss-form") &&
@@ -817,3 +817,47 @@ async function readLibraryPresentation() {
   if (!data) throw new Error("Library shell markup missing");
   return await Deno.readTextFile(new URL("src/routes/library.js", root)) + JSON.parse(data).flat().join("");
 }
+
+Deno.test("Upload and header controls retain visible contrast without faded disabled text", async () => {
+  const css = await Deno.readTextFile(new URL("src/styles.css", root));
+  assert(css.includes('.upload-page [type="file"] { width: 100%; }'), "Native picker bounds do not depend on filename length.");
+  const disabled = css.match(/^\.button:disabled\s*\{([^}]+)\}/m)?.[1] ?? "";
+  assert(/(?:^|;)\s*color: var\(--text-muted\);/.test(disabled) && !disabled.includes("opacity:") && css.includes(".button:hover:not(:disabled), .button:disabled { border-color: var(--text-muted); background: var(--surface-subtle); }"), "Disabled controls keep readable text and visible boundary.");
+  assert(css.lastIndexOf(".button:disabled {") > css.indexOf(".button.primary {"), "Disabled primary button uses disabled colors.");
+  const checkbox = css.match(/\.upload-page \[type="checkbox"\]\s*\{([^}]+)\}/)?.[1] ?? "";
+  assert(checkbox.includes("outline: 1px solid var(--text)"), "Unchecked native checkbox has a visible boundary.");
+  const chip = css.match(/\.local-badge\s*\{([^}]+)\}/)?.[1] ?? "";
+  assert(chip.includes("color: var(--text)") && chip.includes("border: 1px solid var(--text-muted)"), "Processing chip uses readable text and boundary tokens.");
+  const base = readSelectorPrimitives(css, ":root");
+  const dark = {...base, ...readSelectorPrimitives(css, ':root[data-theme="dark"]')};
+  for (const theme of [base, dark]) {
+    assertContrast(theme["studio-ink-muted"], theme["studio-mist"], 4.5);
+    assertContrast(theme["studio-ink-muted"], theme["studio-paper"], 3);
+    assertContrast(theme["studio-ink"], theme["studio-paper"], 4.5);
+  }
+});
+
+Deno.test("Upload joins native-file and disclosure restoration through its source-bound form key", async () => {
+  const app = await Deno.readTextFile(new URL("src/app.js", root));
+  assert(app.includes('form.getAttribute("data-upload-form")'), "Generic transient restoration must recognize the Upload contract.");
+  assert(app.includes("match.files = transfer.files") && app.includes("current.open = savedDetail.open"), "Native files and disclosure state use the established restoration path.");
+});
+
+Deno.test("card entrance keyframes require normal motion and the interface toggle", async () => {
+  const css = await Deno.readTextFile(new URL("src/styles.css", root));
+  const start = css.indexOf("@media (prefers-reduced-motion: no-preference)");
+  const normal = css.slice(start, css.indexOf("@keyframes card-enter", start));
+  const entrance = ':root:not([data-motion="off"]) .reveal-enter';
+  assert(normal.includes(entrance + " { animation: card-enter 700ms"), "Entrance keyframes must be opt-in to normal motion, not shortened under reduced motion.");
+  assert(!css.slice(0, start).includes("animation: card-enter"), "No unconditional entrance animation may hide a reduced-motion card before its first frame.");
+});
+
+Deno.test("native picker rotation and transition require normal motion and the interface toggle", async () => {
+  const css = await Deno.readTextFile(new URL("src/styles.css", root));
+  const start = css.indexOf("@media (prefers-reduced-motion: no-preference)");
+  const normal = css.slice(start, css.indexOf("@keyframes card-enter", start));
+  for (const rule of [':root:not([data-motion="off"]) select::picker-icon { transition: rotate 180ms; }', ':root:not([data-motion="off"]) select:open::picker-icon { rotate: 180deg; }']) {
+    assert(normal.includes(rule), "Native picker motion must be confined to normal motion with the toggle on: " + rule);
+  }
+  assert(!css.slice(0, start).includes("transition: rotate") && !css.slice(0, start).includes("rotate: 180deg"), "No unconditional picker motion may escape the preference/toggle gate.");
+});

@@ -1,6 +1,6 @@
 // @ts-check
 
-import { createOpenRouterKnowledgeModel } from "../worker/knowledge-workflow-model.js";
+import { createOpenRouterKnowledgeModel, createRoleConfiguredKnowledgeModel } from "../worker/knowledge-workflow-model.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
@@ -43,8 +43,10 @@ Deno.test("knowledge model sends raster attachments as vision blocks without put
   assertEquals(body.messages[1].content[0].type, "text");
   assertEquals(body.messages[1].content[0].text.includes("caption"), true);
   assertEquals(body.messages[1].content[0].text.includes("89504e47"), false);
-  assertEquals(body.messages[1].content[1].type, "image_url");
-  assertEquals(body.messages[1].content[1].image_url.url.startsWith("data:image/png;base64,iVBOR"), true);
+  assertEquals(body.messages[1].content[1].type, "text");
+  assertEquals(body.messages[1].content[1].text.includes("page-1"),true);
+  assertEquals(body.messages[1].content[2].type,"image_url");
+  assertEquals(body.messages[1].content[2].image_url.url.startsWith("data:image/png;base64,iVBOR"), true);
 });
 
 Deno.test("image extraction requests strict provider-enforced schema and low-latency parameters", async () => {
@@ -151,4 +153,48 @@ Deno.test("knowledge model maps an un-aborted transport TypeError but propagates
   if (!unavailableResult.ok) assertEquals(unavailableResult.error.kind, "KnowledgeModelUnavailable");
   const programmerFailure = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async () => { throw new RangeError("programmer failure"); }, now: Date.now, logger: () => {} });
   await assertRejects(programmerFailure.generate(command()));
+});
+
+Deno.test("Discover model rejects duplicate JSON keys and timeout without fallback", async()=>{
+  for(const timeout of [false,true]){
+    const model=createOpenRouterKnowledgeModel({apiKey:"synthetic-secret",endpoint:"https://model.example/chat",model:"z-ai/glm-5.3-flash",timeoutMs:1,maximumInputCharacters:1000,now:()=>1000,logger:()=>{},fetch:async(_input,init)=>{if(timeout)return await new Promise((_resolve,reject)=>{init?.signal?.addEventListener("abort",()=>reject(new DOMException("aborted","AbortError")));});return Response.json({id:"test",choices:[{finish_reason:"stop",message:{content:'{"assessments":[],"assessments":[],"rankedIds":[]}'}}]});}});
+    const result=await model.generate({role:"source-assessor",systemPrompt:"Assess supplied evidence.",input:{query:"harmony"},maxOutputTokens:256,responseSchema:{name:"discover_source_quality_v1",schema:{type:"object"}}});assertEquals(result.ok,false);if(!result.ok)assertEquals(result.error.kind,timeout?"KnowledgeModelTimeout":"KnowledgeModelResponseDuplicateKey");
+  }
+});
+
+
+Deno.test('configured application roles send their own processor, generator, rights and evaluator model names',async()=>{
+ const roles=/** @type {const} */(['rights-assessor','knowledge-scraper','question-generator','question-evaluator']);
+ const limits={maxTurns:3,maxToolCalls:6,timeoutMs:1000,maxOutputBytes:131072,compactionThresholdTokens:500000};
+ const configSnapshots=/** @type {Record<import('../worker/knowledge-workflow-model.js').KnowledgeAgentRole,{model:import('../src/features/knowledge-workflows/config.js').AgentModel,limits:typeof limits}>} */(Object.fromEntries(roles.map(role=>[role,{model:role==='knowledge-scraper'?{provider:'openrouter',name:'z-ai/glm-5.3-flash',reasoningEffort:'high'}:role==='question-evaluator'?{provider:'openrouter',name:'mistralai/mistral-large-4-0',reasoningEffort:'none'}:{provider:'openrouter',name:`synthetic/${role}`},limits}])));
+ /** @type {Record<string,unknown>[]} */ const sent=[];
+ const model=createRoleConfiguredKnowledgeModel({apiKey:'synthetic',endpoint:'https://api.example.test/chat/completions',configSnapshots,maximumInputCharacters:10000,now:Date.now,logger:()=>{},fetch:async(_url,init)=>{
+   const body=JSON.parse(String(init?.body));sent.push(body);assertEquals(body.reasoning?.effort,body.model==='z-ai/glm-5.3-flash'?'high':body.model==='mistralai/mistral-large-4-0'?'none':undefined);
+   return Response.json({id:'synthetic-role',choices:[{finish_reason:'stop',message:{content:'{"valid":true}'}}]});
+ }});
+ for(const role of roles)assertEquals((await model.generate({...command(),role,...(role==='knowledge-scraper'||role==='question-evaluator'?{reasoningEffort:'low'}:{})})).ok,true);
+ assertEquals(sent.map(body=>body.model).join(','),roles.map(role=>configSnapshots[role].model.name).join(','));
+ const invalid=await model.generate({...command(),role:'unknown-agent'});assertEquals(invalid.ok,false);assertEquals(sent.length,roles.length);
+ const conflicting=await model.generate({...command(),role:'question-evaluator',reasoningEffort:'high'});assertEquals(conflicting.ok,false);assertEquals(sent.length,roles.length);
+});
+
+Deno.test('configured evaluator timeout remains bounded by its own role limit',async()=>{
+ const roles=/** @type {const} */(['rights-assessor','knowledge-scraper','question-generator','question-evaluator']);
+ const limits={maxTurns:3,maxToolCalls:6,timeoutMs:1000,maxOutputBytes:131072,compactionThresholdTokens:500000};
+ const configSnapshots=/** @type {Record<import('../worker/knowledge-workflow-model.js').KnowledgeAgentRole,{model:{provider:string,name:string},limits:typeof limits}>} */(Object.fromEntries(roles.map(role=>[role,{model:{provider:'openrouter',name:`synthetic/${role}`},limits:{...limits,timeoutMs:role==='question-evaluator'?5:1000}}])));
+ const model=createRoleConfiguredKnowledgeModel({apiKey:'synthetic',endpoint:'https://api.example.test/chat/completions',configSnapshots,maximumInputCharacters:10000,now:Date.now,logger:()=>{},fetch:async(_url,init)=>await new Promise((_resolve,reject)=>init?.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true}))});
+ const result=await model.generate({...command(),role:'question-evaluator',timeoutMs:1000});assertEquals(result.ok,false);if(!result.ok)assertEquals(result.error.kind,'KnowledgeModelTimeout');
+});
+
+Deno.test('response format and optional validated reasoning effort are independent protocol choices',async()=>{
+ for(const responseFormat of /** @type {const} */(['json_schema','json_object']))for(const reasoningEffort of /** @type {const} */([undefined,'none','low','high'])) {
+   const protocol={source:'synthetic-protocol',responseFormat,...(reasoningEffort===undefined?{}:{reasoningEffort}),receiptOptional:/** @type {const} */(true),provider:{sort:/** @type {const} */('throughput'),require_parameters:/** @type {const} */(true),allow_fallbacks:true,max_price:{prompt:1,completion:2,request:/** @type {const} */(0),image:/** @type {const} */(0)}}};
+   let calls=0;
+   const model=createOpenRouterKnowledgeModel({apiKey:'synthetic',endpoint:'https://api.example.test/chat/completions',model:'synthetic/evaluator',timeoutMs:1000,maximumInputCharacters:10000,protocol,now:Date.now,logger:()=>{},fetch:async(_url,init)=>{
+     calls++;const body=JSON.parse(String(init?.body));assertEquals(body.response_format.type,responseFormat);assertEquals(body.reasoning?.effort,reasoningEffort);assertEquals(JSON.stringify(body.provider),JSON.stringify(protocol.provider));
+     return Response.json({choices:[{finish_reason:'stop',message:{content:'{"valid":true}'}}]});
+   }});
+   const result=await model.generate({...command(),responseSchema:{name:'synthetic_schema',schema:{type:'object',additionalProperties:false,properties:{valid:{type:'boolean'}},required:['valid']}}});assertEquals(result.ok,true);assertEquals(calls,1);
+   if(reasoningEffort==='none'||reasoningEffort==='high'){const mismatched=await model.generate({...command(),reasoningEffort:'low'});assertEquals(mismatched.ok,false);if(!mismatched.ok)assertEquals(mismatched.error.kind,'KnowledgeModelCommandInvalid');assertEquals(calls,1);}
+ }
 });

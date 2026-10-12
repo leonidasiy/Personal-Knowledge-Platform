@@ -39,6 +39,18 @@ function pipeline(overrides = {}) {
   return { stored, pipeline: createMediaPipeline(/** @type {import("../src/features/knowledge-workflows/media.js").MediaDependencies} */ (/** @type {unknown} */ (dependencies))) };
 }
 
+Deno.test("media ingestion accepts only supported binding purposes and keeps identity checks", async () => {
+  const binding = { kind: "webpage-support", purpose: "illustration", ownerId: "owner-a", runId: "run-a", sourceRevision: 1, factHash: `sha256:${"a".repeat(64)}`, imageId: "image-a", originalDigest: "sha256:image", evidence: "Source illustration shows the example scene." };
+  const alternatives = [binding, { ...binding, purpose: "evidence" }, { ...binding, purpose: undefined }, { ...binding, purpose: "unknown" }, { ...binding, kind: "uploaded-source", locator: "page:1", sourceDigest: "source-original" }, { ...binding, ownerId: "foreign" }, { ...binding, sourceRevision: 0 }, { ...binding, factHash: "bad" }, { ...binding, originalDigest: "bad" }];
+  for (const [index, candidateBinding] of alternatives.entries()) {
+    const fixture = pipeline();
+    const ingested = await fixture.pipeline.ingestBytes({ ownerId: "owner-a", runId: "run-a", knowledgeId: "knowledge-a", sourceUrl: "https://example.test/lesson", candidate: candidate({ url: "https://example.test/scene.png" }), bytes: png, binding: candidateBinding });
+    assertEquals(ingested.ok, index < 3);
+    if (ingested.ok) assertEquals(ingested.value.asset.binding?.purpose, candidateBinding.purpose);
+    else assertEquals(fixture.stored.originalKey, undefined);
+  }
+});
+
 Deno.test("media pipeline validates origin, signature, quarantines originals, and serves only derivatives", async () => {
   const fixture = pipeline();
   const ingested = await fixture.pipeline.ingest({ ownerId: "owner-a", runId: "run-a", knowledgeId: "knowledge-a", sourceUrl: "https://example.test/lesson", allowedOrigins: ["https://cdn.example.test"], candidate: candidate() });
@@ -71,7 +83,7 @@ Deno.test("media byte ingestion returns a typed failure for malformed candidate 
 });
 
 Deno.test("media service rejects revoked and missing derivative delivery without exposing storage keys", async () => {
-  const fixture = pipeline({ repository: { save: async () => ({ ok: true, value: null }), read: async (/** @type {{ readonly assetId: string }} */ command) => command.assetId === "missing" ? { ok: false, error: { kind: "not-found" } } : { ok: true, value: { bytes: png, mediaType: "image/png", revoked: true } }, revoke: async () => ({ ok: true, value: null }) } });
+  const fixture = pipeline({ repository: { save: async () => ({ ok: true, value: null }), read: async (/** @type {{ readonly assetId: string }} */ command) => command.assetId === "missing" ? { ok: false, error: { kind: "MediaDerivativeNotFound" } } : { ok: true, value: { bytes: png, mediaType: "image/png", revoked: true } }, revoke: async () => ({ ok: true, value: null }) } });
   const missing = await fixture.pipeline.serve({ ownerId: "owner-a", assetId: "missing", variant: "feed" });
   assertEquals(missing.ok, false);
   if (!missing.ok) assertEquals(missing.error.kind, "MediaDerivativeNotFound");
@@ -252,7 +264,7 @@ Deno.test("atomic media public egress validates every hop and preserves distinct
   const timeout = create({ request: async () => await new Promise(() => {}) }, { maximumBytes: 12, timeoutMilliseconds: 1, redirectLimit: 2 });
   const timedOut = await timeout.fetch(new Request("https://example.test/start.png"));
   if (timedOut.ok) throw new Error("Timeout was not enforced.");
-  assertEquals(timedOut.error.kind, "MediaPublicEgressTimeout");
+  assertEquals(timedOut.error.kind, "MediaPublicEgressCancellationUnconfirmed");
   const bodyTimeout = create({ request: async () => ({ ok: true, value: { response: new Response(new ReadableStream()), redirectHops: [] } }) }, { maximumBytes: 12, timeoutMilliseconds: 1, redirectLimit: 2 });
   const bodyTimedOut = await bodyTimeout.fetch(new Request("https://example.test/start.png"));
   if (bodyTimedOut.ok) throw new Error("Response-body timeout was not enforced.");
@@ -316,4 +328,21 @@ Deno.test("authoritative fallback manifest dynamically validates all 70 files an
   const metadata = await validateFiles(mismatched.value, (path) => Deno.readFile(`.${decodeURI(path)}`));
   assertEquals(metadata.ok, false);
   if (!metadata.ok) assertEquals(metadata.error.kind, "FallbackAssetMetadataMismatch");
+});
+
+Deno.test("webpage image acquisition verifies bytes and approved bounds instead of filename guesses",async()=>{
+  let calls=0;
+  const port={fetch:async()=>{calls++;return {ok:/** @type {const} */(true),value:new Response(png,{headers:{"content-type":"image/png"}})};}};
+  const valid=await mediaModule.acquireImageBytes(port,"https://images.example/no-extension");assertEquals(valid.ok,true);if(valid.ok)assertEquals(valid.value.mediaType,"image/png");
+  const privateUrl=await mediaModule.acquireImageBytes(port,"https://127.0.0.1/private");assertEquals(privateUrl.ok,false);assertEquals(calls,1);
+  for(const [bytes,type,expected] of [[png,"image/jpeg","MediaMimeSignatureConflict"],[new Uint8Array(20*1024*1024+1),"image/png","MediaPayloadTooLarge"]]) {
+    const result=await mediaModule.acquireImageBytes({fetch:async()=>({ok:true,value:new Response(/** @type {Uint8Array} */(bytes),{headers:{"content-type":/** @type {string} */(type)}})})},"https://images.example/diagram");assertEquals(result.ok,false);if(!result.ok)assertEquals(result.error.kind,expected);
+  }
+});
+Deno.test('atomic media adapter cancels an oversized streaming reader immediately',async()=>{
+ let cancelled=false;let reads=0;
+ const response=new Response(new ReadableStream({pull(controller){reads++;if(reads<=6)controller.enqueue(new Uint8Array(6));else controller.close();},cancel(){cancelled=true;}}));
+ const publicEgress=mediaModule.createMediaPublicEgress({request:async()=>({ok:true,value:{response,redirectHops:[]}})},{maximumBytes:5,timeoutMilliseconds:50});
+ const result=await publicEgress.fetch(new Request('https://publisher.example/image.png'));
+ assertEquals(result.ok,false);if(!result.ok)assertEquals(result.error.kind,'MediaPublicEgressPayloadTooLarge');assertEquals(cancelled,true);assertEquals(reads<5,true);
 });

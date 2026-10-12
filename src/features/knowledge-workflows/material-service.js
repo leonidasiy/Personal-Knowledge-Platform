@@ -18,6 +18,31 @@ function positiveInteger(value) { return typeof value === "number" && Number.isS
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
 function record(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
 
+/** @param {AuthorizedMaterial} material @returns {string} */
+function materialFingerprint(material) {
+  return JSON.stringify([material.ownerId, material.runId, material.sourceId, material.sourceRevision, material.mode, material.mediaType, material.fileName, material.contentDigest, material.provenance]);
+}
+
+/** @param {MaterialReplay} replay @param {AuthorizedMaterial} material @returns {boolean} */
+function replayMatches(replay, material) {
+  let fields;
+  try { fields = JSON.parse(replay.fingerprint); }
+  catch (error) { if (error instanceof SyntaxError) return false; throw error; }
+  if (!Array.isArray(fields) || fields.length !== 9) return false;
+  const provenance = fields[8];
+  const stored = replay.material.provenance;
+  if (!record(provenance) || provenance.kind !== "authorized-user-material" || !text(provenance.attestationReference) || !text(provenance.basis) ||
+    (provenance.processingAllowed !== undefined && provenance.processingAllowed !== true) ||
+    Object.keys(provenance).some(key => !["kind", "attestationReference", "basis", "processingAllowed"].includes(key)) ||
+    !record(stored) || stored.kind !== provenance.kind || stored.attestationReference !== provenance.attestationReference || stored.basis !== provenance.basis ||
+    (stored.processingAllowed !== undefined && stored.processingAllowed !== true) ||
+    (stored.processingAllowed === true && provenance.processingAllowed !== true) || replay.material.sourceUrl !== material.sourceUrl) return false;
+  // D1's legacy projection omits processingAllowed; verify it in the recorded fingerprint.
+  const authorization = { kind: /** @type {const} */("authorized-user-material"), attestationReference: provenance.attestationReference, basis: provenance.basis, ...(provenance.processingAllowed === true ? { processingAllowed: /** @type {const} */(true) } : {}) };
+  return replay.fingerprint === materialFingerprint({ ...replay.material, provenance: authorization }) &&
+    replay.fingerprint === materialFingerprint({ ...material, provenance: authorization });
+}
+
 /** @param {{ readonly parser: (command: unknown) => Promise<Result<AuthorizedMaterial, MaterialFailure>>, readonly repository: { readonly replay: (ownerId: string, idempotencyKey: string) => Promise<Result<MaterialReplay | null, MaterialServiceFailure>>, readonly persist: (record: StoredMaterial) => Promise<Result<null, MaterialServiceFailure>>, readonly remove: (record: StoredMaterial) => Promise<Result<null, MaterialServiceFailure>> }, readonly contentStore: { readonly stage: (command: { readonly objectId: string, readonly ownerId: string, readonly sourceId: string, readonly itemId: string, readonly itemVersionId: string, readonly content: Uint8Array, readonly contentDigest: string, readonly mediaType: string }) => Promise<Result<{ readonly objectKey: string }, MaterialServiceFailure>>, readonly remove: (key: string) => Promise<Result<null, MaterialServiceFailure>> }, readonly workflow: { readonly status: (command: { readonly ownerId: string, readonly runId: string }) => Promise<Result<{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number, readonly canonicalSourceIdentity: string, readonly state: string }, { readonly kind: string }>>, readonly attachMaterial: (command: { readonly ownerId: string, readonly runId: string, readonly materialId: string }) => Promise<Result<unknown, { readonly kind: string }>> }, readonly createId: () => string, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly failureKind?: string }) => void }} dependencies */
 export function createKnowledgeWorkflowMaterialService(dependencies) {
   if (typeof dependencies?.parser !== "function" || typeof dependencies.repository?.replay !== "function" || typeof dependencies.repository.persist !== "function" || typeof dependencies.repository.remove !== "function" || typeof dependencies.contentStore?.stage !== "function" || typeof dependencies.contentStore.remove !== "function" || typeof dependencies.workflow?.status !== "function" || typeof dependencies.workflow.attachMaterial !== "function" || typeof dependencies.createId !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function") throw new TypeError("Knowledge workflow material dependencies are invalid.");
@@ -55,9 +80,9 @@ export function createKnowledgeWorkflowMaterialService(dependencies) {
       const idempotencyKey = command.idempotencyKey.trim();
       const replay = await dependencies.repository.replay(material.ownerId, idempotencyKey);
       if (!replay.ok) return replay;
-      const fingerprint = JSON.stringify([material.ownerId, material.runId, material.sourceId, material.sourceRevision, material.mode, material.mediaType, material.fileName, material.contentDigest, material.provenance]);
+      const fingerprint = materialFingerprint(material);
       if (replay.value !== null) {
-        if (replay.value.fingerprint !== fingerprint) return { ok: false, error: { kind: "WorkflowMaterialIdempotencyConflict" } };
+        if (!replayMatches(replay.value, material)) return { ok: false, error: { kind: "WorkflowMaterialIdempotencyConflict" } };
         if (run.value.state === "completed" || run.value.state === "abandoned") {
           return { ok: true, value: freeze({ status: "attached", materialId: replay.value.materialId, runId: material.runId, reused: true }) };
         }

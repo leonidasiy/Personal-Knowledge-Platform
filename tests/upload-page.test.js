@@ -1,4 +1,5 @@
 // @ts-check
+import { SourceLibraryGatewayClient } from "../src/features/source-library/gateway.js";
 import { createUploadPage } from "../src/features/uploads/page.js";
 // Supply the browser document boundary from the actual offline shell.
 const shell = Deno.readTextFileSync("index.html");
@@ -58,8 +59,8 @@ Deno.test("Upload offers four distinct inputs with Title and only relevant contr
     );
     assert(
       html.includes('name="imageProcessing"') ===
-        (input === "pdf" || input === "images"),
-      "Only PDF/images have image settings.",
+        (input === "pdf"),
+      "Only PDF has an optional image setting.",
     );
     if (input === "documents") {
       assert(
@@ -112,6 +113,7 @@ Deno.test("Upload resolves bound identity independently of Library and rejects m
     },
   });
   await page.load("#upload?sourceId=source-a&runId=run-a&title=Untrusted");
+  assert(page.render().includes('<form data-upload-form="source-a" aria-busy="false">'), "Bound source key and truthful busy state must be HTML attributes.");
   assert(
     page.render().includes('value="Original &lt;title&gt;"'),
     "Server title must replace URL display text.",
@@ -350,7 +352,7 @@ Deno.test("Failed file upload keeps selected file and settings for a retry from 
         form.get("file") instanceof File,
         "Retry must retain the original file.",
       );
-      assert(form.get("attested") === "on", "Attestation survives rerender.");
+      assert(!form.has("attested"), "No obsolete rights attestation is sent.");
       return { ok: calls > 1, message: "Synthetic failure" };
     },
   });
@@ -363,8 +365,8 @@ Deno.test("Failed file upload keeps selected file and settings for a retry from 
   await page.submit(form);
   assert(
     page.render().includes("sample.pdf") &&
-      /name="attested"[^>]*checked/.test(page.render()),
-    "Retained file and permission are visible.",
+      !page.render().includes('name="attested"'),
+    "Retained file is visible without an attestation gate.",
   );
   const rendered = new FormData();
   rendered.set("title", "PDF draft");
@@ -478,11 +480,11 @@ Deno.test("Private file uploads preserve the existing optional-title filename be
     "Private files may use their filename when Title is left blank.",
   );
 });
-Deno.test("Upload remembers an explicitly unchecked image-processing option", () => {
+Deno.test("PDF remembers an explicitly unchecked image-processing option", () => {
   const page = createUploadPage(deps);
-  page.select("images");
+  page.select("pdf");
   const form = new FormData();
-  form.set("title", "Image");
+  form.set("title", "PDF");
   page.remember(form);
   const control = page.render().match(/<input[^>]*name="imageProcessing"[^>]*>/)
     ?.[0];
@@ -490,4 +492,166 @@ Deno.test("Upload remembers an explicitly unchecked image-processing option", ()
     control !== undefined && !control.includes("checked"),
     "Rerender must not opt the learner back into image processing.",
   );
+});
+
+Deno.test("Selected-source prefill stays exact, editable, and local through Upload mode changes", async () => {
+  const page = createUploadPage(deps);
+  const title = 'Actual <source> & title ' + '長'.repeat(200);
+  await page.load("#upload", {title});
+  assert(page.render().includes('value="Actual &lt;source&gt; &amp; title ' + '長'.repeat(200) + '"'), "Prefill exact selected title, escaped without inventing or truncating it.");
+  const draft = new FormData(); draft.set("title", "My edited title"); draft.set("content", "Private synthetic draft");
+  page.remember(draft);
+  for (const mode of ["documents", "pdf", "images", "text"]) {
+    page.select(mode);
+    assert(page.render().includes('value="My edited title"'), "Mode/rerender must not reapply source title.");
+  }
+  for (const length of [300, 301]) {
+    await page.load("#upload", {title: "x".repeat(length)});
+    assert(page.render().includes('value="' + "x".repeat(length) + '"'), "Prefill never truncates an actual title at the length boundary.");
+  }
+  const oversized = new FormData(); oversized.set("title", "x".repeat(301)); oversized.set("content", "Synthetic material"); oversized.set("attested", "on");
+  assert(!await page.submit(oversized) && page.render().includes("Enter a title of 1–300 characters."), "Existing title-size validation remains explicit.");
+  await page.load("#upload");
+  assert(page.render().includes('name="title" value=""'), "Unrelated new Upload remains blank.");
+});
+Deno.test("Upload prefill rejects missing titles and ambiguous bound-route combinations", async () => {
+  const page = createUploadPage(deps);
+  for (const title of ["", " "]) {
+    let rejected = false;
+    try { await page.load("#upload", {title}); } catch(error) { rejected = error instanceof TypeError; }
+    assert(rejected, "Invalid public prefill must fail explicitly.");
+  }
+  let rejected = false;
+  try { await page.load("#upload?sourceId=source-a&runId=run-a", {title:"Conflicting title"}); } catch(error) { rejected = error instanceof TypeError; }
+  assert(rejected, "Prefill cannot override a bound source context.");
+});
+
+Deno.test("Upload authorizes text/documents/images without checkbox; image mode ignores stale state", async () => {
+  /** @type {FormData[]} */ const received = [];
+  const page = createUploadPage({...deps, upload:async (_id,form) => { received.push(form); return {ok:true,message:"Uploaded"}; }});
+  for (const input of ["text","documents","images"]) {
+    page.select(input);
+    const form = new FormData(); form.set("title","Owned material");
+    if(input === "text") form.set("content","Synthetic notes");
+    else form.set("file",new File(["fixture"],input === "images" ? "image.png" : "notes.txt"));
+    form.set("imageProcessing","off");
+    assert(await page.submit(form),"Checkbox-free material must reach upload.");
+    assert(!page.render().includes('name="attested"'),"Rights checkbox is removed.");
+  }
+  assert(received[2].get("imageProcessing") === "on","Images always use image mode.");
+  page.select("pdf"); assert(!/name="imageProcessing"[^>]*checked/.test(page.render()),"Switching to PDF stays text-first.");
+});
+
+Deno.test("Upload bounds selected filenames behind an accessible full-name disclosure", () => {
+  const page = createUploadPage(deps);
+  for (const input of ["documents", "pdf", "images"]) {
+    page.select(input);
+    assert(page.render().includes('data-upload-files hidden'), "Empty selection has no disclosure.");
+    const name = 'long <synthetic> & filename '.repeat(10) + (input === "pdf" ? ".pdf" : input === "images" ? ".png" : ".txt");
+    const form = new FormData(); form.set("title", "Keep my title");
+    form.set("file", new File(["fixture"], name)); page.remember(form);
+    const html = page.render();
+    assert(html.includes('aria-describedby="upload-filenames"'), "Native input retains full filename description.");
+    assert(html.includes('data-focus-key="upload-filenames"'), "Background processing rerenders must preserve disclosure focus.");
+    assert(html.includes('<details data-upload-files>') && html.includes('<summary data-focus-key="upload-filenames">Selected filenames</summary>'), "Long names start collapsed behind a keyboard disclosure.");
+    assert(html.includes('id="upload-filenames">' + name.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")), "Full filename remains escaped and untruncated.");
+    assert(html.includes('value="Keep my title"'), "Filename never replaces an edited title.");
+    page.remember(new FormData());
+    assert(!page.render().includes('data-upload-files hidden'), "Memory-backed selection survives a native-input rerender.");
+  }
+});
+Deno.test("PDF pages has a short label and associated examples without changing text-first defaults", () => {
+  const page = createUploadPage(deps); page.select("pdf");
+  const html = page.render();
+  assert(html.includes('<label>PDF pages<input') && html.includes('aria-describedby="upload-pages-help"'), "Short pages label points to helper.");
+  assert(html.includes('<small id="upload-pages-help">Blank means all; e.g. 1,3-5. Page selection applies when image processing is enabled.</small>'), "Range syntax and conditional behavior stay accessible.");
+  assert(!/name="imageProcessing"[^>]*checked/.test(html), "PDF stays text-first.");
+});
+
+Deno.test("Upload Link requires editable title, owned interest and safe URL without file/attestation", async () => {
+  let extracts=0, uploads=0;
+  const page=createUploadPage({...deps,upload:async()=>{uploads++;return {ok:true,message:"unused"};},fetch:async(url,init)=>{
+    if(String(url).includes("api/source-library?"))return Response.json({result:{items:[],interestAreas:[{id:"area-a",ownerId:"owner-a",title:"Music",provenance:"configured"}],nextCursor:null}});
+    assert(String(url).endsWith("/extract"),"Link must use the same explicit extraction endpoint as Discover");
+    const command=JSON.parse(String(init?.body));extracts++;
+    assert(command.title==="Edited link" && command.interestAreaId==="area-a" && command.url==="https://publisher.example/lesson","Exact edited link input must be submitted");
+    assert(Object.keys(command).length===4,"Only title, URL, interest and idempotency key reach extraction");
+    return Response.json({result:{source,reused:false},workflow:{runId:"run-a",reused:false}});
+  }});
+  await page.load("#upload",{title:"Initial title"});await page.select("link");
+  const html=page.render();assert(html.includes('>Link</option>')&&html.includes('name="url"')&&html.includes('name="interest-area"'),"Link exposes native URL and interest controls");
+  assert(!html.includes('type="file"')&&!html.includes('name="attested"'),"No upload file or additional rights gate");
+  for(const change of [{title:""},{url:"https://127.0.0.1/"},{interest:"foreign"},{url:"javascript:alert(1)"}]){
+    const form=new FormData();form.set("title",change.title??"Edited link");form.set("url",change.url??"https://publisher.example/lesson");form.set("interest-area",change.interest??"area-a");
+    assert(!await page.submit(form),"Invalid Link must not reach transport");
+  }
+  const form=new FormData();form.set("title","Edited link");form.set("url","https://publisher.example/lesson");form.set("interest-area","area-a");form.set("content","stale private text");form.set("attested","on");
+  assert(await page.submit(form),"Valid Link starts extraction");assert(extracts===1&&uploads===0,"Link must never create a private file source");
+  assert(page.render().includes('value="Edited link"'),"Title stays editable after start");
+});
+
+Deno.test("Link help describes URL extraction and other modes preserve upload guidance", async () => {
+  const page=createUploadPage({...deps,fetch:async()=>Response.json({result:{items:[],interestAreas:[],nextCursor:null}})});
+  await page.select("link");
+  const html=page.render();
+  assert(html.includes("Use a public HTTPS page and choose an interest area. Extraction processes this page and linked pages within its source."),"Link-specific help explains the bounded URL workflow.");
+  assert(!html.includes("20 MiB")&&!html.includes("100 MiB")&&!html.includes("vision model"),"Link must not display image/PDF upload guidance.");
+  for(const mode of ["text","documents","pdf","images"]){
+    await page.select(mode);
+    assert(page.render().includes("Images are limited to 20 MiB each; the total upload limit is 100 MiB. Image processing sends selected images or PDF pages to the vision model."),"Preserve existing helper for "+mode);
+  }
+});
+Deno.test("Link errors are actionable typed projections without arbitrary diagnostics or draft loss", async () => {
+  const cases=[
+    [401,"ignored","Sign in to this app, then retry your Link."],
+    [403,"ignored","Your account cannot add this Link. Check your access with the app owner."],
+    [422,"KnowledgePageAuthenticationRequired","This source requires sign-in. Use a publicly accessible page or upload material you are authorized to use."],
+    [422,"KnowledgePagePaywallDetected","This source is behind a paywall. Use a publicly accessible page or upload material you are authorized to use."],
+    [422,"KnowledgePageBotAccessDenied","This source blocks automated access. Use another public page or upload material you are authorized to use."],
+    [422,"KnowledgePageRateLimited","This source is receiving too many requests. Wait, then retry your Link."],
+    [422,"KnowledgePageTypeUnsupported","This page format cannot be extracted. Choose an HTML page or upload a supported document."],
+    [422,"SourceExtractionFormatUnsupported","This page format cannot be extracted. Choose an HTML page or upload a supported document."],
+    [422,"KnowledgePageFetchFailed","The source page could not be fetched. Check that it opens publicly, then retry."],
+    [422,"KnowledgeBrowserNavigationFailed","The source page could not be fetched. Check that it opens publicly, then retry."],
+    [422,"KnowledgeBrowserTimedOut","The source took too long to respond. Retry later or choose another public page."],
+    [422,"KnowledgeBrowserNavigationRejected","This Link was blocked by source safety checks. Choose a public HTTPS page within the source."],
+    [422,"KnowledgeBrowserNetworkRejected","This Link was blocked by source safety checks. Choose a public HTTPS page within the source."],
+    [422,"SourceExtractionUrlInvalid","This Link was blocked by source safety checks. Choose a public HTTPS page within the source."],
+    [422,"KnowledgePageLoginRequired","The extraction service returned an unrecognized failure. Keep your draft and contact support before retrying."],
+    [422,"__proto__","The extraction service returned an unrecognized failure. Keep your draft and contact support before retrying."],
+    [422,"toString","The extraction service returned an unrecognized failure. Keep your draft and contact support before retrying."],
+    [422,"SourceGatewayUnauthorized","The extraction service returned an unrecognized failure. Keep your draft and contact support before retrying."],
+    [422,'<img src=x onerror="alert(1)"> secret diagnostic',"The extraction service returned an unrecognized failure. Keep your draft and contact support before retrying."],
+    [200,"malformed","The extraction service returned an invalid response. Keep your draft and contact support before retrying."],
+    [0,"fetch","The extraction service could not be reached. Check your connection, then retry."],
+    [0,"timeout","The extraction request timed out. Retry later; keep the same Link to avoid a duplicate."],
+  ];
+  for(const [status,kind,expected] of cases){
+    const page=createUploadPage({...deps,fetch:async(url)=>{
+      if(String(url).includes("api/source-library?"))return Response.json({result:{items:[],interestAreas:[{id:"area-a",ownerId:"owner-a",title:"Music",provenance:"configured"}],nextCursor:null}});
+      if(kind==="fetch")throw new TypeError("Internal transport diagnostic");
+      if(kind==="timeout")return await new Promise(()=>{});
+      return Response.json({error:kind,diagnosticToken:"internal-auth-token",message:"private arbitrary prose"},{status:Number(status)});
+    }});
+    await page.select("link");
+    const form=new FormData();form.set("title",'Draft <title> & "quoted"');form.set("url","https://publisher.example/lesson");form.set("interest-area","area-a");
+    assert(!await page.submit(form),"Failure must remain a failure: "+kind);
+    const html=page.render();
+    assert(html.includes(String(expected)),"Actionable error for "+kind+": "+html);
+    assert((Number(status)!==422 || !html.includes(String(kind)))&&!html.includes("internal-auth-token")&&!html.includes("private arbitrary prose")&&!html.includes("Internal transport diagnostic"),"Technical diagnostics must stay internal: "+kind);
+    assert(html.includes('value="Draft &lt;title&gt; &amp; &quot;quoted&quot;"')&&html.includes('value="https://publisher.example/lesson"')&&html.includes('value="area-a" selected'),"Failures preserve escaped editable draft.");
+  }
+});
+
+Deno.test("Link interest-load errors use readable copy and gateway retains diagnostic identity", async () => {
+  for(const status of [401,403]){
+    const page=createUploadPage({...deps,fetch:async()=>Response.json({error:"Private access diagnostic"},{status})});await page.select("link");
+    const html=page.render();
+    assert(html.includes(status===401 ? "Sign in to this app" : "Check your access with the app owner"),"Interest loader explains access recovery.");
+    assert(!html.includes("SourceGateway")&&!html.includes("Private access diagnostic"),"Interest loader hides technical diagnostics.");
+  }
+  const failureKind='<img src=x onerror="alert(1)"> private failure diagnostic';
+  const gateway=new SourceLibraryGatewayClient({baseUrl:deps.baseUrl,timeoutMs:100,fetch:async()=>Response.json({error:failureKind},{status:422})});
+  const result=await gateway.extract({title:"Draft",url:"https://publisher.example/lesson",interestAreaId:"area-a",idempotencyKey:"fixture"});
+  assert(!result.ok&&result.error.kind==="SourceGatewayRejected"&&result.error.failureKind===failureKind,"Display copy must not overwrite the internal typed failure.");
 });

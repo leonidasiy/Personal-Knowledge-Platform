@@ -27,6 +27,16 @@ const fillBlankReview = {
   dueCount: 1,
 };
 
+Deno.test("learner gateway preserves valid media purposes and rejects unknown ones", async () => {
+  for (const purpose of [undefined, "evidence", "illustration", "unknown", null]) {
+    const media = { assetId: "asset", kind: "image", url: "/api/learning-media?assetId=asset&variant=feed", attribution: "Source image", ...(purpose === undefined ? {} : { purpose }) };
+    const gateway = new LearningBatchGatewayClient({ fetch: async () => response({ result: { ...feed, items: feed.items.map((item) => ({ ...item, media })) } }), baseUrl: "https://app.example.test/", timeoutMs: 1000 });
+    const loaded = await gateway.loadFeed("2026-08-19");
+    assertEquals(loaded.ok, purpose === undefined || purpose === "evidence" || purpose === "illustration");
+    if (loaded.ok) assertEquals(loaded.value.items[0].media?.purpose, purpose);
+  }
+});
+
 Deno.test("learner gateway parses paired Feed and Review projections", async () => {
   /** @type {string[]} */ const paths = [];
   const gateway = new LearningBatchGatewayClient({

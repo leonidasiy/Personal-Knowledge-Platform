@@ -47,6 +47,28 @@ const approval = Object.freeze({
   idempotencyKey: "approve-1",
 });
 
+Deno.test("legacy private document retry preserves its historical authorization", async () => {
+ const command = { ownerId: "owner-a", title: "Legacy notes", fileName: "notes.txt", idempotencyKey: "legacy-private", applicationOrigin: "https://app.example/" };
+ const created = await service(new SourceLibraryRepository()).createPrivateDocument(command);
+ if (!created.ok) throw new Error(created.error.kind);
+ const basis = "learner-attested lawful copy", reference = "legacy-grant";
+ const legacy = { ...created.value.source, adapter: { ...created.value.source.adapter, capabilities: ["owner-private-document", "processing-attested"] }, identityEvidence: created.value.source.identityEvidence.map(entry => ({ ...entry, attribute: entry.attribute === "user-upload-authorization" ? "owner-attested-processing" : entry.attribute, value: entry.attribute === "processing-basis" ? basis : entry.attribute === "processing-reference" ? reference : entry.value })) };
+ const repository = new SourceLibraryRepository();
+ const seeded = await repository.approve({ source: legacy, event: { id: "legacy-event", ownerId: "owner-a", sourceId: legacy.id, kind: "approved", sourceRevision: 1, idempotencyKey: command.idempotencyKey, occurredAt: legacy.approvedAt }, job: null, fingerprint: JSON.stringify({ ...command, basis, reference }) });
+ if (!seeded.ok) throw new Error(seeded.error.kind);
+ const before = JSON.stringify(repository.list("owner-a")); const sourceLibrary = service(repository);
+ for (const rightsAttestation of [undefined, { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis, reference }]) {
+  const result = await sourceLibrary.createPrivateDocument({ ...command, rightsAttestation });
+  if (!result.ok || !result.value.reused || result.value.source.id !== legacy.id) throw new Error(result.ok ? "Expected legacy reuse." : result.error.kind);
+ }
+ for (const change of [{ title: "Different" }, { fileName: "different.txt" }, { applicationOrigin: "https://other.example/" }]) {
+  const result = await sourceLibrary.createPrivateDocument({ ...command, ...change });
+  if (result.ok || result.error.kind !== "SourceIdempotencyConflict") throw new Error("Different legacy command accepted.");
+ }
+ assertEquals(JSON.stringify(repository.list("owner-a")), before);
+ assertEquals(repository.listEvents("owner-a").length, 1);
+});
+
 Deno.test("source approval atomically creates source, event, and ingestion job", async () => {
   const repository = new SourceLibraryRepository();
   const result = await service(repository).approve(approval);
@@ -283,7 +305,7 @@ Deno.test("private document creation persists an owner-scoped HTTPS document ide
   assertEquals(result.ok, true);
   if (!result.ok) throw new Error(result.error.kind);
   assertEquals(result.value.source.origin, "private-document");
-  assertEquals(result.value.source.identityEvidence.find((entry) => entry.attribute === "processing-reference")?.value, "learner-attestation:1");
+  assertEquals(result.value.source.identityEvidence.find((entry) => entry.attribute === "processing-reference")?.value, "user-upload:private-document-1");
   assertEquals(result.value.source.canonicalUrl, `https://app.example/api/private-documents/${encodeURIComponent(result.value.source.id)}`);
   assertEquals(result.value.source.adapter.capabilities.includes("bounded-ingestion"), false);
   assertEquals(result.value.source.interestAreaIds.length, 0);
@@ -300,20 +322,25 @@ Deno.test("private document creation persists an owner-scoped HTTPS document ide
   assertEquals(repository.list("owner-a").length, 1);
 });
 
-Deno.test("private document creation rejects missing processing authority and idempotency conflicts", async () => {
+Deno.test("private document creation records upload authority without checkbox and rejects title conflicts", async () => {
   const repository = new SourceLibraryRepository();
   const sourceLibrary = service(repository);
   const command = { ownerId: "owner-a", title: "Week 3", fileName: "week3.pdf", applicationOrigin: "https://app.example/", idempotencyKey: "private-document-2", rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "learner-attested lawful copy", reference: "learner-attestation:2" } };
   const missingRights = await sourceLibrary.createPrivateDocument({ ...command, rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: false, basis: "learner-attested lawful copy", reference: "learner-attestation:2" } });
-  assertEquals(missingRights.ok, false);
-  if (!missingRights.ok) assertEquals(missingRights.error.kind, "SourceCatalogCommandInvalid");
+  assertEquals(missingRights.ok, true);
   const created = await sourceLibrary.createPrivateDocument(command);
   assertEquals(created.ok, true);
   const changedGrant = await sourceLibrary.createPrivateDocument({ ...command, rightsAttestation: { ...command.rightsAttestation, reference: "different-grant" } });
-  assertEquals(changedGrant.ok, false);
-  if (!changedGrant.ok) assertEquals(changedGrant.error.kind, "SourceIdempotencyConflict");
+  assertEquals(changedGrant.ok, true);
   const conflict = await sourceLibrary.createPrivateDocument({ ...command, title: "Other title" });
   assertEquals(conflict.ok, false);
   if (!conflict.ok) assertEquals(conflict.error.kind, "SourceIdempotencyConflict");
   assertEquals(repository.list("owner-a").length, 1);
+});
+
+Deno.test("Raw source approval preserves an absent provider snippet as empty text", async () => {
+ const repository=new SourceLibraryRepository(); const sourceLibrary=service(repository);
+ const command={ownerId:"owner-a",identityStatus:"resolved",submittedUrl:"https://publisher.example/lesson",canonicalUrl:"https://publisher.example/lesson",title:"Raw title",description:"",idempotencyKey:"raw-empty",adapter:{id:"submitted-link",version:"v1",granularity:"document",capabilities:["metadata"]},interestAreaIds:["area-a"],identityEvidence:[{attribute:"user-submitted-url",value:"https://publisher.example/lesson",provenanceUrl:"https://publisher.example/lesson",observedAt:"2026-10-05T00:00:00.000Z"}]};
+ const result=await sourceLibrary.approve(command); if(!result.ok)throw new Error(result.error.kind);assertEquals(result.value.source.description,"");
+ const tooLong=await sourceLibrary.approve({...command,title:"x".repeat(301),idempotencyKey:"too-long"});assertEquals(tooLong.ok,false);
 });

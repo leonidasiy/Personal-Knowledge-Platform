@@ -14,22 +14,11 @@ function equal(actual, expected) {
 
 const policyConfiguration = Object.freeze({
   version: "educational-v1",
-  terms: Object.freeze(["tutorial", "lesson", "course", "educational"]),
-  markers: Object.freeze([
-    "learn",
-    "tutorial",
-    "lesson",
-    "course",
-    "educational",
-    "guide",
-    "explained",
-    "how to",
-  ]),
   maximumSubmittedCharacters: 120,
   maximumProviderCharacters: 240,
 });
 
-Deno.test("central educational policy normalizes once and appends only missing terms", () => {
+Deno.test("central educational policy normalizes without generic query augmentation", () => {
   const policy = createEducationalSearchPolicy(policyConfiguration);
   const prepared = policy.prepare("  Vocaloid\u00a0  tuning tutorial  ");
   equal(prepared.ok, true);
@@ -37,20 +26,10 @@ Deno.test("central educational policy normalizes once and appends only missing t
   equal(prepared.value.submittedQuery, "Vocaloid tuning tutorial");
   equal(
     prepared.value.providerQuery,
-    "Vocaloid tuning tutorial lesson course educational",
+    "Vocaloid tuning tutorial",
   );
   equal(prepared.value.policyVersion, "educational-v1");
-  equal(
-    policy.accepts({
-      title: "A complete Vocaloid tuning guide",
-      description: null,
-    }),
-    true,
-  );
-  equal(
-    policy.accepts({ title: "Vocaloid showcase", description: "New songs" }),
-    false,
-  );
+
 });
 
 Deno.test("central educational policy rejects invalid and excessive queries", () => {
@@ -65,7 +44,7 @@ Deno.test("central educational policy rejects invalid and excessive queries", ()
     ...policyConfiguration,
     maximumProviderCharacters: 20,
   });
-  const augmented = outputPolicy.prepare("harmony");
+  const augmented = outputPolicy.prepare("harmony "+"x".repeat(20));
   equal(augmented.ok, false);
   if (!augmented.ok) {
     equal(augmented.error.kind, "EducationalProviderQueryTooLong");
@@ -102,7 +81,7 @@ function candidate(providerId, title, canonicalUrl) {
   });
 }
 
-Deno.test("central search augments every selected provider and deduplicates before limit", async () => {
+Deno.test("raw search preserves query and provider order before the global limit", async () => {
   /** @type {{readonly providerId:string,readonly query:string,readonly limit:number}[]} */
   const calls = [];
   const providers = [
@@ -154,7 +133,7 @@ Deno.test("central search augments every selected provider and deduplicates befo
   ];
   const search = createCentralDiscoverySearch(
     { maximumLimit: 20 },
-    { policy: createEducationalSearchPolicy(policyConfiguration), providers },
+    { budget:{timeoutMs:25000,now:Date.now,timeoutSignal:AbortSignal.timeout}, policy: createEducationalSearchPolicy(policyConfiguration), providers },
   );
   const result = await search.search({
     query: " harmony ",
@@ -168,16 +147,16 @@ Deno.test("central search augments every selected provider and deduplicates befo
   for (const call of calls) {
     equal(
       call.query,
-      "harmony tutorial lesson course educational",
+      "harmony",
     );
-    equal(call.limit, 2);
+    equal(call.limit, 20);
   }
   if (!result.ok) return;
   equal(result.value.items.length, 2);
   equal(result.value.items[0].providerId, "web");
   equal(
     result.value.items[1].canonicalUrl,
-    "https://www.youtube.com/watch?v=lesson-1",
+    "https://noise.example/",
   );
   equal(result.value.submittedQuery, "harmony");
   equal(result.value.providerQuery, calls[0].query);
@@ -189,6 +168,7 @@ Deno.test("central search returns partial provider failures without masking resu
   const search = createCentralDiscoverySearch(
     { maximumLimit: 20 },
     {
+      budget:{timeoutMs:25000,now:Date.now,timeoutSignal:AbortSignal.timeout},
       policy: createEducationalSearchPolicy(policyConfiguration),
       providers: [
         {
@@ -238,6 +218,7 @@ Deno.test("central search discards malformed provider batches atomically", async
   const allMalformed = createCentralDiscoverySearch(
     { maximumLimit: 20 },
     {
+      budget:{timeoutMs:25000,now:Date.now,timeoutSignal:AbortSignal.timeout},
       policy: createEducationalSearchPolicy(policyConfiguration),
       providers: [{
         descriptor: descriptor("web", 1),
@@ -262,6 +243,7 @@ Deno.test("central search discards malformed provider batches atomically", async
   const partial = createCentralDiscoverySearch(
     { maximumLimit: 20 },
     {
+      budget:{timeoutMs:25000,now:Date.now,timeoutSignal:AbortSignal.timeout},
       policy: createEducationalSearchPolicy(policyConfiguration),
       providers: [{
         descriptor: descriptor("web", 1),
@@ -307,6 +289,7 @@ Deno.test("central search validates command variants before provider work", asyn
   const search = createCentralDiscoverySearch(
     { maximumLimit: 20 },
     {
+      budget:{timeoutMs:25000,now:Date.now,timeoutSignal:AbortSignal.timeout},
       policy: createEducationalSearchPolicy(policyConfiguration),
       providers: [{
         descriptor: descriptor("web", 1),
@@ -358,6 +341,7 @@ Deno.test("central search returns a named all-provider failure", async () => {
   const search = createCentralDiscoverySearch(
     { maximumLimit: 20 },
     {
+      budget:{timeoutMs:25000,now:Date.now,timeoutSignal:AbortSignal.timeout},
       policy: createEducationalSearchPolicy(policyConfiguration),
       providers: [{
         descriptor: descriptor("web", 1),
@@ -375,4 +359,17 @@ Deno.test("central search returns a named all-provider failure", async () => {
   });
   equal(result.ok, false);
   if (!result.ok) equal(result.error.kind, "CentralSearchAllProvidersFailed");
+});
+
+Deno.test("raw search preserves same URL duplicates and provider priority over completion", async () => {
+  const repeated = "https://music.example/article";
+  const search = createCentralDiscoverySearch({maximumLimit:20}, {policy:createEducationalSearchPolicy(policyConfiguration), budget:{timeoutMs:1000,now:Date.now,timeoutSignal:AbortSignal.timeout}, providers:[
+    {descriptor:descriptor("youtube",2),search:async()=>({ok:true,value:[candidate("youtube","First completed",repeated)]})},
+    {descriptor:descriptor("web",1),search:async()=>{await new Promise(resolve=>setTimeout(resolve,10));return {ok:true,value:[candidate("web","Unreviewed",repeated),{...candidate("web","Duplicate",repeated),description:null}]};}},
+  ]});
+  const result = await search.search({query:"music",providerIds:["youtube","web"],limit:3});
+  equal(result.ok,true);if (!result.ok) throw new Error(result.error.kind);
+  equal(JSON.stringify(result.value.items.map(item=>item.title)),JSON.stringify(["Unreviewed","Duplicate","First completed"]));
+  equal(result.value.items[1].description,null);
+  equal(Object.hasOwn(result.value,"assessments"),false);
 });

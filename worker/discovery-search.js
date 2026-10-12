@@ -6,19 +6,21 @@
 /** @typedef {{readonly providerId:string,readonly resultKind:string,readonly sourceLevel:"site"|"document"|"feed"|"episode"|"video"|"unknown",readonly title:string,readonly description:string|null,readonly canonicalUrl:string,readonly publisherLabel:string|null,readonly publishedAt:string|null,readonly identityEvidence:readonly SearchIdentityEvidence[]}} CentralSearchCandidate */
 /** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number}} SearchProviderCommand */
 /** @typedef {{readonly kind:"SearchProviderCredentialMissing"}|{readonly kind:"SearchProviderCredentialRejected"}|{readonly kind:"SearchProviderQuotaExceeded"}|{readonly kind:"SearchProviderTimedOut"}|{readonly kind:"SearchProviderNetworkFailed"}|{readonly kind:"SearchProviderUpstreamRejected",readonly status:number}|{readonly kind:"SearchProviderQueryInvalid",readonly reason:"argument"|"complexity"|"field"|"input"|"syntax"|"variable"|"unspecified",readonly diagnosticTokens:readonly string[]}|{readonly kind:"SearchProviderInputInvalid"}|{readonly kind:"SearchProviderQueryTooComplex"}|{readonly kind:"SearchProviderGraphqlRejected",readonly code:string}|{readonly kind:"SearchProviderUnavailable"}|{readonly kind:"SearchProviderResponseInvalid"}|{readonly kind:"SearchProviderFeedBlocked",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedPrivate",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedDuplicate",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedInvalid",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedMissing",readonly seriesUuid:string}} SearchProviderFailure */
-/** @typedef {{readonly descriptor:SearchProviderDescriptor,search(command:SearchProviderCommand):Promise<Result<readonly CentralSearchCandidate[],SearchProviderFailure>>}} SearchProvider */
-/** @typedef {{prepare(input:unknown):Result<{readonly submittedQuery:string,readonly providerQuery:string,readonly policyVersion:string},{readonly kind:string}>,accepts(metadata:{readonly title:string,readonly description:string|null}):boolean}} EducationalSearchPolicy */
-/** @typedef {{readonly kind:"CentralSearchCommandInvalid",readonly field:string}|{readonly kind:"CentralSearchProvidersInvalid"}|{readonly kind:"CentralSearchProviderUnknown",readonly providerId:string}|{readonly kind:"CentralSearchProviderDisabled",readonly providerId:string}|{readonly kind:"CentralSearchLimitInvalid",readonly maximum:number}|{readonly kind:"CentralSearchAllProvidersFailed",readonly failures:readonly ProviderFailure[]}|{readonly kind:string}} CentralSearchFailure */
+/** @typedef {{readonly signal:AbortSignal,remainingMs():number}} SearchExecution */
+/** @typedef {{readonly descriptor:SearchProviderDescriptor,search(command:SearchProviderCommand,execution?:SearchExecution):Promise<Result<readonly CentralSearchCandidate[],SearchProviderFailure>>}} SearchProvider */
+/** @typedef {{prepare(input:unknown):Result<{readonly submittedQuery:string,readonly providerQuery:string,readonly policyVersion:string},import("./educational-search-policy.js").EducationalSearchFailure>}} EducationalSearchPolicy */
+/** @typedef {{readonly kind:"CentralSearchTimedOut",readonly stage:"providers"}|{readonly kind:"CentralSearchCommandInvalid",readonly field:string}|{readonly kind:"CentralSearchProvidersInvalid"}|{readonly kind:"CentralSearchProviderUnknown",readonly providerId:string}|{readonly kind:"CentralSearchProviderDisabled",readonly providerId:string}|{readonly kind:"CentralSearchLimitInvalid",readonly maximum:number}|{readonly kind:"CentralSearchAllProvidersFailed",readonly failures:readonly ProviderFailure[]}|import("./educational-search-policy.js").EducationalSearchFailure} CentralSearchFailure */
 /** @typedef {{readonly providerId:string,readonly failure:SearchProviderFailure}} ProviderFailure */
 /** @typedef {{readonly query:string,readonly providerIds:readonly string[],readonly limit:number}} CentralSearchCommand */
 /** @typedef {{readonly items:readonly CentralSearchCandidate[],readonly providerFailures:readonly ProviderFailure[],readonly submittedQuery:string,readonly providerQuery:string,readonly policyVersion:string}} CentralSearchResult */
 
 /**
  * @param {{readonly maximumLimit:number}} configuration
- * @param {{readonly policy:EducationalSearchPolicy,readonly providers:readonly SearchProvider[]}} dependencies
+ * @param {{readonly policy:EducationalSearchPolicy,readonly providers:readonly SearchProvider[],readonly budget:{readonly timeoutMs:number,readonly now:()=>number,readonly timeoutSignal:(milliseconds:number)=>AbortSignal}}} dependencies
  */
 export function createCentralDiscoverySearch(configuration, dependencies) {
   if (
+    !positive(dependencies?.budget?.timeoutMs) || dependencies.budget.timeoutMs >= 30_000 || typeof dependencies.budget.now !== "function" || typeof dependencies.budget.timeoutSignal !== "function" ||
     !record(configuration) || Object.keys(configuration).length !== 1 ||
     !positive(configuration.maximumLimit) ||
     !validPolicy(dependencies?.policy) ||
@@ -63,17 +65,29 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
         left.descriptor.priority - right.descriptor.priority ||
         left.descriptor.id.localeCompare(right.descriptor.id)
       );
-      const responses = await Promise.all(selected.map(async (provider) => ({
+      const startedAt = dependencies.budget.now();
+      if (!Number.isFinite(startedAt)) throw new TypeError("Invalid discovery budget clock.");
+      const deadline = startedAt + dependencies.budget.timeoutMs;
+      const signal = dependencies.budget.timeoutSignal(dependencies.budget.timeoutMs);
+      if (!(signal instanceof AbortSignal)) throw new TypeError("Invalid discovery budget signal.");
+      const execution = Object.freeze({signal, remainingMs: () => {
+        const now = dependencies.budget.now();
+        if (!Number.isFinite(now) || now < startedAt) throw new TypeError("Invalid discovery budget clock.");
+        return Math.max(0, deadline - now);
+      }});
+      if (signal.aborted || execution.remainingMs() <= 0) return {ok:false,error:{kind:"CentralSearchTimedOut",stage:"providers"}};
+      const responsesResult = await bounded(Promise.all(selected.map(async (provider) => ({
         provider,
         result: await provider.search({
           providerId: provider.descriptor.id,
           query: prepared.value.providerQuery,
-          limit: command.value.limit,
-        }),
-      })));
+          limit: Math.min(maximumLimit, Math.floor(60 / selected.length)),
+        }, execution),
+      }))), execution, "providers");
+      if (!responsesResult.ok) return responsesResult;
+      const responses = responsesResult.value;
       /** @type {ProviderFailure[]} */ const providerFailures = [];
-      /** @type {Map<string,CentralSearchCandidate>} */ const canonical =
-        new Map();
+      /** @type {CentralSearchCandidate[]} */ const pool = [];
       let successfulProviders = 0;
       for (const response of responses) {
         if (!response.result.ok) {
@@ -83,9 +97,13 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
           }));
           continue;
         }
-        let responseValid = true;
+        let responseValid = Array.isArray(response.result.value) && response.result.value.length <= Math.min(maximumLimit, Math.floor(60 / selected.length));
+        if (!responseValid) {
+          providerFailures.push({providerId:response.provider.descriptor.id, failure:{kind:"SearchProviderResponseInvalid"}});
+          continue;
+        }
         for (const item of response.result.value) {
-          if (!candidateValid(item, response.provider.descriptor)) {
+          if (!centralSearchCandidateValid(item) || item.providerId !== response.provider.descriptor.id || item.resultKind !== response.provider.descriptor.resultKind) {
             providerFailures.push(Object.freeze({
               providerId: response.provider.descriptor.id,
               failure: {
@@ -99,12 +117,7 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
         if (!responseValid) continue;
         successfulProviders += 1;
         for (const item of response.result.value) {
-          if (
-            dependencies.policy.accepts({
-              title: item.title,
-              description: item.description,
-            }) && !canonical.has(item.canonicalUrl)
-          ) canonical.set(item.canonicalUrl, item);
+          pool.push(item);
         }
       }
       if (successfulProviders === 0) {
@@ -116,12 +129,11 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
           },
         };
       }
+      if (signal.aborted || execution.remainingMs() <= 0) return {ok:false,error:{kind:"CentralSearchTimedOut",stage:"providers"}};
       return {
         ok: true,
         value: Object.freeze({
-          items: Object.freeze(
-            [...canonical.values()].slice(0, command.value.limit),
-          ),
+          items: Object.freeze(pool.slice(0, command.value.limit)),
           providerFailures: Object.freeze(providerFailures),
           ...prepared.value,
         }),
@@ -169,8 +181,7 @@ function commandValue(input, maximum) {
 
 /** @param {unknown} value @returns {value is EducationalSearchPolicy} */
 function validPolicy(value) {
-  return record(value) && typeof value.prepare === "function" &&
-    typeof value.accepts === "function";
+  return record(value) && typeof value.prepare === "function";
 }
 
 /** @param {unknown} value @returns {value is readonly SearchProvider[]} */
@@ -201,11 +212,10 @@ function descriptorValid(value) {
     typeof value.enabled === "boolean";
 }
 
-/** @param {unknown} value @param {SearchProviderDescriptor} descriptor @returns {value is CentralSearchCandidate} */
-function candidateValid(value, descriptor) {
+/** @param {unknown} value @returns {value is CentralSearchCandidate} */
+export function centralSearchCandidateValid(value) {
   return record(value) && Object.keys(value).length === 9 &&
-    value.providerId === descriptor.id &&
-    value.resultKind === descriptor.resultKind &&
+    text(value.providerId) && text(value.resultKind) &&
     sourceLevel(value.sourceLevel) && text(value.title) &&
     (value.description === null || typeof value.description === "string") &&
     secure(value.canonicalUrl) &&
@@ -247,10 +257,23 @@ function positive(value) {
 /** @param {unknown} value */
 function secure(value) {
   return typeof value === "string" && URL.canParse(value) &&
-    new URL(value).protocol === "https:";
+    new URL(value).protocol === "https:" && new URL(value).username === "" && new URL(value).password === "" && new URL(value).hash === "";
 }
 
 /** @param {unknown} value */
 function instant(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+/** @template T @param {Promise<T>} operation @param {SearchExecution} execution @param {"providers"} stage @returns {Promise<Result<T,{readonly kind:"CentralSearchTimedOut",readonly stage:"providers"}>>} */
+async function bounded(operation, execution, stage) {
+  const failure = {ok: /** @type {const} */(false),error:{kind: /** @type {const} */("CentralSearchTimedOut"),stage}};
+  /** @type {()=>void} */ let abort = () => {};
+  const timeout = new Promise(resolve => {abort = () => resolve(failure); execution.signal.addEventListener("abort",abort,{once:true});});
+  try {
+    if (execution.signal.aborted || execution.remainingMs() <= 0) return failure;
+    const result = await Promise.race([operation.then(value => ({ok: /** @type {const} */(true),value})),timeout]);
+    if (execution.signal.aborted || execution.remainingMs() <= 0) return failure;
+    return /** @type {Result<T,{readonly kind:"CentralSearchTimedOut",readonly stage:"providers"}>} */(result);
+  } finally { execution.signal.removeEventListener("abort",abort); }
 }

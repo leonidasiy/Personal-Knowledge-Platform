@@ -1,0 +1,345 @@
+{
+  "source": "/path/to/personal-knowledge-platform/test-results/architecture-recovery/continued-repair/ready-glm-high30-final-clause-critic-v22/models.json",
+  "roles": {
+    "knowledge-scraper": {
+      "catalog": {
+        "source": "https://openrouter.ai/api/v1/models",
+        "retrievedAt": "2026-10-10T11:23:02.219Z",
+        "catalogSha256": "616303dac845685dbeb15ed2a74b9368ab8900512d59705c6f20064d8508d81c",
+        "model": {
+          "id": "z-ai/glm-5.3-flash",
+          "canonical_slug": "z-ai/glm-5.3-flash-20260826",
+          "hugging_face_id": "zai-org/GLM-5.3-Flash",
+          "name": "Z.ai: GLM 5.3 Flash",
+          "created": 1787752741,
+          "description": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while...",
+          "context_length": 1048576,
+          "architecture": {
+            "modality": "text+image+video->text",
+            "input_modalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output_modalities": [
+              "text"
+            ],
+            "tokenizer": "Other",
+            "instruct_type": null
+          },
+          "pricing": {
+            "prompt": "0.00000015",
+            "completion": "0.0000005",
+            "input_cache_read": "0.00000003"
+          },
+          "top_provider": {
+            "context_length": 1048575,
+            "max_completion_tokens": 943717,
+            "is_moderated": false
+          },
+          "per_request_limits": null,
+          "supported_parameters": [
+            "frequency_penalty",
+            "include_reasoning",
+            "logit_bias",
+            "logprobs",
+            "max_tokens",
+            "min_p",
+            "parallel_tool_calls",
+            "presence_penalty",
+            "reasoning",
+            "reasoning_effort",
+            "repetition_penalty",
+            "response_format",
+            "seed",
+            "stop",
+            "structured_outputs",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_k",
+            "top_logprobs",
+            "top_p"
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 0.95
+          },
+          "supported_voices": null,
+          "knowledge_cutoff": null,
+          "expiration_date": null,
+          "links": {
+            "details": "/api/v1/models/z-ai/glm-5.3-flash-20260826/endpoints"
+          },
+          "benchmarks": {
+            "design_arena": [
+              {
+                "arena": "models",
+                "category": "3d",
+                "elo": 1323,
+                "win_rate": 56.5,
+                "rank": 11
+              },
+              {
+                "arena": "models",
+                "category": "asciiart",
+                "elo": 1272,
+                "win_rate": 54.9,
+                "rank": 12
+              },
+              {
+                "arena": "models",
+                "category": "codecategories",
+                "elo": 1287,
+                "win_rate": 49.4,
+                "rank": 17
+              },
+              {
+                "arena": "models",
+                "category": "dataviz",
+                "elo": 1266,
+                "win_rate": 50.3,
+                "rank": 27
+              },
+              {
+                "arena": "models",
+                "category": "gamedev",
+                "elo": 1289,
+                "win_rate": 47.3,
+                "rank": 19
+              },
+              {
+                "arena": "models",
+                "category": "svg",
+                "elo": 1289,
+                "win_rate": 57.1,
+                "rank": 10
+              },
+              {
+                "arena": "models",
+                "category": "uicomponent",
+                "elo": 1324,
+                "win_rate": 55.1,
+                "rank": 9
+              },
+              {
+                "arena": "models",
+                "category": "website",
+                "elo": 1276,
+                "win_rate": 48.4,
+                "rank": 24
+              }
+            ],
+            "artificial_analysis": {
+              "intelligence_index": 41.8,
+              "coding_index": 71.5,
+              "agentic_index": 50.9
+            }
+          },
+          "reasoning": {
+            "mandatory": true,
+            "default_enabled": true,
+            "supported_efforts": [
+              "max",
+              "high",
+              "low"
+            ],
+            "default_effort": "max"
+          }
+        }
+      },
+      "version": "z-ai/glm-5.3-flash-20260826",
+      "protocol": {
+        "source": "test-results/architecture-recovery/continued-repair/paired-model30-preparation-v1/glm-high-catalog.json",
+        "responseFormat": "json_schema",
+        "reasoningEffort": "high",
+        "provider": {
+          "sort": "throughput",
+          "require_parameters": true,
+          "allow_fallbacks": true,
+          "max_price": {
+            "prompt": 0.15,
+            "completion": 0.5,
+            "request": 0,
+            "image": 0
+          }
+        },
+        "receiptOptional": true
+      }
+    },
+    "review-grader": {
+      "catalog": {
+        "source": "https://openrouter.ai/api/v1/models",
+        "retrievedAt": "2026-10-10T11:23:02.219Z",
+        "catalogSha256": "616303dac845685dbeb15ed2a74b9368ab8900512d59705c6f20064d8508d81c",
+        "model": {
+          "id": "mistralai/mistral-large-4-0",
+          "canonical_slug": "mistralai/mistral-large-4-0-20261006",
+          "hugging_face_id": null,
+          "name": "Mistral: Mistral Large 4",
+          "created": 1791294122,
+          "description": "Mistral Large 4 is a frontier multimodal (text and image input) model from Mistral AI built for reasoning, coding, and agentic workloads. It offers a 1M-token context window with up...",
+          "context_length": 1048576,
+          "architecture": {
+            "modality": "text+image->text",
+            "input_modalities": [
+              "text",
+              "image"
+            ],
+            "output_modalities": [
+              "text"
+            ],
+            "tokenizer": "Mistral",
+            "instruct_type": null
+          },
+          "pricing": {
+            "prompt": "0.00000068",
+            "completion": "0.00000209",
+            "input_cache_read": "0.00000007"
+          },
+          "top_provider": {
+            "context_length": 1048576,
+            "max_completion_tokens": 262144,
+            "is_moderated": false
+          },
+          "per_request_limits": null,
+          "supported_parameters": [
+            "frequency_penalty",
+            "include_reasoning",
+            "logprobs",
+            "max_tokens",
+            "presence_penalty",
+            "reasoning",
+            "reasoning_effort",
+            "response_format",
+            "seed",
+            "stop",
+            "structured_outputs",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_logprobs",
+            "top_p"
+          ],
+          "default_parameters": {},
+          "supported_voices": null,
+          "knowledge_cutoff": null,
+          "expiration_date": null,
+          "links": {
+            "details": "/api/v1/models/mistralai/mistral-large-4-0-20261006/endpoints"
+          },
+          "benchmarks": {
+            "design_arena": [
+              {
+                "arena": "models",
+                "category": "3d",
+                "elo": 1272,
+                "win_rate": 47,
+                "rank": 21
+              },
+              {
+                "arena": "models",
+                "category": "codecategories",
+                "elo": 1271,
+                "win_rate": 47.5,
+                "rank": 27
+              },
+              {
+                "arena": "models",
+                "category": "dataviz",
+                "elo": 1321,
+                "win_rate": 58,
+                "rank": 11
+              },
+              {
+                "arena": "models",
+                "category": "gamedev",
+                "elo": 1250,
+                "win_rate": 44.7,
+                "rank": 35
+              },
+              {
+                "arena": "models",
+                "category": "uicomponent",
+                "elo": 1298,
+                "win_rate": 50,
+                "rank": 17
+              },
+              {
+                "arena": "models",
+                "category": "website",
+                "elo": 1258,
+                "win_rate": 46.6,
+                "rank": 36
+              }
+            ]
+          },
+          "reasoning": {
+            "mandatory": false,
+            "default_enabled": true,
+            "supported_efforts": [
+              "high",
+              "none"
+            ],
+            "default_effort": "high"
+          }
+        }
+      },
+      "version": "mistralai/mistral-large-4-0-20261006",
+      "protocol": {
+        "source": "test-results/architecture-recovery/continued-repair/provider-routing-repair-v1/ROUTING-METADATA.json",
+        "responseFormat": "json_schema",
+        "reasoningEffort": "none",
+        "provider": {
+          "sort": "throughput",
+          "require_parameters": true,
+          "allow_fallbacks": true,
+          "max_price": {
+            "prompt": 0.68,
+            "completion": 2.09,
+            "request": 0,
+            "image": 0
+          }
+        },
+        "receiptOptional": true,
+        "maximumOutputTokens": 4096
+      }
+    }
+  },
+  "benchmarkContract": {
+    "source": "/path/to/personal-knowledge-platform/test-results/architecture-recovery/continued-repair/ready-glm-high30-reviewed-knowledge-v2/owner-scope.json",
+    "readiness": "owner-authorized-first-development-case",
+    "excludedCreators": [
+      "openai",
+      "anthropic",
+      "google",
+      "luna"
+    ],
+    "approved": [
+      {
+        "id": "z-ai/glm-5.3-flash",
+        "canonicalSlug": "z-ai/glm-5.3-flash-20260826",
+        "creator": "z-ai",
+        "catalogSha256": "616303dac845685dbeb15ed2a74b9368ab8900512d59705c6f20064d8508d81c",
+        "prompt": "0.00000015",
+        "completion": "0.0000005"
+      },
+      {
+        "id": "mistralai/mistral-large-4-0",
+        "canonicalSlug": "mistralai/mistral-large-4-0-20261006",
+        "creator": "mistralai",
+        "catalogSha256": "616303dac845685dbeb15ed2a74b9368ab8900512d59705c6f20064d8508d81c",
+        "prompt": "0.00000068",
+        "completion": "0.00000209"
+      },
+      {
+        "id": "xiaomi/mimo-v2.6-pro",
+        "canonicalSlug": "xiaomi/mimo-v2.6-pro-20260921",
+        "creator": "xiaomi",
+        "catalogSha256": "616303dac845685dbeb15ed2a74b9368ab8900512d59705c6f20064d8508d81c",
+        "prompt": "0.000000435",
+        "completion": "0.00000087"
+      }
+    ]
+  }
+}

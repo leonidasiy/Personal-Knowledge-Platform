@@ -61,7 +61,7 @@ Deno.test("cleanup removes R2 objects and every content-bearing run descendant b
   assertEquals(fixtureValue.queries.some((query) => query.includes("DELETE FROM learning_generation_jobs")), true);
   assertEquals(fixtureValue.queries.some((query) => query.includes("DELETE FROM knowledge_workflow_materials")), true);
   assertEquals(fixtureValue.marked.length, 0);
-  assertEquals(fixtureValue.invalidations.length, 1);
+  assertEquals(fixtureValue.invalidations.length, 0);
 });
 
 Deno.test("source revocation purges all matching runs and marks active runs abandoned", async () => {

@@ -17,7 +17,7 @@ const command = Object.freeze({
   limit: 8,
 });
 
-Deno.test("Brave provider forwards the augmented query and returns site roots", async () => {
+Deno.test("Brave provider preserves exact distinct same-host material URLs", async () => {
   /** @type {URL|null} */ let requestedUrl = null;
   /** @type {Headers|null} */ let requestedHeaders = null;
   const provider = createBraveSearchProvider(
@@ -38,6 +38,13 @@ Deno.test("Brave provider forwards the augmented query and returns site roots", 
         return Response.json({
           web: {
             results: [{
+              title: "Credential-bearing result is not eligible",
+              url: "https://user:secret@blocked.example/article",
+              description: "Do not forward credentials to assessment.",
+            }, {
+              title: "Fragment-bearing result is not eligible",
+              url: "https://blocked.example/article#preview",
+            }, {
               title: "Insecure result is not eligible",
               url: "http://legacy.example/tutorial",
               description: "A legacy result without transport security.",
@@ -64,9 +71,10 @@ Deno.test("Brave provider forwards the augmented query and returns site roots", 
   equal(braveUrl.searchParams.get("count"), "8");
   equal(braveUrl.searchParams.get("safesearch"), "strict");
   equal(braveHeaders.get("x-subscription-token"), "brave-secret");
-  equal(result.value.length, 1);
-  equal(result.value[0].canonicalUrl, "https://voice.example/");
-  equal(result.value[0].sourceLevel, "site");
+  equal(result.value.length, 2);
+  equal(result.value[0].canonicalUrl, "https://voice.example/articles/breath-support?ref=search");
+  equal(result.value[1].canonicalUrl, "https://voice.example/courses/foundations");
+  equal(result.value[0].sourceLevel, "document");
   equal(
     result.value[0].identityEvidence[0].provenanceUrl,
     "https://voice.example/articles/breath-support?ref=search",
@@ -153,6 +161,9 @@ Deno.test("Taddy provider searches once and safety-checks the bounded batch once
         return Response.json({ data: { getMultiplePodcastSeries: [{
           uuid: "6bdfd429-f58b-427d-8072-353d478aa15f",
           name: "Song Exploder lessons",
+          description: "Artists explain harmony and arrangement with worked examples",
+          authorName: "Song Exploder",
+          websiteUrl: "https://publisher.example/show",
           rssUrl: "https://feeds.example/song-exploder.xml",
           isBlocked: null,
           feedRefreshDetails: {
@@ -199,18 +210,23 @@ Deno.test("Taddy provider searches once and safety-checks the bounded batch once
   equal(query.includes("rankingDetails"), true);
   equal(query.includes("rankingDetails{id uuid rankingScore}"), true);
   equal(query.includes("searchId"), true);
-  equal(query.includes("description"), false);
-  equal(query.includes("websiteUrl"), false);
-  equal(query.includes("authorName"), false);
+  equal(query.includes("description"), true);
+  equal(query.includes("websiteUrl"), true);
+  equal(query.includes("authorName"), true);
   equal(detailsQuery.includes("getMultiplePodcastSeries"), true);
   equal(detailsQuery.includes("getMultiplePodcastSeries"), true);
   equal(detailsQuery.includes(JSON.stringify("6bdfd429-f58b-427d-8072-353d478aa15f")), true);
+  equal(detailsQuery.includes("description"), true);
+  equal(detailsQuery.includes("authorName"), true);
+  equal(detailsQuery.includes("websiteUrl"), true);
   equal(detailsQuery.includes("isBlocked"), true);
   equal(detailsQuery.includes("feedRefreshDetails"), true);
   equal(compactDetailsQuery.endsWith("}}}"), true);
   equal(compactDetailsQuery.endsWith("}}}}"), false);
   equal(result.value[0].canonicalUrl, "https://feeds.example/song-exploder.xml");
   equal(result.value[0].sourceLevel, "feed");
+  equal(result.value[0].description, "Artists explain harmony and arrangement with worked examples");
+  equal(result.value[0].publisherLabel, "Song Exploder");
   equal(result.value[0].identityEvidence.some((entry) => entry.attribute === "taddy-series-uuid"), true);
   equal(result.value[0].identityEvidence.some((entry) => entry.attribute === "podcast-feed"), true);
 });
@@ -381,6 +397,8 @@ Deno.test("YouTube provider forwards the centralized query without modifying it"
             ok: /** @type {const} */ (true),
             value: [{
               videoId: "video-1",
+              description: "Worked examples of phrasing and pitch control",
+              channelId: "channel-1",
               title: "Vocaloid tuning tutorial",
               publisherLabel: "Music Teacher",
               publishedAt: "2026-07-01T00:00:00.000Z",
@@ -398,6 +416,8 @@ Deno.test("YouTube provider forwards the centralized query without modifying it"
   equal(JSON.stringify(received), JSON.stringify({ query: command.query }));
   equal(result.ok, true);
   if (!result.ok) return;
+  equal(result.value[0].description, "Worked examples of phrasing and pitch control");
+  equal(result.value[0].identityEvidence.some(entry => entry.attribute === "youtube-channel-id" && entry.value === "channel-1"), true);
   equal(result.value[0].sourceLevel, "video");
   equal(result.value[0].canonicalUrl, "https://www.youtube.com/watch?v=video-1");
 });
@@ -425,4 +445,12 @@ Deno.test("YouTube provider maps quota and response failures", async () => {
   });
   equal(invalid.ok, false);
   if (!invalid.ok) equal(invalid.error.kind, "SearchProviderResponseInvalid");
+});
+
+Deno.test("Taddy retains search order and original fields when detail hydration is reversed", async () => {
+ const ids=["6bdfd429-f58b-427d-8072-353d478aa15f","7bdfd429-f58b-427d-8072-353d478aa15f"];
+ let requests=0;
+ const provider=createTaddySearchProvider({providerId:"podcasts",label:"Podcasts",resultKind:"podcast",priority:2,enabled:true,maximumResults:6,timeoutMs:5000},{credentials:()=>({ok:true,value:{userId:"fixture",apiKey:"fixture"}}),timeoutSignal:()=>new AbortController().signal,fetch:async()=> ++requests===1?Response.json({data:{searchForTerm:{podcastSeries:ids.map((uuid,i)=>({uuid,name:` Search ${i} `,description:` Snippet ${i} `,rssUrl:`https://feeds.example/${i}`,authorName:`Publisher ${i}`,websiteUrl:null})),rankingDetails:[...ids].reverse().map(uuid=>({uuid,rankingScore:1}))}}}):Response.json({data:{getMultiplePodcastSeries:[...ids].reverse().map(uuid=>({uuid,name:"Hydrated",description:"Replacement",authorName:"Replacement",websiteUrl:null,rssUrl:"https://feeds.example/hydrated",isBlocked:null,feedRefreshDetails:{uuid,priority:"HIGH",priorityReason:null,dateLastRefreshed:1785242096}}))}})});
+ const result=await provider.search({...command,providerId:"podcasts"});equal(result.ok,true);if(!result.ok)return;
+ equal(JSON.stringify(result.value.map(c=>c.title)),JSON.stringify([" Search 0 "," Search 1 "]));equal(result.value[0].description," Snippet 0 ");equal(result.value[0].canonicalUrl,"https://feeds.example/0");equal(result.value[1].canonicalUrl,"https://feeds.example/1");
 });

@@ -1,0 +1,1412 @@
+{
+  "policy": "deny-all-registered-special-purpose-prefixes",
+  "conservativeConfig": {
+    "ipv4Multicast": {
+      "cidr": "224.0.0.0/4",
+      "source": "https://www.rfc-editor.org/rfc/rfc1112#section-4",
+      "basis": "IPv4 multicast; RFC 1112 is cited by the retained IPv4 registry Reserved record."
+    },
+    "ipv6Envelope": {
+      "cidr": "2000::/3",
+      "source": "https://www.rfc-editor.org/rfc/rfc4291#section-2.4",
+      "basis": "Owner-approved retention of the inherited 001 global-unicast subset; RFC 4291 defines address types. This narrower envelope is a conservative acquisition choice, not a claim that all other unicast space is non-global."
+    }
+  },
+  "registries": [
+    {
+      "family": 4,
+      "url": "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xml",
+      "file": "iana-ipv4-special-registry.xml",
+      "retrievedAt": "2026-10-06T02:27:39Z",
+      "sha256": "cf24e11f41b7d42c68debe2d18b97cac815084ec413ebb3b244f704028a16f20",
+      "bytes": 13459,
+      "responseHeaders": {
+        "Content-Type": "application/xml",
+        "Last-Modified": "Tue, 29 Sep 2026 00:49:13 GMT"
+      },
+      "revision": "2025-10-09",
+      "title": "IPv4 Special-Purpose Address Space",
+      "created": "2009-08-19",
+      "category": "Internet Protocol version 4 (IPv4) Address Space",
+      "records": [
+        {
+          "blocks": [
+            {
+              "cidr": "0.0.0.0/8",
+              "first": "0.0.0.0",
+              "last": "0.255.255.255"
+            }
+          ],
+          "name": "\"This network\"",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc791"
+            }
+          ],
+          "allocation": "1981-09",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "0.0.0.0/32",
+              "first": "0.0.0.0",
+              "last": "0.0.0.0"
+            }
+          ],
+          "name": "\"This host on this network\"",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc1122"
+            }
+          ],
+          "allocation": "1981-09",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "10.0.0.0/8",
+              "first": "10.0.0.0",
+              "last": "10.255.255.255"
+            }
+          ],
+          "name": "Private-Use",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc1918"
+            }
+          ],
+          "allocation": "1996-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "100.64.0.0/10",
+              "first": "100.64.0.0",
+              "last": "100.127.255.255"
+            }
+          ],
+          "name": "Shared Address Space",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc6598"
+            }
+          ],
+          "allocation": "2012-04",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "127.0.0.0/8",
+              "first": "127.0.0.0",
+              "last": "127.255.255.255"
+            }
+          ],
+          "name": "Loopback",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc1122"
+            }
+          ],
+          "allocation": "1981-09",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "169.254.0.0/16",
+              "first": "169.254.0.0",
+              "last": "169.254.255.255"
+            }
+          ],
+          "name": "Link Local",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc3927"
+            }
+          ],
+          "allocation": "2005-05",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "172.16.0.0/12",
+              "first": "172.16.0.0",
+              "last": "172.31.255.255"
+            }
+          ],
+          "name": "Private-Use",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc1918"
+            }
+          ],
+          "allocation": "1996-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.0.0.0/24",
+              "first": "192.0.0.0",
+              "last": "192.0.0.255"
+            }
+          ],
+          "name": "IETF Protocol Assignments",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc6890"
+            }
+          ],
+          "allocation": "2010-01",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.0.0.0/29",
+              "first": "192.0.0.0",
+              "last": "192.0.0.7"
+            }
+          ],
+          "name": "IPv4 Service Continuity Prefix",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7335"
+            }
+          ],
+          "allocation": "2011-06",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.0.0.8/32",
+              "first": "192.0.0.8",
+              "last": "192.0.0.8"
+            }
+          ],
+          "name": "IPv4 dummy address",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7600"
+            }
+          ],
+          "allocation": "2015-03",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.0.0.9/32",
+              "first": "192.0.0.9",
+              "last": "192.0.0.9"
+            }
+          ],
+          "name": "Port Control Protocol Anycast",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7723"
+            }
+          ],
+          "allocation": "2015-10",
+          "termination": null,
+          "attributes": {
+            "date": "2015-10-23"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.0.0.10/32",
+              "first": "192.0.0.10",
+              "last": "192.0.0.10"
+            }
+          ],
+          "name": "Traversal Using Relays around NAT Anycast",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc8155"
+            }
+          ],
+          "allocation": "2017-02",
+          "termination": null,
+          "attributes": {
+            "date": "2017-02-23"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.0.0.170/32",
+              "first": "192.0.0.170",
+              "last": "192.0.0.170"
+            },
+            {
+              "cidr": "192.0.0.171/32",
+              "first": "192.0.0.171",
+              "last": "192.0.0.171"
+            }
+          ],
+          "name": "NAT64/DNS64 Discovery",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc8880"
+            },
+            {
+              "type": "rfc",
+              "data": "rfc7050"
+            }
+          ],
+          "allocation": "2013-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.0.2.0/24",
+              "first": "192.0.2.0",
+              "last": "192.0.2.255"
+            }
+          ],
+          "name": "Documentation (TEST-NET-1)",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc5737"
+            }
+          ],
+          "allocation": "2010-01",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.31.196.0/24",
+              "first": "192.31.196.0",
+              "last": "192.31.196.255"
+            }
+          ],
+          "name": "AS112-v4",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7535"
+            }
+          ],
+          "allocation": "2014-12",
+          "termination": null,
+          "attributes": {
+            "date": "2014-12-17"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.52.193.0/24",
+              "first": "192.52.193.0",
+              "last": "192.52.193.255"
+            }
+          ],
+          "name": "AMT",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7450"
+            }
+          ],
+          "allocation": "2014-12",
+          "termination": null,
+          "attributes": {
+            "date": "2014-12-17"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.88.99.0/24",
+              "first": "192.88.99.0",
+              "last": "192.88.99.255"
+            }
+          ],
+          "name": "Deprecated (6to4 Relay Anycast)",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7526"
+            }
+          ],
+          "allocation": "2001-06",
+          "termination": "2015-03",
+          "attributes": {
+            "updated": "2015-03-15"
+          },
+          "flags": {
+            "source": "",
+            "destination": "",
+            "forwardable": "",
+            "global": "",
+            "reserved": ""
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.88.99.2/32",
+              "first": "192.88.99.2",
+              "last": "192.88.99.2"
+            }
+          ],
+          "name": "6a44-relay anycast address",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc6751"
+            }
+          ],
+          "allocation": "2012-10",
+          "termination": null,
+          "attributes": {
+            "updated": "2025-06-26"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.168.0.0/16",
+              "first": "192.168.0.0",
+              "last": "192.168.255.255"
+            }
+          ],
+          "name": "Private-Use",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc1918"
+            }
+          ],
+          "allocation": "1996-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "192.175.48.0/24",
+              "first": "192.175.48.0",
+              "last": "192.175.48.255"
+            }
+          ],
+          "name": "Direct Delegation AS112 Service",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7534"
+            }
+          ],
+          "allocation": "1996-01",
+          "termination": null,
+          "attributes": {
+            "date": "2015-03-17"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "198.18.0.0/15",
+              "first": "198.18.0.0",
+              "last": "198.19.255.255"
+            }
+          ],
+          "name": "Benchmarking",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc2544"
+            }
+          ],
+          "allocation": "1999-03",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "198.51.100.0/24",
+              "first": "198.51.100.0",
+              "last": "198.51.100.255"
+            }
+          ],
+          "name": "Documentation (TEST-NET-2)",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc5737"
+            }
+          ],
+          "allocation": "2010-01",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "203.0.113.0/24",
+              "first": "203.0.113.0",
+              "last": "203.0.113.255"
+            }
+          ],
+          "name": "Documentation (TEST-NET-3)",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc5737"
+            }
+          ],
+          "allocation": "2010-01",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "240.0.0.0/4",
+              "first": "240.0.0.0",
+              "last": "255.255.255.255"
+            }
+          ],
+          "name": "Reserved",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc1112"
+            }
+          ],
+          "allocation": "1989-08",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "255.255.255.255/32",
+              "first": "255.255.255.255",
+              "last": "255.255.255.255"
+            }
+          ],
+          "name": "Limited Broadcast",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc8190"
+            },
+            {
+              "type": "rfc",
+              "data": "rfc919"
+            }
+          ],
+          "allocation": "1984-10",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "True",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        }
+      ],
+      "recordCount": 25,
+      "prefixCount": 26
+    },
+    {
+      "family": 6,
+      "url": "https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xml",
+      "file": "iana-ipv6-special-registry.xml",
+      "retrievedAt": "2026-10-06T02:27:39Z",
+      "sha256": "c17f4380ba84fb2160dae82ebfd8bd155a5853cfab624ed3a9fd251638a8be02",
+      "bytes": 13431,
+      "responseHeaders": {
+        "Content-Type": "application/xml",
+        "Last-Modified": "Tue, 29 Sep 2026 00:48:48 GMT"
+      },
+      "revision": "2025-10-09",
+      "title": "IPv6 Special-Purpose Address Space",
+      "created": "2006-01-10",
+      "category": "Internet Protocol version 6 (IPv6) Global Unicast Allocations",
+      "records": [
+        {
+          "blocks": [
+            {
+              "cidr": "::1/128",
+              "first": "::1",
+              "last": "::1"
+            }
+          ],
+          "name": "Loopback Address",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc4291"
+            }
+          ],
+          "allocation": "2006-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "::/128",
+              "first": "::",
+              "last": "::"
+            }
+          ],
+          "name": "Unspecified Address",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc4291"
+            }
+          ],
+          "allocation": "2006-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "::ffff:0:0/96",
+              "first": "::ffff:0:0",
+              "last": "::ffff:ffff:ffff"
+            }
+          ],
+          "name": "IPv4-mapped Address",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc4291"
+            }
+          ],
+          "allocation": "2006-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "64:ff9b::/96",
+              "first": "64:ff9b::",
+              "last": "64:ff9b::ffff:ffff"
+            }
+          ],
+          "name": "IPv4-IPv6 Translat.",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc6052"
+            }
+          ],
+          "allocation": "2010-10",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "64:ff9b:1::/48",
+              "first": "64:ff9b:1::",
+              "last": "64:ff9b:1:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "IPv4-IPv6 Translat.",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc8215"
+            }
+          ],
+          "allocation": "2017-06",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "100::/64",
+              "first": "100::",
+              "last": "100::ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Discard-Only Address Block",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc6666"
+            }
+          ],
+          "allocation": "2012-06",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "100:0:0:1::/64",
+              "first": "100:0:0:1::",
+              "last": "100::1:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Dummy IPv6 Prefix",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc9780"
+            }
+          ],
+          "allocation": "2025-04",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001::/23",
+              "first": "2001::",
+              "last": "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "IETF Protocol Assignments",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc2928"
+            }
+          ],
+          "allocation": "2000-09",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001::/32",
+              "first": "2001::",
+              "last": "2001:0:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "TEREDO",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc4380"
+            },
+            {
+              "type": "rfc",
+              "data": "rfc8190"
+            }
+          ],
+          "allocation": "2006-01",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "N/A",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:1::1/128",
+              "first": "2001:1::1",
+              "last": "2001:1::1"
+            }
+          ],
+          "name": "Port Control Protocol Anycast",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7723"
+            }
+          ],
+          "allocation": "2015-10",
+          "termination": null,
+          "attributes": {
+            "date": "2015-10-29"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:1::2/128",
+              "first": "2001:1::2",
+              "last": "2001:1::2"
+            }
+          ],
+          "name": "Traversal Using Relays around NAT Anycast",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc8155"
+            }
+          ],
+          "allocation": "2017-02",
+          "termination": null,
+          "attributes": {
+            "date": "2017-02-23"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:1::3/128",
+              "first": "2001:1::3",
+              "last": "2001:1::3"
+            }
+          ],
+          "name": "DNS-SD Service Registration Protocol Anycast",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc9665"
+            }
+          ],
+          "allocation": "2024-04",
+          "termination": null,
+          "attributes": {
+            "date": "2024-04-12",
+            "updated": "2024-09-05"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:2::/48",
+              "first": "2001:2::",
+              "last": "2001:2:0:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Benchmarking",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc5180"
+            },
+            {
+              "type": "rfc-errata",
+              "data": "1752"
+            }
+          ],
+          "allocation": "2008-04",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:3::/32",
+              "first": "2001:3::",
+              "last": "2001:3:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "AMT",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7450"
+            }
+          ],
+          "allocation": "2014-12",
+          "termination": null,
+          "attributes": {
+            "date": "2014-12-17"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:4:112::/48",
+              "first": "2001:4:112::",
+              "last": "2001:4:112:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "AS112-v6",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7535"
+            }
+          ],
+          "allocation": "2014-12",
+          "termination": null,
+          "attributes": {
+            "date": "2014-12-17"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:10::/28",
+              "first": "2001:10::",
+              "last": "2001:1f:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Deprecated (previously ORCHID)",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc4843"
+            }
+          ],
+          "allocation": "2007-03",
+          "termination": "2014-03",
+          "attributes": {},
+          "flags": {
+            "source": "",
+            "destination": "",
+            "forwardable": "",
+            "global": "",
+            "reserved": ""
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:20::/28",
+              "first": "2001:20::",
+              "last": "2001:2f:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "ORCHIDv2",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7343"
+            }
+          ],
+          "allocation": "2014-07",
+          "termination": null,
+          "attributes": {
+            "date": "2014-07-22"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:30::/28",
+              "first": "2001:30::",
+              "last": "2001:3f:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Drone Remote ID Protocol Entity Tags (DETs) Prefix",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc9374"
+            }
+          ],
+          "allocation": "2022-12",
+          "termination": null,
+          "attributes": {
+            "date": "2022-12-08",
+            "updated": "2022-12-13"
+          },
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2001:db8::/32",
+              "first": "2001:db8::",
+              "last": "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Documentation",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc3849"
+            }
+          ],
+          "allocation": "2004-07",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2002::/16",
+              "first": "2002::",
+              "last": "2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "6to4",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc3056"
+            }
+          ],
+          "allocation": "2001-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "N/A",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "2620:4f:8000::/48",
+              "first": "2620:4f:8000::",
+              "last": "2620:4f:8000:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Direct Delegation AS112 Service",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc7534"
+            }
+          ],
+          "allocation": "2011-05",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "True",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "3fff::/20",
+              "first": "3fff::",
+              "last": "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Documentation",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc9637"
+            }
+          ],
+          "allocation": "2024-07",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "False",
+            "destination": "False",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "5f00::/16",
+              "first": "5f00::",
+              "last": "5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Segment Routing (SRv6) SIDs",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc9602"
+            }
+          ],
+          "allocation": "2024-04",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "fc00::/7",
+              "first": "fc00::",
+              "last": "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Unique-Local",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc4193"
+            },
+            {
+              "type": "rfc",
+              "data": "rfc8190"
+            }
+          ],
+          "allocation": "2005-10",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "True",
+            "global": "False",
+            "reserved": "False"
+          }
+        },
+        {
+          "blocks": [
+            {
+              "cidr": "fe80::/10",
+              "first": "fe80::",
+              "last": "febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+            }
+          ],
+          "name": "Link-Local Unicast",
+          "references": [
+            {
+              "type": "rfc",
+              "data": "rfc4291"
+            }
+          ],
+          "allocation": "2006-02",
+          "termination": null,
+          "attributes": {},
+          "flags": {
+            "source": "True",
+            "destination": "True",
+            "forwardable": "False",
+            "global": "False",
+            "reserved": "True"
+          }
+        }
+      ],
+      "recordCount": 25,
+      "prefixCount": 25
+    }
+  ]
+}

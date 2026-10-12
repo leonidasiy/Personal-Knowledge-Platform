@@ -1,7 +1,7 @@
 // @ts-check
 
-/** @typedef {{ readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly action?: string, readonly failureKind?: string, readonly diagnosticToken?: string, readonly httpStatus?: number, readonly durationMs?: number, readonly count?: number, readonly itemCount?: number }} KnowledgeWorkflowLogEntry */
-/** @typedef {{ readonly component: "knowledge-workflow", readonly event: string, readonly correlationId: string, readonly occurredAt: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly action?: string, readonly failureKind?: string, readonly diagnosticToken?: string, readonly httpStatus?: number, readonly durationMs?: number, readonly count?: number, readonly itemCount?: number }} KnowledgeWorkflowLogRecord */
+/** @typedef {{ readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly action?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?: import("./webpage-facts.js").WebpagePhase, readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null, readonly httpStatus?: number, readonly durationMs?: number, readonly count?: number, readonly itemCount?: number }} KnowledgeWorkflowLogEntry */
+/** @typedef {{ readonly component: "knowledge-workflow", readonly event: string, readonly correlationId: string, readonly occurredAt: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly action?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?: import("./webpage-facts.js").WebpagePhase, readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null, readonly httpStatus?: number, readonly durationMs?: number, readonly count?: number, readonly itemCount?: number }} KnowledgeWorkflowLogRecord */
 /** @typedef {{ readonly kind: "KnowledgeWorkflowLogEntryInvalid" | "KnowledgeWorkflowLogTimestampInvalid" }} KnowledgeWorkflowLogFailure */
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
@@ -36,6 +36,11 @@ export function createKnowledgeWorkflowLogger(dependencies) {
       (entry.action !== undefined && !boundedCategory(entry.action)) ||
       (entry.failureKind !== undefined && !boundedCategory(entry.failureKind)) ||
       (entry.diagnosticToken !== undefined && !boundedCategory(entry.diagnosticToken)) ||
+      (entry.field !== undefined && !boundedCategory(entry.field)) ||
+      (entry.phase!==undefined&&!['extraction','normalization','grounding','match','verify'].includes(entry.phase)) ||
+      (entry.requestId!==undefined&&!boundedCategory(entry.requestId)) ||
+      (entry.inputTokens!==undefined&&entry.inputTokens!==null&&!nonNegativeInteger(entry.inputTokens)) ||
+      (entry.outputTokens!==undefined&&entry.outputTokens!==null&&!nonNegativeInteger(entry.outputTokens)) ||
       (entry.httpStatus !== undefined && (!Number.isSafeInteger(entry.httpStatus) || entry.httpStatus < 100 || entry.httpStatus > 599)) ||
       (entry.durationMs !== undefined && !nonNegativeInteger(entry.durationMs)) ||
       (entry.count !== undefined && !nonNegativeInteger(entry.count)) ||
@@ -63,6 +68,11 @@ export function createKnowledgeWorkflowLogger(dependencies) {
       ...(text(entry.action) ? { action: entry.action } : {}),
       ...(text(entry.failureKind) ? { failureKind: entry.failureKind } : {}),
       ...(entry.diagnosticToken === undefined ? {} : { diagnosticToken: entry.diagnosticToken }),
+      ...(entry.field === undefined ? {} : { field: entry.field }),
+      ...(entry.phase===undefined?{}:{phase:entry.phase}),
+      ...(entry.requestId===undefined?{}:{requestId:entry.requestId}),
+      ...(entry.inputTokens===undefined?{}:{inputTokens:entry.inputTokens}),
+      ...(entry.outputTokens===undefined?{}:{outputTokens:entry.outputTokens}),
       ...(entry.httpStatus === undefined ? {} : { httpStatus: entry.httpStatus }),
       ...(inferredDuration === undefined ? {} : { durationMs: inferredDuration }),
       ...(nonNegativeInteger(entry.count) ? { count: entry.count } : {}),

@@ -81,6 +81,22 @@ Deno.test("configuration loader returns an immutable canonical snapshot", async 
   assertTrue(Object.isFrozen(result.value.limits));
 });
 
+Deno.test("optional model reasoning is validated and included in the immutable configuration digest", async () => {
+  const canonical=createAgentConfigurationLoader({sha256:async input=>`sha256:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(input))),byte=>byte.toString(16).padStart(2,"0")).join("")}`});
+  const original=await canonical.load({source:validYaml});assertTrue(original.ok);if(!original.ok)return;
+  assertEquals(original.value.model.reasoningEffort,undefined);
+  for(const effort of ["none","low","high"]) {
+    const source=validYaml.replace("  name: z-ai/glm-5.3-flash",`  name: z-ai/glm-5.3-flash\n  reasoningEffort: ${effort}`);
+    const loaded=await canonical.load({source});assertTrue(loaded.ok);if(!loaded.ok)return;
+    assertEquals(loaded.value.model.reasoningEffort,effort);assertTrue(loaded.value.digest!==original.value.digest);assertTrue(Object.isFrozen(loaded.value.model));
+    const stale=await canonical.load({source,expectedDigest:original.value.digest});assertEquals(stale.ok,false);
+  }
+  for(const effort of ["max","invalid","true","null","42","[high]","{value: high}"]) {
+    const loaded=await canonical.load({source:validYaml.replace("  name: z-ai/glm-5.3-flash",`  name: z-ai/glm-5.3-flash\n  reasoningEffort: ${effort}`)});assertEquals(loaded.ok,false);
+    if(!loaded.ok){assertEquals(loaded.error.kind,"WorkflowConfigurationFieldInvalid");if(loaded.error.kind==="WorkflowConfigurationFieldInvalid")assertEquals(loaded.error.field,"model.reasoningEffort");}
+  }
+});
+
 Deno.test("configuration loader rejects unknown fields, missing limits, secrets, and role conflicts", async () => {
   const unknown = await loader().load({ source: `${validYaml}unknownField: true` });
   assertEquals(unknown.ok, false);

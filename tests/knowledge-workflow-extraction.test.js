@@ -429,3 +429,23 @@ Deno.test("extraction rejects candidate coverage absent from the active plan", a
   }
   assertEquals(fixture.points.length, 0);
 });
+
+Deno.test("quality-dropped knowledge contributes no accepted hashes or coverage and completes after extraction continues", async () => {
+  const fixture=setup();
+  let reviews=0;
+  const runner=createExtractionRunner({...fixture.dependencies,reviewer:{review:async()=>{reviews++;return {ok:true,value:null};}}});
+  const result=await runner.run({ownerId:"owner-a",runId:"run-a",sourceId:"source-a",sourceRevision:1,rootUrl:"https://example.test",startedAtMs:0,deadlineAtMs:1_800_000});
+  if(!result.ok)throw new Error(result.error.kind);
+  assertEquals(result.value.state,"completed");assertEquals(result.value.pagesProcessed,3);assertEquals(result.value.knowledgePointCount,0);assertEquals(result.value.scratchpad.acceptedHashes.length,0);assertEquals(result.value.scratchpad.coverage.length,0);assertEquals(result.value.scratchpad.reviewedCandidateCount,1);assertEquals(fixture.points.length,0);assertEquals(reviews,1);
+});
+
+Deno.test("repaired knowledge acceptance uses its new identity and refuses altered captured source anchors", async () => {
+  for(const foreign of [false,true]) {
+    const fixture=setup();
+    const runner=createExtractionRunner({...fixture.dependencies,reviewer:{review:async(point)=>({ok:true,value:{...point,id:"knowledge:source-a:1:repaired",summary:"A repaired central relationship",normalizedHash:"repaired",evidenceAnchors:foreign?[{url:"https://foreign.test/",selector:"#other"}]:point.evidenceAnchors}})}});
+    const result=await runner.run({ownerId:"owner-a",runId:"run-a",sourceId:"source-a",sourceRevision:1,rootUrl:"https://example.test",startedAtMs:0,deadlineAtMs:1_800_000});
+    assertEquals(result.ok,!foreign);
+    if(result.ok)assertEquals(result.value.scratchpad.acceptedHashes.join(","),"repaired");else assertEquals(result.error.kind,"KnowledgePersistenceFailed");
+    assertEquals(fixture.points.length,foreign?0:1);
+  }
+});

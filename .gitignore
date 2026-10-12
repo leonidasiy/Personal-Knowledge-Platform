@@ -28,6 +28,9 @@ test-results/
 /AGENTS.md
 /PROCESS.md
 /SELF_IMPROVEMENT.md
+/PROCESS.history-*.md
+/INDEPENDENT-REVIEW.md
+__pycache__/
 /docs/
 /documentations/
 /milestones/
