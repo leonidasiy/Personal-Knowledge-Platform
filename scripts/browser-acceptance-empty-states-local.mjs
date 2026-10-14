@@ -58,7 +58,8 @@ try {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     for (const panel of ["discover", "feed", "review", "library", "progress", "upload"]) {
       await page.locator(`[data-view="${panel}"]`).first().click();
-      await page.locator("main .empty-art").first().waitFor();
+      await page.locator(`main .empty-art:has(use[href="./assets/empty-states.svg#${panel}"])`).first().waitFor();
+      assert.equal(await page.locator("main .empty-art use").first().getAttribute("href"), `./assets/empty-states.svg#${panel}`, `${panel} uses its own illustration`);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${panel} ${theme} ${width}: no overflow`);
       const name = `${panel}-${theme}-${width}.png`;
       await page.screenshot({ path: resolve(output, name), fullPage: true }); screenshots.push(name);

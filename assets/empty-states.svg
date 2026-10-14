@@ -1,4 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="feed" viewBox="0 0 480 260">
+    <ellipse cx="240" cy="224" rx="166" ry="12" fill="var(--surface-subtle)"/>
+    <circle cx="239" cy="127" r="91" fill="var(--action-soft)"/>
+    <g fill="none" stroke="var(--border)" stroke-width="1.5"><path d="M116 178c-37-55 21-121 97-130m80 3c58 14 99 63 74 114" stroke-dasharray="4 8"/><path d="M112 109h24m-12-12v24"/></g>
+    <g stroke="var(--text)" stroke-width="3" stroke-linejoin="round">
+      <path d="M290 140h25c40 0 40 55 0 55h-29v-17h26c18 0 18-21 0-21h-22Z" fill="var(--signal-three)"/>
+      <path d="M169 135h128v36c0 31-24 49-64 49s-64-18-64-49Z" fill="var(--action)"/>
+      <ellipse cx="233" cy="135" rx="64" ry="13" fill="var(--surface)"/>
+      <path d="M151 218h164l-18 10H169Z" fill="var(--surface)"/>
+    </g>
+    <g fill="none" stroke="var(--signal-two)" stroke-width="3" stroke-linecap="round"><path d="M202 106c-18-17 16-24 0-41m48 40c-14-17 17-23 4-39"/></g>
+    <g fill="var(--signal-three)"><path d="m303 45 5 13 13 5-13 5-5 13-5-13-13-5 13-5Z"/><circle cx="133" cy="167" r="5"/></g>
+    <g fill="var(--action)" stroke="var(--action)" stroke-width="2.5"><path d="m271 43 18-5v26" fill="none"/><ellipse cx="282" cy="66" rx="7" ry="5"/></g>
+    <path d="M204 164c11 11 24 15 38 15" fill="none" stroke="var(--surface)" stroke-width="3" stroke-linecap="round"/>
+  </symbol>
   <symbol id="discover" viewBox="0 0 480 260">
     <ellipse cx="242" cy="224" rx="173" ry="12" fill="var(--surface-subtle)"/>
     <circle cx="249" cy="115" r="90" fill="var(--action-soft)"/>
@@ -41,6 +56,21 @@
     </g>
     <g fill="var(--signal-two)"><path d="m116 80 4 11 11 4-11 4-4 11-4-11-11-4 11-4Z"/><circle cx="365" cy="170" r="7"/></g>
     <circle cx="332" cy="48" r="5" fill="var(--signal-three)"/>
+  </symbol>
+  <symbol id="upload" viewBox="0 0 480 260">
+    <ellipse cx="240" cy="224" rx="166" ry="12" fill="var(--surface-subtle)"/>
+    <circle cx="239" cy="124" r="93" fill="var(--action-soft)"/>
+    <path d="M139 166c-76-54-4-100 32-68 38 33-44 68-45 24-1-21 57-33 88-28" fill="none" stroke="var(--border)" stroke-width="2" stroke-dasharray="5 7"/>
+    <g stroke="var(--text)" stroke-width="2.5" stroke-linejoin="round">
+      <path d="m201 89 129-38-52 105-19-47Z" fill="var(--surface)"/>
+      <path d="m259 109 71-58-91 46Z" fill="var(--action)"/>
+      <path d="m259 109-7 32 26 15Z" fill="var(--signal-three)"/>
+      <path d="M157 173h158l18 45H139Z" fill="var(--signal-three)"/>
+      <path d="M139 200h61l10 13h52l10-13h61v28H139Z" fill="var(--action)"/>
+    </g>
+    <g stroke="var(--signal-two)" stroke-width="2.5" stroke-linecap="round" fill="none"><path d="m278 170 9-12m14 24 16-6m-61-10 1-14"/></g>
+    <path d="m358 91 4 12 12 4-12 4-4 12-4-12-12-4 12-4Z" fill="var(--signal-three)"/>
+    <circle cx="107" cy="191" r="5" fill="var(--signal-two)"/>
   </symbol>
   <symbol id="progress" viewBox="0 0 480 260">
     <ellipse cx="240" cy="224" rx="167" ry="12" fill="var(--surface-subtle)"/>

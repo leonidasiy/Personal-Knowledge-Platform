@@ -201,6 +201,6 @@ Deno.test("Empty Feed and Review offer artwork and a next action without invente
   await controller.loadFeed();
   await controller.loadReview();
   const feed = controller.renderFeed(), review = controller.renderReview();
-  assert(feed.includes("empty-states.svg#library") && feed.includes('href="#discover"') && !feed.includes('data-knowledge-id'), "Empty Feed guides discovery without sample cards.");
+  assert(feed.includes("empty-states.svg#feed") && feed.includes('href="#discover"') && !feed.includes('data-knowledge-id'), "Empty Feed uses its own artwork and guides discovery without sample cards.");
   assert(review.includes("empty-states.svg#review") && review.includes('href="#feed"') && !review.includes('data-question-id'), "Empty Review guides study without sample questions.");
 });

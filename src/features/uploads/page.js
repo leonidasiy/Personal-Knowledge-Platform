@@ -319,7 +319,7 @@ export function createUploadPage(dependencies) {
               ", ",
             )));
     const reason = context?.reason ?? prefillReason;
-    return shellMarkup(5, (!files.length && !String(draft.get("content") ?? draft.get("url") ?? "").trim() ? emptyArt("library") : "") + (reason ? shellMarkup(6, escape(reason)) : ""), escape(context?.source.id ?? ""), busy, escape(title), context !== null || input === "text" || input === "link" ? " required" : "", ["text", "documents", "pdf", "images", ...(context === null ? ["link"] : [])].map((value, index) =>
+    return shellMarkup(5, (!files.length && !String(draft.get("content") ?? draft.get("url") ?? "").trim() ? emptyArt("upload") : "") + (reason ? shellMarkup(6, escape(reason)) : ""), escape(context?.source.id ?? ""), busy, escape(title), context !== null || input === "text" || input === "link" ? " required" : "", ["text", "documents", "pdf", "images", ...(context === null ? ["link"] : [])].map((value, index) =>
         shellMarkup(24 + index, input === value ? " selected" : "")
       ).join(""), control, input === "pdf"
         ? shellMarkup(8, draft.has("imageProcessing")

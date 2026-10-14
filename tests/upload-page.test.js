@@ -663,7 +663,7 @@ Deno.test("YouTube transcript handoff starts in text mode with escaped guidance 
   const html = page.render();
   assert(html.includes('value="text" selected') && html.includes('name="content"'), "Handoff resets a previous file selection to text entry.");
   assert(html.includes('value="Video &lt;title&gt;"') && html.includes('Paste the &lt;video&gt; transcript'), "Title and guidance are exact and escaped.");
-  assert(html.includes("empty-states.svg#library"), "Blank intake includes artwork.");
+  assert(html.includes("empty-states.svg#upload"), "Blank intake includes its own Upload artwork.");
   await page.load("#upload");
   assert(!page.render().includes("transcript"), "New Upload does not retain another source's guidance.");
 });
