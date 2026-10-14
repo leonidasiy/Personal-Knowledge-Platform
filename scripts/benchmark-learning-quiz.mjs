@@ -67,7 +67,7 @@ export async function runBenchmarkQuizzes({caseId,points,generate,file,maximumEv
    saved.outputs.push({phase:'generation',knowledgeId:command.knowledge.id,attempt:command.attempt,result});await persist();
    return result.ok?assembleDraft(result.value,command.knowledge):result;
   }},
-  evaluator:{evaluate:async command=>{
+  reviewer:{evaluate:async command=>{
    const result=await dispatch({role:'review-grader',taskId:caseId+':quiz-evaluator:'+command.knowledge.id+':attempt-'+command.attempt,systemPrompt:questionEvaluatorPrompt,input:command,maxOutputTokens:1024,responseSchema:questionEvaluationSchema});
    saved.outputs.push({phase:'evaluation',knowledgeId:command.knowledge.id,attempt:command.attempt,result});await persist();return cached.has('review-grader:'+command.knowledge.id+':'+command.attempt)||!result.ok?result:normalizeKnowledgeQuizEvaluation(result.value,command.knowledge);
   }},

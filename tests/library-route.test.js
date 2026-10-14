@@ -798,7 +798,7 @@ Deno.test("Library polls active workflow status and stops after completion", asy
   });
   await page.load();
   assert(statusCalls === 1, "Library must load workflow status with the source list.");
-  assert(scheduled.length === 1 && scheduled[0].delayMs === 5_000, "Active work must schedule one five-second refresh.");
+  assert(scheduled.length === 1 && scheduled[0].delayMs === 60_000, "Active work must schedule one one-minute refresh.");
   assert(page.renderProcessingStatus().includes("Processing 1 source"), "The active source must be visible before the poll completes.");
 
   scheduled[0].callback();
@@ -962,4 +962,52 @@ Deno.test("Library exposes cancellation for active attempts and retains explicit
 
 Deno.test("failed cancellation remains retryable after the run is already abandoned",()=>{
   const html=renderLibraryRoute({...baseModel(),workflowStatuses:[workflowStatus("abandoned")],cancellationRetries:["run-source-a"]});assert(html.includes('data-library-workflow-cancel="run-source-a"'),"Cleanup/termination retry must remain available");
+});
+
+/** @returns {import('../src/features/knowledge-workflows/progress.js').WorkflowProgress} */
+function sampleProgress(){return {currentUrl:'https://publisher.example/learn/lesson-2',pageTitle:'Rhythm <lesson>',sectionTitle:'2.1 Meter & pulse',stage:'Extracting knowledge',updatedAt:'2026-10-13T10:00:00.000Z',knowledgePoints:[{knowledgeId:'knowledge-a',summary:'A beat groups durations into recurring patterns.'}],generatedQuizQuestions:2,processedPageCount:1,totalPages:3};}
+Deno.test('Library source card renders current lesson, section, extracted summaries and actual quiz question count accessibly',()=>{
+ const status={...workflowStatus('extraction-loop'),run:{...workflowStatus('extraction-loop').run,progress:sampleProgress()}};
+ const html=renderLibraryRoute({...baseModel(),workflowStatuses:[status]});
+ for(const label of ['Processing progress','Extracting knowledge','1 knowledge point','2 quiz questions generated','https://publisher.example/learn/lesson-2','Rhythm &lt;lesson>','2.1 Meter &amp; pulse','A beat groups durations into recurring patterns.','1 of 3','Updates every minute while processing.'])assert(html.includes(label),`Missing source progress information: ${label}`);
+ assert(html.includes('data-library-workflow-progress')&&html.includes('aria-live="polite"')&&html.includes('aria-labelledby="library-progress-source-a"'),'Source-scoped status must be labeled and announced politely.');
+ assert(!html.includes('Rhythm <lesson>'),'External page titles must be escaped.');
+ assert(html.indexOf('data-library-workflow-progress')>html.indexOf('data-library-source="source-a"'),'Progress must render inside its source card.');
+ assert(!renderLibraryRoute({...baseModel(),workflowStatuses:[{...status,run:{...status.run,state:'abandoned'}}]}).includes('A beat groups'),'Canceled run output must disappear from the card.');
+});
+
+Deno.test('Library polls only active source statuses every minute and dispose invalidates scheduled work',async()=>{
+ const requests=/** @type {string[]} */([]),timers=new Map();let next=0;
+ const page=createLibraryPage({fetch:async input=>{const url=new URL(String(input));if(url.pathname.endsWith('/source-library'))return Response.json({result:{items:[source,sourceB],interestAreas:[],nextCursor:null}});if(url.pathname.endsWith('/library-knowledge'))return Response.json({result:{items:[]}});const id=url.searchParams.get('sourceId')??'';requests.push(id);return Response.json({result:workflowStatus(id===source.id?'extraction-loop':'completed',id)});},gatewayBaseUrl:'https://app.example/',escapeHtml:v=>v,formatDate:v=>v,createId:()=> 'id',confirmDisable:()=>true,createObserver:()=>null,schedule:(callback,delay)=>{timers.set(++next,{callback,delay});return next;},cancel:id=>{timers.delete(id);},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
+ await page.load();assert(requests.length===2,'Initial status read includes each loaded source.');const initial=[...timers.values()][0];assert(initial.delay===60000,'Processing card refresh cadence is one minute.');timers.clear();initial.callback();await new Promise(r=>setTimeout(r,0));assert(requests.join(',')==='source-a,source-b,source-a','Terminal sources are not re-polled.');const stale=[...timers.values()][0];page.dispose();assert(timers.size===0,'Disposal removes the timer.');stale.callback();await new Promise(r=>setTimeout(r,0));assert(requests.length===3,'An already queued callback cannot fetch after unmount.');
+ await page.resume();assert(timers.size===1,'Restoring a mounted controller resumes exactly one poll.');page.dispose();
+});
+
+Deno.test('Cancel processing asks confirmation, preserves data on decline, and clears confirmed run output before refresh finishes',async()=>{
+ let confirmed=false,canceled=false,posts=0,confirmations=0,refreshPending=false;
+ /** @type {(response:Response)=>void} */let finishRefresh=()=>{};
+ const pending=new Promise(resolve=>{finishRefresh=resolve;});
+ const active={...workflowStatus('extraction-loop'),run:{...workflowStatus('extraction-loop').run,progress:sampleProgress()}};
+ const knowledgeCard={knowledgeId:'knowledge-a',sourceId:source.id,sourceRevision:source.revision,questionId:'q-a',title:'Point',summary:'A beat groups durations into recurring patterns.',sourceUrl:source.canonicalUrl,evidenceAnchorIds:['anchor'],media:null,questionLocked:false,sourceClassification:null,sourceClassificationRevision:0};
+ const page=createLibraryPage({fetch:async(input,init)=>{const url=new URL(String(input));if(url.pathname.endsWith('/source-library'))return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});if(url.pathname.endsWith('/library-knowledge')){if(canceled){refreshPending=true;return await pending;}return Response.json({result:{items:[knowledgeCard]}});}if(url.pathname.endsWith('/control')){posts++;const command=JSON.parse(String(init?.body));assert(command.action==='abandon'&&command.runId===active.run.runId,'Cancel command must target the selected run.');canceled=true;return Response.json({result:{...workflowStatus('abandoned').run,revision:2}});}return Response.json({result:canceled?workflowStatus('abandoned'):active});},gatewayBaseUrl:'https://app.example/',escapeHtml:v=>v,formatDate:v=>v,createId:()=> 'id',confirmDisable:()=>true,confirmCancel:()=>{confirmations++;return confirmed;},createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
+ await page.load();
+ /** @type {(()=>void)|null} */let listener=null;
+ page.bind(/** @type {HTMLElement} */(/** @type {unknown} */({querySelector:()=>null,querySelectorAll:(/** @type {string} */selector)=>selector==='[data-library-workflow-retry], [data-library-workflow-cancel]'?[{hasAttribute:(/** @type {string} */name)=>name==='data-library-workflow-cancel',getAttribute:(/** @type {string} */name)=>name==='data-library-workflow-cancel'?'run-source-a':'1',addEventListener:(/** @type {string} */_event,/** @type {()=>void} */handler)=>{listener=handler;}}]:[]})));
+ if(listener===null)throw new Error('Cancel action not bound.');const click=/** @type {()=>void} */(listener);click();await new Promise(r=>setTimeout(r,0));assert(confirmations===1&&posts===0,'Declining confirmation cannot dispatch cancellation.');assert(page.render({}).includes(knowledgeCard.summary),'Declined cancellation preserves extracted content.');
+ confirmed=true;click();await new Promise(r=>setTimeout(r,0));assert(confirmations===2&&posts===1&&refreshPending,'Confirmed cancellation dispatches once and immediately refreshes knowledge.');assert(!page.render({}).includes(knowledgeCard.summary),'Purged summaries disappear while the refresh is still pending.');assert(!page.renderProcessingStatus().includes('Processing'),'Confirmed canceled run stops the processing indicator immediately.');finishRefresh(Response.json({result:{items:[]}}));await new Promise(r=>setTimeout(r,0));page.dispose();
+});
+
+Deno.test('Extraction redirect opens a reused source on a later Library page and focuses its own shelf card',async()=>{
+ const descriptor=Object.getOwnPropertyDescriptor(globalThis,'HTMLElement');
+ let focused=false,scrolled=false;
+ class FocusCard {isConnected=true;getAttribute(){return source.id;}setAttribute(){}focus(){focused=true;}scrollIntoView(){scrolled=true;}}
+ Object.defineProperty(globalThis,'HTMLElement',{configurable:true,value:FocusCard});
+ try{
+  const scheduled=/** @type {{callback:()=>void,delay:number}[]} */([]);const card=new FocusCard();
+  const point={knowledgeId:'knowledge-a',sourceId:source.id,sourceRevision:source.revision,questionId:'q-a',title:'Point',summary:'Synthetic retained point.',sourceUrl:source.canonicalUrl,evidenceAnchorIds:['a'],media:null,questionLocked:true,sourceClassification:{mainSubject:'music',topic:'Meter'},sourceClassificationRevision:1};
+  const page=createLibraryPage({fetch:async input=>{const url=new URL(String(input));if(url.pathname.endsWith('/source-library'))return Response.json({result:{items:[url.searchParams.has('cursor')?source:sourceB],interestAreas:[],nextCursor:url.searchParams.has('cursor')?null:'second-page'}});if(url.pathname.endsWith('/library-knowledge'))return Response.json({result:{items:[point]}});return Response.json({result:workflowStatus('completed',url.searchParams.get('sourceId')??source.id)});},gatewayBaseUrl:'https://app.example/',storage:{getItem:()=> 'science',setItem:()=>{}},escapeHtml:v=>v,formatDate:v=>v,createId:()=> 'id',confirmDisable:()=>true,createObserver:()=>null,schedule:(callback,delay)=>{scheduled.push({callback,delay});return scheduled.length;},cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
+  await page.revealSource(source.id);const html=page.render({});assert(html.includes('data-library-source="source-a"'),'The selected source must be loaded even on a later catalog page.');assert(html.includes('value="music" selected'),'Extraction opens the shelf containing the selected source.');assert(html.includes('data-focus-key="library-source:source-a"'),'Card focus identity must survive later progress refreshes.');
+  page.bind(/** @type {HTMLElement} */(/** @type {unknown} */({querySelector:()=>null,querySelectorAll:(/** @type {string} */selector)=>selector==='[data-library-source]'?[card]:[]})));
+  const focus=scheduled.find(item=>item.delay===0);assert(focus!==undefined,'Card focus follows rendering, without waiting for a status interval.');focus?.callback();assert(focused&&scrolled,'The matching card receives keyboard focus and is brought into view.');page.dispose();
+ }finally{if(descriptor)Object.defineProperty(globalThis,'HTMLElement',descriptor);else Reflect.deleteProperty(globalThis,'HTMLElement');}
 });

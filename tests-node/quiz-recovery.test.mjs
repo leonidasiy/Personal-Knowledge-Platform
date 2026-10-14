@@ -157,7 +157,7 @@ test("publication failure retries retain old attempts, publish once and cascade 
           },
         }),
       },
-      evaluator: {
+      reviewer: {
         evaluate: async () => ({
           ok: true,
           value: {
@@ -402,7 +402,7 @@ for (const branch of ["typed-schema-failure", "invalid-draft", "legacy-thrown-ge
       maxAttempts, now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},
       repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async()=>{throw Error("Invalid draft must not publish.");},discard:async()=>{discarded++;return {ok:true,value:null};},purge:async()=>({ok:true,value:null})},
       generator:{generate:async input=>{inputs.push(input);if(branch==="legacy-thrown-generator")throw Error("Synthetic invalid provider envelope.");return branch==="typed-schema-failure"?{ok:false,error:{kind:"QuizDraftSchemaInvalid"}}:{ok:true,value:{}};}},
-      evaluator:{evaluate:async()=>{evaluated++;throw Error("Invalid draft must not reach critic.");}},
+      reviewer:{evaluate:async()=>{evaluated++;throw Error("Invalid draft must not reach critic.");}},
     });
     const result = await actor.run({ownerId:"owner",runId:"run",points:[point]});
     if(maxAttempts===2)assert.deepEqual(result,{ok:false,error:{kind:"QuizGeneratorFailed",causeKind:"QuizDraftSchemaInvalid"}});
@@ -437,7 +437,7 @@ for(const fault of ["knowledge","draft-only","legacy"])test(`quiz critic ${fault
   const draft={id:"synthetic-draft",knowledgeId:point.id,knowledgeRevision:1,kind:"single-choice",prompt:"Which synthetic relation?",options:["Relation","Alternative"],answer:"Relation",explanation:"Synthetic support.",citedEvidenceUrls:["https://example.test/source"]};
   const valid={score:9,reasons:["Supported revised draft."],feedback:"Keep supported draft.",groundingProblems:[],knowledgeGroundingProblems:[]};
   const first=fault==="knowledge"?{...valid,knowledgeGroundingProblems:["The retained summary qualifier conflicts with supplied evidence."],feedback:"Omitting this qualifier from a quiz cannot repair its retained knowledge."}:fault==="draft-only"?{...valid,groundingProblems:["This draft tests an unsupported extra relation."],feedback:"Remove the extra tested relation."}:(({knowledgeGroundingProblems,...legacy})=>legacy)(valid);
-  const actor=createQuizActorCritic({maxAttempts:2,now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async x=>{publications.push(x);return {ok:true,value:null};},discard:async x=>{discards.push(x);return {ok:true,value:null};},purge:async()=>({ok:true,value:null})},generator:{generate:async input=>{generations.push(structuredClone(input));return {ok:true,value:draft};}},evaluator:{evaluate:async input=>{evaluations.push(input);return {ok:true,value:evaluations.length===1?first:valid};}}});
+  const actor=createQuizActorCritic({maxAttempts:2,now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async x=>{publications.push(x);return {ok:true,value:null};},discard:async x=>{discards.push(x);return {ok:true,value:null};},purge:async()=>({ok:true,value:null})},generator:{generate:async input=>{generations.push(structuredClone(input));return {ok:true,value:draft};}},reviewer:{evaluate:async input=>{evaluations.push(input);return {ok:true,value:evaluations.length===1?first:valid};}}});
   const result=await actor.run({ownerId:"owner",runId:"run",points:[point]});assert.equal(result.ok,true);assert.deepEqual(point.summary,generations[0].knowledge.summary);
   if(fault==="knowledge"){
     assert.equal(result.value.dispositions[0].status,"abandoned");assert.equal(result.value.dispositions[0].failureKind,"QuizKnowledgeUngrounded");assert.equal(result.value.dispositions[0].attempts,1);
@@ -458,7 +458,7 @@ test("paired draft reports all alignment and normalized-alias faults to the exis
  assert.equal(isQuizPairDraft(corrected),true);assert.deepEqual(quizPairDraftValidationIssues(corrected),[]);
  const point={id:"synthetic-point",sourceId:"source",sourceRevision:1,summary:"Synthetic checkpoint relationship.",evidenceAnchors:[{url:"https://example.test/source",selector:"main"}]};
  const inputs=[],attempts=[];let discarded=0,evaluated=0;
- const actor=createQuizActorCritic({maxAttempts:2,now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},generator:{generate:async input=>{inputs.push(input);return {ok:false,error:{kind:"QuizDraftSchemaInvalid",validationIssues:issues}};}},evaluator:{evaluate:async()=>{evaluated++;throw Error("Invalid paired draft must not reach critic.");}},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async()=>{throw Error("Invalid draft must not publish.");},discard:async()=>{discarded++;return {ok:true,value:null};},purge:async()=>({ok:true,value:null})}});
+ const actor=createQuizActorCritic({maxAttempts:2,now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},generator:{generate:async input=>{inputs.push(input);return {ok:false,error:{kind:"QuizDraftSchemaInvalid",validationIssues:issues}};}},reviewer:{evaluate:async()=>{evaluated++;throw Error("Invalid paired draft must not reach critic.");}},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async()=>{throw Error("Invalid draft must not publish.");},discard:async()=>{discarded++;return {ok:true,value:null};},purge:async()=>({ok:true,value:null})}});
  const result=await actor.run({ownerId:"owner",runId:"run",points:[point]});assert.deepEqual(result,{ok:false,error:{kind:"QuizGeneratorFailed",causeKind:"QuizDraftSchemaInvalid"}});assert.equal(inputs.length,2);assert.equal(attempts.length,2);assert.equal(evaluated,0);assert.equal(discarded,1);for(const issue of issues)assert(inputs[1].feedback.includes(issue));assert.deepEqual(draft.fillBlank.blanks[0].acceptedAnswers,["L₂","L2"]);
 });
 

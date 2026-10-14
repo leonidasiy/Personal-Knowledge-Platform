@@ -169,9 +169,9 @@ function isCounts(value) {
 function isRobotsEvidence(value) {
   return isRecord(value) && isNonEmptyText(value.robotsUrl) && URL.canParse(value.robotsUrl) && new URL(value.robotsUrl).protocol === "https:" &&
     isNonEmptyText(value.targetUrl) && URL.canParse(value.targetUrl) && new URL(value.targetUrl).protocol === "https:" &&
-    typeof value.httpStatus === "number" && Number.isSafeInteger(value.httpStatus) && (value.httpStatus >= 200 && value.httpStatus <= 299 || value.httpStatus === 403 || value.httpStatus === 404 || value.httpStatus === 410) &&
+    typeof value.httpStatus === "number" && Number.isSafeInteger(value.httpStatus) && (value.httpStatus === 0 || value.httpStatus >= 100 && value.httpStatus <= 599) &&
     (value.availability === "present" || value.availability === "absent" || value.availability === "unavailable") && typeof value.content === "string" && value.content.length <= 262_144 &&
-    (value.availability === "absent" ? value.content === "" && (value.httpStatus === 404 || value.httpStatus === 410) : value.availability === "unavailable" ? value.content === "" && value.httpStatus === 403 : value.httpStatus >= 200 && value.httpStatus <= 299) &&
+    (value.availability === "absent" ? value.content === "" && (value.httpStatus === 404 || value.httpStatus === 410) : value.availability === "unavailable" ? value.content === "" || value.httpStatus >= 200 && value.httpStatus <= 299 : value.httpStatus >= 200 && value.httpStatus <= 299) &&
     typeof value.checkedAt === "string" && validTimestamp(value.checkedAt) && (value.matchedRule === null || isNonEmptyText(value.matchedRule));
 }
 

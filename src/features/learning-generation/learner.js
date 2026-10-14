@@ -126,7 +126,7 @@ export function createLearnerController(dependencies) {
     const knowledgeId = button.dataset.knowledgeId ?? "";
     const choice = button.dataset.preference;
     if (knowledgeId === "" || (choice !== "more" && choice !== "less")) return;
-    const result = await gateway.setPreference(knowledgeId, choice, `knowledge-preference:${knowledgeId}:${choice}`);
+    const result = await gateway.setPreference(knowledgeId, choice, `knowledge-preference:${knowledgeId}:${choice}:${createId()}`);
     if (!result.ok) {
       feed = { state: "error", value: feed.value, error: result.error };
       onChange();

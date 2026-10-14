@@ -1,5 +1,5 @@
 role: rights-assessor
-version: rights-assessor-v4
+version: rights-assessor-v5
 model:
   provider: openrouter
   name: z-ai/glm-5.3-flash
@@ -16,7 +16,7 @@ memory:
 limits:
   maxTurns: 3
   maxToolCalls: 8
-  timeoutMs: 15000
+  timeoutMs: 120000
   maxOutputBytes: 65536
   compactionThresholdTokens: 500000
 retry:

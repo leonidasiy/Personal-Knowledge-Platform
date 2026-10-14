@@ -158,8 +158,8 @@ Deno.test("Review renders ordered blank inputs without revealing answers", async
 
 Deno.test("Review renders exactly one keyboard-operable choice and one fill-blank variant without answer keys", async () => {
   const paired = { ...review, questions: [{ ...review.questions[0], pairedVariants: [
-    { id: "choice-v1", kind: "single-choice", prompt: "Which interval spans six semitones?", explanation: "A tritone spans six semitones.", choices: [{ id: "tritone", label: "Tritone" }, { id: "octave", label: "Octave" }], blanks: null },
-    { id: "fill-v1", kind: "fill-blank", prompt: "A six-semitone interval is a ____.", explanation: "A tritone spans six semitones.", choices: null, blanks: [{ id: "blank-1" }] },
+    { id: "choice-v1", kind: "single-choice", prompt: "Which interval spans six semitones?", choices: [{ id: "tritone", label: "Tritone" }, { id: "octave", label: "Octave" }], blanks: null },
+    { id: "fill-v1", kind: "fill-blank", prompt: "A six-semitone interval is a ____.", choices: null, blanks: [{ id: "blank-1" }] },
   ] }] };
   const controller = createLearnerController({ fetch: async () => response({ result: paired }), baseUrl: "https://app.example.test/", timeoutMs: 1_000, escapeHtml: (value) => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "id-1", onChange: () => {} });
   const loaded = await controller.loadReview();

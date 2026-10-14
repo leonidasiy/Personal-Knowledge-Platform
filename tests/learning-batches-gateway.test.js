@@ -63,8 +63,8 @@ Deno.test("learner gateway parses paired Feed and Review projections", async () 
 
 Deno.test("learner gateway accepts one answer-hidden choice and fill-blank variant", async () => {
   const paired = { ...review, questions: [{ ...review.questions[0], pairedVariants: [
-    { id: "choice-v1", kind: "multiple-choice", prompt: "Select every interval class with six semitones.", explanation: "Intervals are counted in semitones.", choices: [{ id: "tritone", label: "Tritone" }, { id: "octave", label: "Octave" }], blanks: null },
-    { id: "fill-v1", kind: "fill-blank", prompt: "A six-semitone interval is a ____.", explanation: "A tritone spans six semitones.", choices: null, blanks: [{ id: "blank-1" }] },
+    { id: "choice-v1", kind: "multiple-choice", prompt: "Select every interval class with six semitones.", choices: [{ id: "tritone", label: "Tritone" }, { id: "octave", label: "Octave" }], blanks: null },
+    { id: "fill-v1", kind: "fill-blank", prompt: "A six-semitone interval is a ____.", choices: null, blanks: [{ id: "blank-1" }] },
   ] }] };
   for (const [variants, expected] of [
     [paired.questions[0].pairedVariants, true],
@@ -73,6 +73,8 @@ Deno.test("learner gateway accepts one answer-hidden choice and fill-blank varia
     [[{ ...paired.questions[0].pairedVariants[0], correctChoiceIds: ["tritone"] }, paired.questions[0].pairedVariants[1]], false],
     [[{ ...paired.questions[0].pairedVariants[0], choices: [{ id: "tritone", label: "Tritone", isCorrect: true }, { id: "octave", label: "Octave" }] }, paired.questions[0].pairedVariants[1]], false],
     [[{ ...paired.questions[0].pairedVariants[0], canonicalAnswers: ["tritone"] }, paired.questions[0].pairedVariants[1]], false],
+    [[{ ...paired.questions[0].pairedVariants[0], explanation: "Answer cue." }, paired.questions[0].pairedVariants[1]], false],
+    [[paired.questions[0].pairedVariants[0], { ...paired.questions[0].pairedVariants[1], explanation: "Answer cue." }], false],
     [[paired.questions[0].pairedVariants[0]], false],
   ]) {
     const gateway = new LearningBatchGatewayClient({ fetch: async () => response({ result: { ...paired, questions: [{ ...paired.questions[0], pairedVariants: variants }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1_000 });

@@ -1,8 +1,10 @@
+# Legacy role ID retained for persisted runs; this is the production reviewer.
+# External test evaluation has separate calls and no publication authority.
 role: question-evaluator
-version: question-evaluator-v5
+version: question-evaluator-v7
 model:
   provider: openrouter
-  name: mistralai/mistral-large-4-0
+  name: xiaomi/mimo-v2.6-pro
   reasoningEffort: none
 procedureVersion: evaluator-procedure-v1
 promptVersion: evaluator-prompt-v3
@@ -17,7 +19,7 @@ memory:
 limits:
   maxTurns: 3
   maxToolCalls: 6
-  timeoutMs: 30000
+  timeoutMs: 120000
   maxOutputBytes: 131072
   compactionThresholdTokens: 500000
 retry:

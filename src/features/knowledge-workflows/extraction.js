@@ -67,6 +67,7 @@
  * @typedef {{
  *   readonly url: string,
  *   readonly responseUrl?: string,
+ *   readonly contentDigest?: string,
  *   readonly title: string,
  *   readonly byteCount: number,
  *   readonly redirects: number,
@@ -102,6 +103,8 @@
  *   readonly sourceId: string,
  *   readonly sourceRevision: number,
  *   readonly processedUrls: readonly string[],
+ *   readonly processedResponseUrls?: readonly string[],
+ *   readonly processedContentDigests?: readonly string[],
  *   readonly frontier?: readonly string[],
  *   readonly discoveredUrls?: readonly string[],
  *   readonly acceptedHashes: readonly string[],
@@ -188,6 +191,7 @@
  *   readonly robots: RobotsGateResult,
  *   readonly planner: ExtractionPlanner,
  *   readonly acquirer: PageAcquirer,
+ *   readonly orderedUrls?: readonly string[],
  *   readonly batchAcquirer?: { readonly key: string, readonly maximumBatchSize?: number, readonly fetchBatch: (command: { readonly urls: readonly string[], readonly rootUrl: string, readonly plan: ExtractionPlan, readonly scratchpad: ExtractionScratchpad }) => Promise<Result<readonly PageObservation[], unknown>> },
  *   readonly checkRobots?: (targetUrl: string) => Promise<Result<unknown, unknown>>,
  *   readonly scratchpad: ScratchpadRepository,
@@ -245,7 +249,7 @@ function validVisualMediaReference(value) { return isRecord(value) && JSON.strin
 /** @param {unknown} value @returns {value is KnowledgeCandidate} */
 function validCandidate(value) { return isRecord(value) && (JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "similarity", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["classification", "coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "summary"]) || JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["classification", "coverageGoalIds", "evidenceAnchors", "mediaCandidates", "normalizedHash", "similarity", "summary"])) && text(value.summary) && text(value.normalizedHash) && Array.isArray(value.evidenceAnchors) && value.evidenceAnchors.length > 0 && value.evidenceAnchors.every(validAnchor) && Array.isArray(value.coverageGoalIds) && value.coverageGoalIds.every(text) && Array.isArray(value.mediaCandidates) && value.mediaCandidates.length <= 1 && (value.similarity === undefined || validSimilarity(value.similarity)); }
 /** @param {unknown} value @returns {value is PageObservation} */
-function validObservation(value) { return isRecord(value) && publicHttps(value.url) && (value.responseUrl===undefined||publicHttps(value.responseUrl)) && text(value.title) && nonNegativeInteger(value.byteCount) && nonNegativeInteger(value.redirects) && Array.isArray(value.links) && value.links.every(publicHttps) && timestamp(value.observedAt) && Array.isArray(value.candidates) && value.candidates.every(validCandidate) && (value.notes === undefined || (typeof value.notes === "string" && value.notes.length <= 2_000)); }
+function validObservation(value) { return isRecord(value) && publicHttps(value.url) && (value.responseUrl===undefined||publicHttps(value.responseUrl)) && (value.contentDigest===undefined||text(value.contentDigest)) && text(value.title) && nonNegativeInteger(value.byteCount) && nonNegativeInteger(value.redirects) && Array.isArray(value.links) && value.links.every(publicHttps) && timestamp(value.observedAt) && Array.isArray(value.candidates) && value.candidates.every(validCandidate) && (value.notes === undefined || (typeof value.notes === "string" && value.notes.length <= 2_000)); }
 
 /** @param {unknown} value @returns {value is ExtractionPageNote} */
 function validPageNote(value) { return isRecord(value) && publicHttps(value.url) && (value.responseUrl===undefined||publicHttps(value.responseUrl)) && text(value.title) && text(value.note) && value.note.length <= 2_000 && timestamp(value.observedAt) && nonNegativeInteger(value.linkCount) && nonNegativeInteger(value.candidateCount); }
@@ -253,7 +257,7 @@ function validPageNote(value) { return isRecord(value) && publicHttps(value.url)
 /** @param {unknown} value @returns {value is ExtractionScratchpad} */
 function validScratchpad(value) {
   return isRecord(value) && text(value.ownerId) && text(value.runId) && text(value.sourceId) && positiveInteger(value.sourceRevision) &&
-    Array.isArray(value.processedUrls) && value.processedUrls.every(publicHttps) && (value.frontier === undefined || (Array.isArray(value.frontier) && value.frontier.every(publicHttps))) && (value.discoveredUrls === undefined || (Array.isArray(value.discoveredUrls) && value.discoveredUrls.every(publicHttps))) && Array.isArray(value.acceptedHashes) && value.acceptedHashes.every(text) && (value.reviewedCandidateCount === undefined || nonNegativeInteger(value.reviewedCandidateCount)) &&
+    Array.isArray(value.processedUrls) && value.processedUrls.every(publicHttps) && (value.processedResponseUrls===undefined||Array.isArray(value.processedResponseUrls)&&value.processedResponseUrls.every(publicHttps)) && (value.processedContentDigests===undefined||Array.isArray(value.processedContentDigests)&&value.processedContentDigests.every(text)) && (value.frontier === undefined || (Array.isArray(value.frontier) && value.frontier.every(publicHttps))) && (value.discoveredUrls === undefined || (Array.isArray(value.discoveredUrls) && value.discoveredUrls.every(publicHttps))) && Array.isArray(value.acceptedHashes) && value.acceptedHashes.every(text) && (value.reviewedCandidateCount === undefined || nonNegativeInteger(value.reviewedCandidateCount)) &&
     Array.isArray(value.similarityEvidence) && value.similarityEvidence.every((entry) => isRecord(entry) && text(entry.candidateHash) && text(entry.comparedLocalHash) && typeof entry.score === "number" && entry.score >= 0 && entry.score <= 1 && (entry.decision === "distinct" || entry.decision === "merge" || entry.decision === "ambiguous")) &&
     Array.isArray(value.coverage) && value.coverage.every(text) && Array.isArray(value.unresolvedGaps) && value.unresolvedGaps.every(validGap) && nonNegativeInteger(value.consecutiveNoveltyZero) && (value.pageNotes === undefined || (Array.isArray(value.pageNotes) && value.pageNotes.length <= 100 && value.pageNotes.every(validPageNote))) && positiveInteger(value.revision) &&
     (value.pendingBatch === undefined || (isRecord(value.pendingBatch) && text(value.pendingBatch.key) && validPlan(value.pendingBatch.plan) && Array.isArray(value.pendingBatch.observations) && value.pendingBatch.observations.length > 0 && value.pendingBatch.observations.length <= 5 && value.pendingBatch.observations.every(validObservation) && new Set(value.pendingBatch.observations.map((page) => page.url)).size === value.pendingBatch.observations.length));
@@ -266,7 +270,7 @@ function validCommand(command) {
 
 /** @param {ExtractionScratchpad} value @returns {ExtractionScratchpad} */
 function cloneScratchpad(value) {
-  return freeze({ ...value, processedUrls: freeze([...value.processedUrls]), frontier: freeze([...(Array.isArray(value.frontier) ? value.frontier : [])]), discoveredUrls: freeze([...(Array.isArray(value.discoveredUrls) ? value.discoveredUrls : [])]), acceptedHashes: freeze([...value.acceptedHashes]), similarityEvidence: freeze(value.similarityEvidence.map((entry) => freeze({ ...entry }))), coverage: freeze([...value.coverage]), unresolvedGaps: freeze(value.unresolvedGaps.map((entry) => freeze({ ...entry }))), pageNotes: freeze((Array.isArray(value.pageNotes) ? value.pageNotes : []).map((entry) => freeze({ ...entry }))) });
+  return freeze({ ...value, processedUrls: freeze([...value.processedUrls]), processedResponseUrls:freeze([...(value.processedResponseUrls??[])]), processedContentDigests:freeze([...(value.processedContentDigests??[])]), frontier: freeze([...(Array.isArray(value.frontier) ? value.frontier : [])]), discoveredUrls: freeze([...(Array.isArray(value.discoveredUrls) ? value.discoveredUrls : [])]), acceptedHashes: freeze([...value.acceptedHashes]), similarityEvidence: freeze(value.similarityEvidence.map((entry) => freeze({ ...entry }))), coverage: freeze([...value.coverage]), unresolvedGaps: freeze(value.unresolvedGaps.map((entry) => freeze({ ...entry }))), pageNotes: freeze((Array.isArray(value.pageNotes) ? value.pageNotes : []).map((entry) => freeze({ ...entry }))) });
 }
 
 /** @param {unknown} value @returns {string} */
@@ -303,7 +307,7 @@ async function remember(memory, kind, retention, payload, dependencies, runId) {
 
 /** @param {ExtractionPlan} plan @param {ExtractionScratchpad} scratchpad @returns {string | null} */
 function pendingFrontierUrl(plan, scratchpad) {
-  return plan.frontier.find((url) => !scratchpad.processedUrls.includes(url)) ?? null;
+  return plan.frontier.find((url) => !scratchpad.processedUrls.includes(url) && !scratchpad.processedResponseUrls?.includes(url)) ?? null;
 }
 
 /** @param {ExtractionPlan} plan @param {ExtractionScratchpad} scratchpad @returns {boolean} */
@@ -318,6 +322,7 @@ export function createExtractionRunner(dependencies) {
     typeof dependencies.scratchpad?.load !== "function" || typeof dependencies.scratchpad.save !== "function" || typeof dependencies.knowledge?.append !== "function" ||
     typeof dependencies.now !== "function" || typeof dependencies.nowMs !== "function" || typeof dependencies.logger !== "function" ||
     (dependencies.batchAcquirer !== undefined && (!text(dependencies.batchAcquirer.key) || typeof dependencies.batchAcquirer.fetchBatch !== "function" || (dependencies.batchAcquirer.maximumBatchSize !== undefined && (!positiveInteger(dependencies.batchAcquirer.maximumBatchSize) || dependencies.batchAcquirer.maximumBatchSize > 5)))) ||
+    (dependencies.orderedUrls !== undefined && (!Array.isArray(dependencies.orderedUrls) || !dependencies.orderedUrls.every(publicHttps) || new Set(dependencies.orderedUrls).size !== dependencies.orderedUrls.length)) ||
     !positiveInteger(dependencies.policy?.maximumFrontier) || !positiveInteger(dependencies.policy.maximumPageBytes) || !nonNegativeInteger(dependencies.policy.maximumRedirects) || !positiveInteger(dependencies.policy.maximumPages) || !positiveInteger(dependencies.policy.maximumDurationMs) ||
     (dependencies.policy.maximumPagesPerExecution !== undefined && !positiveInteger(dependencies.policy.maximumPagesPerExecution))) throw new TypeError("Extraction-runner dependencies are invalid.");
   return Object.freeze({
@@ -337,16 +342,16 @@ export function createExtractionRunner(dependencies) {
       const persistedFrontier = Array.isArray(loaded.value.frontier) ? loaded.value.frontier : [];
       let scratchpad = cloneScratchpad({
         ...loaded.value,
-        discoveredUrls: [...new Set([
+        discoveredUrls: (dependencies.orderedUrls ?? [...new Set([
           ...(Array.isArray(loaded.value.discoveredUrls) ? loaded.value.discoveredUrls : []),
           ...(Array.isArray(loaded.value.frontier) ? loaded.value.frontier : []),
-        ])],
+        ])]),
       });
       let plan;
       if (scratchpad.pendingBatch !== undefined && scratchpad.pendingBatch.key !== dependencies.batchAcquirer?.key) return fail({ kind: "ExtractionObservationInvalid", field: "pendingBatch.key" }, dependencies, command.runId);
       try { plan = scratchpad.pendingBatch === undefined ? await dependencies.planner.plan({ rootUrl: root.href, scratchpad }) : { ok: true, value: scratchpad.pendingBatch.plan }; } catch (error) { return fail({ kind: "ExtractionPlannerFailed" }, dependencies, command.runId); }
       if (!plan.ok || !validPlan(plan.value) || plan.value.frontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionPlanInvalid" }, dependencies, command.runId);
-      let currentPlan = freeze({ ...plan.value, frontier: freeze([...new Set([...persistedFrontier, ...plan.value.frontier])]) });
+      let currentPlan = freeze({ ...plan.value, frontier: freeze(dependencies.orderedUrls ?? [...new Set([...persistedFrontier, ...plan.value.frontier])]) });
       scratchpad = cloneScratchpad({ ...scratchpad, discoveredUrls: [...new Set([...(scratchpad.discoveredUrls ?? []), ...currentPlan.frontier])] });
       const initialDiscoveredUrls = scratchpad.discoveredUrls ?? [];
       if (initialDiscoveredUrls.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
@@ -424,8 +429,8 @@ export function createExtractionRunner(dependencies) {
         const pageMemory = await remember(dependencies.memory, "durable-fact", "source", { phase: "page-observed", url: observation.url, title: observation.title, note: pageNote.note, observedAt: observation.observedAt, byteCount: observation.byteCount, redirects: observation.redirects, links: observation.links.slice(0, 50), candidateCount: observation.candidates.length }, dependencies, command.runId);
         if (!pageMemory.ok) return pageMemory;
         let novel = 0;
-        for (const candidate of observation.candidates) {
-          if (dependencies.reviewer === undefined && scratchpad.acceptedHashes.includes(candidate.normalizedHash)) continue;
+        for (const candidate of scratchpad.processedContentDigests?.includes(observation.contentDigest??'') ? [] : observation.candidates) {
+          if (scratchpad.acceptedHashes.includes(candidate.normalizedHash)) continue;
           if (dependencies.reviewer === undefined && candidate.similarity?.decision === "ambiguous") return fail({ kind: "KnowledgeDuplicateAmbiguous" }, dependencies, command.runId);
           if (candidate.similarity !== undefined) scratchpad = cloneScratchpad({ ...scratchpad, similarityEvidence: [...scratchpad.similarityEvidence, { candidateHash: candidate.normalizedHash, comparedLocalHash: candidate.similarity.comparedLocalHash, score: candidate.similarity.score, decision: candidate.similarity.decision }] });
           if (dependencies.reviewer === undefined && candidate.similarity?.decision === "merge") continue;
@@ -444,17 +449,19 @@ export function createExtractionRunner(dependencies) {
           if (!appended.ok) { const causeKind = isRecord(appended.error) && text(appended.error.kind) ? appended.error.kind : undefined; return fail({ kind: "KnowledgePersistenceFailed", ...(causeKind === undefined || causeKind === "KnowledgePersistenceFailed" ? {} : { causeKind }) }, dependencies, command.runId); }
           const acceptedMemory = await remember(dependencies.memory, "durable-fact", "source", { phase: "knowledge-accepted", knowledgeId: point.id, normalizedHash: point.normalizedHash, evidenceDigests: point.evidenceAnchors.flatMap((anchor) => anchor.quoteDigest === undefined ? [] : [anchor.quoteDigest]).slice(0, 50), coverageGoalIds: point.coverageGoalIds.slice(0, 50), sourceUrl: observation.url }, dependencies, command.runId);
           if (!acceptedMemory.ok) return acceptedMemory;
-          scratchpad = cloneScratchpad({ ...scratchpad, acceptedHashes: [...new Set([...scratchpad.acceptedHashes, point.normalizedHash])], coverage: [...new Set([...scratchpad.coverage, ...point.coverageGoalIds])] });
+          scratchpad = cloneScratchpad({ ...scratchpad, acceptedHashes: [...new Set([...scratchpad.acceptedHashes, point.normalizedHash])], coverage: [...new Set([...scratchpad.coverage, ...point.coverageGoalIds])], revision: scratchpad.revision + 1 });
+          try { const saved = await dependencies.scratchpad.save(scratchpad); if (!saved.ok) return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
+          catch (error) { return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
           novel += 1;
         }
         const nextZero = novel === 0 ? scratchpad.consecutiveNoveltyZero + 1 : 0;
         const scopedLinks = observation.links.filter((link) => {
           const candidate = new URL(link);
-          return candidate.origin === root.origin && withinPath(root, candidate);
+          return candidate.origin === root.origin && withinPath(root, candidate) && (dependencies.orderedUrls === undefined || dependencies.orderedUrls.includes(link));
         });
         const discoveredUrls = [...new Set([...(scratchpad.discoveredUrls ?? []), ...currentPlan.frontier, ...scopedLinks])];
         if (discoveredUrls.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
-        scratchpad = cloneScratchpad({ ...scratchpad, processedUrls: [...scratchpad.processedUrls, observation.url], frontier: [...new Set([...currentPlan.frontier, ...observation.links])], discoveredUrls, unresolvedGaps: currentPlan.unresolvedGaps, consecutiveNoveltyZero: nextZero, pageNotes: [...(scratchpad.pageNotes ?? []), pageNote].slice(-100), revision: scratchpad.revision + 1 });
+        scratchpad = cloneScratchpad({ ...scratchpad, processedUrls: [...scratchpad.processedUrls, observation.url], processedResponseUrls:[...new Set([...(scratchpad.processedResponseUrls??[]),observation.responseUrl??observation.url])], processedContentDigests:[...new Set([...(scratchpad.processedContentDigests??[]),...(observation.contentDigest?[observation.contentDigest]:[])])], frontier: [...new Set([...currentPlan.frontier, ...scopedLinks])], discoveredUrls, unresolvedGaps: currentPlan.unresolvedGaps, consecutiveNoveltyZero: nextZero, pageNotes: [...(scratchpad.pageNotes ?? []), pageNote].slice(-100), revision: scratchpad.revision + 1 });
         if (scratchpad.pendingBatch !== undefined) {
           const remaining = scratchpad.pendingBatch.observations.slice(1);
           const { pendingBatch, ...progress } = scratchpad;
@@ -475,7 +482,7 @@ export function createExtractionRunner(dependencies) {
         const proposedPlan = replanned.value;
         const coverageGoals = new Map(currentPlan.coverageGoals.map((goal) => [goal.id, goal]));
         for (const goal of proposedPlan.coverageGoals) coverageGoals.set(goal.id, goal);
-        const preservedFrontier = [...new Set([...proposedPlan.frontier, ...(scratchpad.discoveredUrls ?? [])])].filter((url) => !scratchpad.processedUrls.includes(url));
+        const preservedFrontier = (dependencies.orderedUrls ?? [...new Set([...proposedPlan.frontier, ...(scratchpad.discoveredUrls ?? [])])]).filter((url) => !scratchpad.processedUrls.includes(url));
         if (preservedFrontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
         currentPlan = freeze({ ...proposedPlan, coverageGoals: freeze([...coverageGoals.values()]), frontier: freeze(preservedFrontier) });
         const prematureComplete = currentPlan.stopDecision.decision === "complete" && pendingFrontierUrl(currentPlan, scratchpad) !== null;

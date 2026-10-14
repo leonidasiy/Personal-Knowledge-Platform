@@ -2,6 +2,7 @@
 
 import { createRightsAssessor } from "../src/features/knowledge-workflows/rights.js";
 import { createRobotsGate } from "../src/features/knowledge-workflows/robots.js";
+import { isWorkflowRobotsEvidence } from '../src/features/knowledge-workflows/workflow.js';
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
@@ -9,6 +10,70 @@ function assertEquals(actual, expected) { if (!Object.is(actual, expected)) thro
 const capabilities = ["copyright", "licence", "terms", "access", "storage", "display", "transformation", "attribution", "origin"];
 /** @type {(hostname: string) => Promise<{ readonly ok: true, readonly value: readonly string[] }>} */
 const publicResolver = async (_hostname) => ({ ok: true, value: ["93.184.216.34"] });
+
+Deno.test('unverified robots permits public targets for fetch errors, unavailable statuses, malformed and oversized files', async () => {
+  const cases = [
+    {fetch:async()=>{throw new TypeError('Network unavailable');},status:0},
+    {fetch:async()=>new Response('Unavailable',{status:503}),status:503},
+    {fetch:async()=>new Response('Rate limit',{status:429}),status:429},
+    {fetch:async()=>new Response('Disallow: /no-agent',{status:200}),status:200},
+    {fetch:async()=>new Response('User-agent: *',{status:200}),maximumBytes:4,status:200},
+    {fetch:async()=>new Response(null,{status:500}),fetchRobots:async()=>/** @type {const} */({ok:false,error:{kind:'KnowledgeRobotsFetchUnavailable'}}),status:0},
+  ];
+  for (const test of cases) {
+    let targets=0;
+    const gate=createRobotsGate({...test,robotsUnavailablePolicy:'allow-unverified-if-public',verifyTargetReachable:async()=>{targets++;return {ok:true,value:null};},resolveAddresses:publicResolver,now:()=> '2026-10-13T00:00:00.000Z',logger:()=>{}});
+    const result=await gate.check({rights:rights()});
+    assertEquals(result.ok,true);
+    if (!result.ok) continue;
+    assertEquals(result.value.httpStatus,test.status);
+    assertEquals(result.value.availability,'unavailable');
+    assertEquals(isWorkflowRobotsEvidence(result.value),true);
+    // Resumption must reverify each target; an unavailable policy is never cached as allowed directives.
+    const resumed=createRobotsGate({fetch:async()=>{throw new Error('Unexpected fetch');},cachedEvidence:result.value,robotsUnavailablePolicy:'allow-unverified-if-public',verifyTargetReachable:async()=>{targets++;return {ok:false,error:{kind:'WebpageAccessBlocked'}};},resolveAddresses:publicResolver,now:()=> '2026-10-13T00:00:00.000Z',logger:()=>{}});
+    const blocked=await resumed.check({rights:rights(),targetUrl:'https://example.test/lesson/blocked'});
+    assertEquals(blocked.ok,false);
+    if (!blocked.ok && blocked.error.kind==='RobotsTargetUnavailable') assertEquals(blocked.error.causeKind,'WebpageAccessBlocked');
+    assertEquals(targets,2);
+  }
+});
+
+Deno.test('unverified policy retains explicit robots denials and destination safety',async()=>{
+  let verified=0;
+  const gate=createRobotsGate({fetch:async()=>new Response('User-agent: *\nDisallow: /lesson'),robotsUnavailablePolicy:'allow-unverified-if-public',verifyTargetReachable:async()=>{verified++;return {ok:true,value:null};},resolveAddresses:publicResolver,now:()=> '2026-10-13T00:00:00.000Z',logger:()=>{}});
+  const denied=await gate.check({rights:rights()});
+  assertEquals(denied.ok,false);
+  if (!denied.ok) assertEquals(denied.error.kind,'RobotsDenied');
+  const foreign=await gate.check({rights:rights(),targetUrl:'https://foreign.test/lesson'});
+  assertEquals(foreign.ok,false);
+  if (!foreign.ok) assertEquals(foreign.error.kind,'UnsafeDestination');
+  assertEquals(verified,0);
+  const mixed=createRobotsGate({fetch:async()=>new Response('User-agent: *\nDisallow: /lesson\nMalformed line'),robotsUnavailablePolicy:'allow-unverified-if-public',verifyTargetReachable:async()=>{verified++;return {ok:true,value:null};},resolveAddresses:publicResolver,now:()=> '2026-10-13T00:00:00.000Z',logger:()=>{}});
+  const mixedResult=await mixed.check({rights:rights()});
+  assertEquals(mixedResult.ok,false);
+  if (!mixedResult.ok) assertEquals(mixedResult.error.kind,'RobotsDenied');
+  assertEquals(verified,0);
+});
+Deno.test('malformed robots preserves explicit denials across public checks and persisted resumption',async()=>{
+  const body='User-agent: *\nDisallow: /restricted\nMalformed line';
+  let verified=0;
+  const dependencies={fetch:async()=>new Response(body),robotsUnavailablePolicy:/** @type {const} */('allow-unverified-if-public'),verifyTargetReachable:async()=>{verified++;return /** @type {const} */({ok:true,value:null});},resolveAddresses:publicResolver,now:()=> '2026-10-13T00:00:00.000Z',logger:()=>{}};
+  const gate=createRobotsGate(dependencies);
+  const publicResult=await gate.check({rights:rights(),targetUrl:'https://example.test/public'});
+  assertEquals(publicResult.ok,true);
+  if(!publicResult.ok)throw new Error('Expected public verification.');
+  assertEquals(publicResult.value.content,body);
+  assertEquals(publicResult.value.availability,'unavailable');
+  assertEquals(isWorkflowRobotsEvidence(publicResult.value),true);
+  const resumed=createRobotsGate({...dependencies,fetch:async()=>{throw new Error('Unexpected fetch');},cachedEvidence:publicResult.value});
+  for(const instance of [gate,resumed]) {
+    const restricted=await instance.check({rights:rights(),targetUrl:'https://example.test/restricted/lesson'});
+    assertEquals(restricted.ok,false);
+    if(!restricted.ok)assertEquals(restricted.error.kind,'RobotsDenied');
+  }
+  assertEquals(verified,1);
+});
+
 function rights() {
   const assessor = createRightsAssessor({ now: () => "2026-08-13T12:00:00.000Z", logger: () => {} });
   const result = assessor.assess({ ownerId: "owner-a", sourceId: "source-a", sourceRevision: 1, canonicalUrl: "https://example.test/lesson", origin: "https://example.test", access: "public", requestedAt: "2026-08-13T00:00:00.000Z", evidence: capabilities.map((capability) => ({ capability, outcome: "allowed", reference: `https://example.test/evidence/${capability}`, observedAt: "2026-08-13T00:00:00.000Z", expiresAt: "2026-08-14T00:00:00.000Z" })) });

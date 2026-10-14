@@ -188,7 +188,7 @@ test("received typed source-conflict remains negative under unchanged normalizat
         };
       },
     },
-    evaluator: {
+    reviewer: {
       evaluate: async () => {
         critics++;
         return normalized;

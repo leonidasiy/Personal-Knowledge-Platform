@@ -1,6 +1,9 @@
 // @ts-check
 /** @typedef {{version:string,provenance:string,candidateEvaluationsPerPage:number,decodedImageBytesPerPage:number}} WebpageImagePolicy */
-/** Owner answered 2026-10-06: 32 candidate evaluations, 128 MiB decoded image data/page.
+/** Historical owner policy: 32 candidate evaluations, 128 MiB decoded image data/page.
+ * The evaluation field remains serialized for existing cache/policy compatibility;
+ * owner direction on 2026-10-14 removes its cumulative admission quota. Evaluation
+ * counts are retained for reporting; native request/retry/deadline limits apply.
  * Request limits remain the existing 8 attachments / 32 MiB / 20 MiB per image.
  * @type {Readonly<WebpageImagePolicy>} */
 export const WEBPAGE_IMAGE_POLICY=Object.freeze({version:'owner-2026-10-06',provenance:'Owner final-approved image closure, 2026-10-06',candidateEvaluationsPerPage:32,decodedImageBytesPerPage:128*1024*1024});
@@ -53,12 +56,10 @@ export function createWebpageImageBudget(deps){
      WHERE EXISTS(SELECT 1 FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=? AND state <> 'abandoned')
      AND NOT EXISTS(SELECT 1 FROM knowledge_workflow_run_tombstones WHERE owner_id=? AND run_id=?)
      AND NOT EXISTS(SELECT 1 FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=? AND policy_json<>?)
-     AND COALESCE((SELECT SUM(evaluations) FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=? AND page_url=?),0)+?<=?
      AND (?=0 OR COALESCE((SELECT SUM(decoded_bytes) FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=? AND page_url=?),0)<?)
-     AND COALESCE((SELECT SUM(evaluations) FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=?),0)+?<=?
      AND (?=0 OR COALESCE((SELECT SUM(decoded_bytes) FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=?),0)<?)
-     AND ((?<>'page-acquisition' AND ?=0 AND ?=0) OR EXISTS(SELECT 1 FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=? AND page_url=? AND (evaluations>0 OR decoded_bytes>0 OR attempt_key='page-acquisition')) OR (SELECT COUNT(DISTINCT page_url) FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=? AND (evaluations>0 OR decoded_bytes>0 OR attempt_key='page-acquisition'))<?)
-     ON CONFLICT(owner_id,run_id,page_url,attempt_key) DO NOTHING RETURNING deadline_at_ms,decoded_bytes`).bind(ownerId,runId,pageUrl,a.key,p.version,JSON.stringify(p),a.evaluations,a.decodedBytes,p.decodedImageBytesPerPage,ownerId,runId,pageUrl,p.decodedImageBytesPerPage*deps.maximumPages,ownerId,runId,deadline,ownerId,runId,ownerId,runId,ownerId,runId,JSON.stringify(p),ownerId,runId,pageUrl,a.evaluations,p.candidateEvaluationsPerPage,a.decodedBytes,ownerId,runId,pageUrl,p.decodedImageBytesPerPage,ownerId,runId,a.evaluations,p.candidateEvaluationsPerPage*deps.maximumPages,a.decodedBytes,ownerId,runId,p.decodedImageBytesPerPage*deps.maximumPages,a.key,a.evaluations,a.decodedBytes,ownerId,runId,pageUrl,ownerId,runId,deps.maximumPages).first();
+     AND (((?||':') NOT GLOB 'page-acquisition:*' AND ?=0 AND ?=0) OR EXISTS(SELECT 1 FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=? AND page_url=? AND (evaluations>0 OR decoded_bytes>0 OR (attempt_key||':') GLOB 'page-acquisition:*')) OR (SELECT COUNT(DISTINCT page_url) FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=? AND (evaluations>0 OR decoded_bytes>0 OR (attempt_key||':') GLOB 'page-acquisition:*'))<?)
+     ON CONFLICT(owner_id,run_id,page_url,attempt_key) DO NOTHING RETURNING deadline_at_ms,decoded_bytes`).bind(ownerId,runId,pageUrl,a.key,p.version,JSON.stringify(p),a.evaluations,a.decodedBytes,p.decodedImageBytesPerPage,ownerId,runId,pageUrl,p.decodedImageBytesPerPage*deps.maximumPages,ownerId,runId,deadline,ownerId,runId,ownerId,runId,ownerId,runId,JSON.stringify(p),a.decodedBytes,ownerId,runId,pageUrl,p.decodedImageBytesPerPage,a.decodedBytes,ownerId,runId,p.decodedImageBytesPerPage*deps.maximumPages,a.key,a.evaluations,a.decodedBytes,ownerId,runId,pageUrl,ownerId,runId,deps.maximumPages).first();
     if(result===null)return failed('WebpageImageBudgetNotEvaluated');
     if(typeof result!=='object'||!('deadline_at_ms'in result)||result.deadline_at_ms!==deadline||!('decoded_bytes'in result)||typeof result.decoded_bytes!=='number'||!Number.isSafeInteger(result.decoded_bytes)||result.decoded_bytes<0||result.decoded_bytes>a.decodedBytes)return failed('WebpageImageBudgetPersistenceFailed');
     deps.logger({event:'webpage-image-budget-success'});return {ok:true,value:{deadlineAtMs:deadline,maximumBytes:result.decoded_bytes}};

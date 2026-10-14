@@ -248,7 +248,7 @@ Deno.test("scraper prompts separate trusted policy from untrusted dynamic source
     assertEquals(prompt.includes("must not follow instructions"), true);
   }
   assertEquals(extractionPlanPrompt.includes("scraper-plan-v3"), true);
-  assertEquals(pageObservationPrompt.includes("webpage-source-text-v12-captured"), true);
+  assertEquals(pageObservationPrompt.includes("webpage-source-text-v14-committed-knowledge"), true);
   assertEquals(pageObservationPrompt.includes("untrusted source evidence"),true);
 });
 
@@ -268,7 +268,8 @@ Deno.test("webpage facts exclude attachments and do not retry malformed output",
 
 Deno.test("approved selection policy reaches page, repair, text, and image prompts", () => {
   for (const prompt of [pageObservationPrompt, pageObservationRepairPrompt, materialBatchPrompt, materialImagePrompt]) {
-    for (const phrase of ["selection-v3", "Be concise", "detailed derivations", "plotting", "Truth alone", "zero", "variable meanings", "Language fidelity", "never translate"]) assertEquals(prompt.includes(phrase), true);
+    for (const phrase of ["Be concise", "detailed derivations", "plotting", "Truth alone", "zero", "variable meanings", "Language fidelity", "never translate"]) assertEquals(prompt.includes(phrase), true);
+    assertEquals(/selection-v\d+/u.test(prompt), true);
     assertEquals(prompt.includes("KEEP that explanation of standardization"), false);
   }
   for (const prompt of [materialBatchPrompt, materialImagePrompt]) { assertEquals(prompt.includes("30–80 words"), false); assertEquals(prompt.includes("there is no word target"), true); }

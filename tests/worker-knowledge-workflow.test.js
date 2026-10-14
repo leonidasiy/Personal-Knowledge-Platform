@@ -1,6 +1,7 @@
 // @ts-check
 
 import { createDiscoveryWorker } from "../worker/handler.js";
+import { SourceLibraryGatewayClient } from "../src/features/source-library/gateway.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
@@ -47,7 +48,7 @@ function makeFixture(options = {}) {
         return { ok: true, value: { runId: "run-a", state: "extraction-loop", revision: 2, extractionStartedAt: "2026-08-13T00:00:00.000Z", decisionRequired: null, counts: { pages: 1, knowledgePoints: 1, acceptedQuizzes: 0, pendingQuizzes: 0 }, extractionDeadlineAt: "2026-08-13T00:30:00.000Z", failureKind: null } };
       },
       sourceStatus: async (command) => ({ ok: true, value: { ownerId: /** @type {{ readonly ownerId: string }} */ (command).ownerId, sourceId: /** @type {{ readonly sourceId: string }} */ (command).sourceId, run: { runId: "run-a", state: options.sourceState ?? "awaiting-upload", revision: 3, extractionStartedAt: "2026-08-13T00:00:00.000Z", decisionRequired: options.sourceState === "retryable-failure" ? null : "upload-material", counts: { pages: 1, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0 }, extractionDeadlineAt: options.sourceExpired ? "2026-08-13T00:04:00.000Z" : "2026-08-13T00:30:00.000Z", failureKind: options.sourceFailureKind === undefined ? "KnowledgePagePaywallDetected" : options.sourceFailureKind } } }),
-      control: async (command) => { const value = /** @type {{ readonly action: string, readonly expectedRevision: number }} */ (command); return { ok: true, value: { state: value.action === "stop" ? "paused" : "per-point-quiz-loop", revision: value.expectedRevision + 1 } }; },
+      control: async (command) => { const value = /** @type {{ readonly action: string, readonly expectedRevision: number }} */ (command); return { ok: true, value: { runId: "run-a", state: value.action === "abandon" ? "abandoned" : value.action === "stop" ? "paused" : "per-point-quiz-loop", revision: value.expectedRevision + 1, extractionStartedAt: "2026-08-13T00:00:00.000Z", extractionDeadlineAt: "2026-08-13T00:30:00.000Z", decisionRequired: null, failureKind: value.action === "abandon" ? "WorkflowAbandoned" : null, counts: {pages: 0, knowledgePoints: 0, acceptedQuizzes: 0, pendingQuizzes: 0}, robotsEvidence: {robotsUrl:"https://example.test/robots.txt",targetUrl:"https://example.test/learn",httpStatus:0,availability:"unavailable",content:"",checkedAt:"2026-08-13T00:00:00.000Z",matchedRule:null}, canonicalSourceIdentity: "internal-source", contentSignature: "internal-signature", idempotencyKey: "internal-command", configDigests: {planner:"internal-digest"} } }; },
       rightsApproved: async (command) => { rightsApproved.push(/** @type {Record<string, unknown>} */ (command)); return { ok: true, value: { state: "robots-check", revision: 3 } }; },
       material: async (command) => { materials.push(/** @type {Record<string, unknown>} */ (command)); return { ok: true, value: { status: "attached", materialId: "material-a", runId: "run-a", reused: false } }; },
       revokeSource: async (command) => { revoked.push(/** @type {Record<string, unknown>} */ (command)); return { ok: true, value: null }; },
@@ -114,6 +115,27 @@ Deno.test("workflow status and control routes preserve owner scope and typed com
   assertEquals(control.status, 200);
   const foreign = await fixture.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/control", { method: "POST", headers: { origin: "https://evil.example" }, body: JSON.stringify({ runId: "run-a", expectedRevision: 2, action: "stop", idempotencyKey: "stop-2" }) }));
   assertEquals(foreign.status, 403);
+});
+
+Deno.test("successful cancellation projects a gateway-compatible public status without internal fields", async () => {
+  const fixture = makeFixture();
+  /** @type {{result:Record<string,unknown>}|undefined} */ let body;
+  const client = new SourceLibraryGatewayClient({baseUrl:"https://worker.example/",timeoutMs:100,fetch:async(input,init)=>{
+    const response=await fixture.worker.fetch(new Request(input,init));
+    body=await response.clone().json();
+    return response;
+  }});
+  const result=await client.cancelWorkflow({runId:"run-a",expectedRevision:2,idempotencyKey:"cancel-1"});
+  assertEquals(result.ok,true);
+  if(!result.ok)throw new Error(result.error.kind);
+  assertEquals(result.value.state,"abandoned");
+  assertEquals(result.value.elapsedMs,300000);
+  assertEquals(result.value.remainingMs,1500000);
+  assertEquals(result.value.robotsEvidence?.httpStatus,0);
+  if(body===undefined)throw new Error("Control response was not received.");
+  for(const key of ["canonicalSourceIdentity","contentSignature","idempotencyKey","configDigests"]){
+    assertEquals(Object.hasOwn(body.result,key),false);
+  }
 });
 
 Deno.test("workflow status dependencies are bounded and classify backend failures", async () => {

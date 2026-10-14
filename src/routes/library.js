@@ -50,7 +50,7 @@ export function renderProcessingStatus(model) {
   const processing = `Processing ${count} ${count === 1 ? "source" : "sources"}${stage === null ? "" : ` · ${stage}`}`;
   const label = model.uploading ? `Uploading…${count && !model.unavailable ? ` · ${processing}` : ""}`
     : model.unavailable ? `Status unavailable${count ? ` · Last confirmed: ${processing}` : ""}` : processing;
-  return shellMarkup(1, model.unavailable && !model.uploading ? "" : '<span class="library-processing-spinner" aria-hidden="true">⟳</span>', model.escapeHtml(label));
+  return shellMarkup(1, model.unavailable && !model.uploading ? "" : shellMarkup(65), model.escapeHtml(label));
 }
 
 /** @param {LibraryRouteModel} model */
@@ -72,7 +72,7 @@ function renderCollection(model) {
     return `${search}${renderKnowledgeSearchResults(model)}`;
   }
   if (collection.items.length === 0) {
-    return shellMarkup(5, search, collection.query === "" ? "No sources yet" : shellMarkup(29), collection.query === ""
+    return shellMarkup(5, search, collection.query === "" ? shellMarkup(67) : shellMarkup(29), collection.query === ""
         ? shellMarkup(30)
         : shellMarkup(31));
   }
@@ -87,7 +87,7 @@ function renderCollection(model) {
     : shellMarkup(10, escapeHtml(collection.message));
   const more = collection.nextCursor === null
     ? ""
-    : shellMarkup(11, collection.state === "loading" ? "disabled" : "", collection.state === "loading" ? "Loading..." : "Load more");
+    : shellMarkup(11, collection.state === "loading" ? "disabled" : "", collection.state === "loading" ? "Loading..." : shellMarkup(68));
   return shellMarkup(12, search, retainedNotice, content, more);
 }
 
@@ -134,7 +134,7 @@ function renderSource(model, source) {
   const capabilities = source.adapter.capabilities.join(", ");
   const workflowStatus = (model.workflowStatuses ?? []).find((status) => status.sourceId === source.id) ?? null;
   const workflowMessage = workflowStatusMessage(source, workflowStatus);
-  const workflowNotice = workflowMessage === null ? "" : shellMarkup(16, escapeHtml(workflowMessage));
+  const workflowNotice = (workflowMessage === null ? "" : shellMarkup(16, escapeHtml(workflowMessage))) + renderSourceProgress(workflowStatus,escapeHtml);
   const workflowRetry = workflowStatus?.reasonCode === "retryable-failure" && workflowStatus.run !== null
     ? shellMarkup(17, escapeHtml(workflowStatus.run.runId), workflowStatus.run.revision)
     : "";
@@ -146,7 +146,27 @@ function renderSource(model, source) {
   const related = knowledge.length === 0
     ? ""
     : shellMarkup(19, sourceId, sourceId, escapeHtml(knowledgeOverview(knowledge)));
-  return shellMarkup(20, sourceId, sourceId, escapeHtml(source.adapter.id), escapeHtml(source.title), escapeHtml(source.description), escapeHtml(source.adapter.granularity), capabilities === "" ? "" : ` · ${escapeHtml(capabilities)}`, formatDate(source.approvedAt), workflowNotice, upload, workflowRetry + workflowCancel, escapeHtml(source.canonicalUrl), related, sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
+  return shellMarkup(20, sourceId, sourceId, sourceId, escapeHtml(source.adapter.id), escapeHtml(source.title), escapeHtml(source.description), escapeHtml(source.adapter.granularity), capabilities === "" ? "" : ` · ${escapeHtml(capabilities)}`, formatDate(source.approvedAt), workflowNotice, upload, workflowRetry + workflowCancel, escapeHtml(source.canonicalUrl), related, sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
+}
+
+/** @param {WorkflowSourceStatus|null} status @param {(value:string)=>string} escapeHtml */
+function renderSourceProgress(status,escapeHtml){
+  const run=status?.run;if(!run||run.state==="abandoned")return "";
+  const progress=run.progress;
+  const count=run.counts.knowledgePoints;
+  const points=progress?.knowledgePoints??[];
+  const knowledgeCount=Math.max(count,points.length);
+  const questions=progress?shellMarkup(64,progress.generatedQuizQuestions):shellMarkup(57);
+  const stage=run.state==="completed"?shellMarkup(58):progress?.stage??workflowStageMessage(run.state).replace(/^Processing:\s*/u,"");
+  const pageCount=progress?.processedPageCount??run.counts.pages;
+  const fields=[shellMarkup(50,shellMarkup(59),escapeHtml(`${pageCount}${progress?.totalPages==null?"":` of ${progress.totalPages}`}`))];
+  if(progress?.pageTitle)fields.push(shellMarkup(50,shellMarkup(60),escapeHtml(progress.pageTitle)));
+  if(progress?.currentUrl)fields.push(shellMarkup(50,shellMarkup(61),shellMarkup(56,escapeHtml(progress.currentUrl),escapeHtml(progress.currentUrl))));
+  if(progress?.sectionTitle)fields.push(shellMarkup(50,shellMarkup(62),escapeHtml(progress.sectionTitle)));
+  if(progress?.updatedAt)fields.push(shellMarkup(50,shellMarkup(63),escapeHtml(progress.updatedAt)));
+  const summaries=points.length?shellMarkup(52,points.map(point=>shellMarkup(51,escapeHtml(point.summary))).join("")):shellMarkup(knowledgeCount?54:53);
+  const active=countProcessingWorkflowStatuses([status])>0;
+  return shellMarkup(49,escapeHtml(status.sourceId),escapeHtml(status.sourceId),escapeHtml(shellMarkup(66,stage,knowledgeCount,knowledgeCount===1?"point":"points",questions)),fields.join(""),knowledgeCount,summaries,active?shellMarkup(55):"");
 }
 
 /** @param {readonly { readonly summary: string, readonly sourceTopic?: string|null }[]} knowledge @returns {string} */

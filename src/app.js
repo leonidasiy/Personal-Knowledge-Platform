@@ -54,7 +54,7 @@ const PRESETS =
 const VISUAL_THEMES = PRESETS.visualThemes;
 const LAYOUTS = PRESETS.layouts;
 const APP_COPY =
-  /** @type {{readonly dailyTargetsCreate:string,readonly savedTargetsHidden:string,readonly savedSetHidden:string,readonly starterUnavailable:string,readonly discoveryUnavailable:string,readonly reviewRouteUnavailable:string,readonly libraryRouteUnavailable:string,readonly recallRuntimeUnavailable:string,readonly preferenceNotSaved:string,readonly preferenceSaveFailed:string,readonly studySaved:string,readonly answerSavedReload:string,readonly promptOutsideRecall:string,readonly exported:string,readonly exportFailed:string,readonly eraseFailed:string,readonly targetsSaved:string,readonly finishRecall:string,readonly soundsUnavailable:string,readonly feedExpired:string,readonly feedUnavailable:string,readonly pageSizeUnsupported:string,readonly cursorInvalid:string,readonly feedOwnerMismatch:string,readonly pageMismatch:string,readonly lessonUnavailable:string,readonly feedOpenFailed:string,readonly storageUnavailable:string,readonly learningDataUnavailable:string,readonly offlineMiss:string,readonly offlineUpgrade:string,readonly offlineFailed:string,readonly settingsRead:string,readonly settingsWrite:string,readonly settingsReset:string,readonly settingsInvalid:string,readonly openingApp:string,readonly discoverFailed:string,readonly reviewOpening:string,readonly libraryOpening:string,readonly discoverMarkup:import("./routes/discover.js").DiscoverMarkup}} */
+  /** @type {{readonly cancelProcessing:string,readonly dailyTargetsCreate:string,readonly savedTargetsHidden:string,readonly savedSetHidden:string,readonly starterUnavailable:string,readonly discoveryUnavailable:string,readonly reviewRouteUnavailable:string,readonly libraryRouteUnavailable:string,readonly recallRuntimeUnavailable:string,readonly preferenceNotSaved:string,readonly preferenceSaveFailed:string,readonly studySaved:string,readonly answerSavedReload:string,readonly promptOutsideRecall:string,readonly exported:string,readonly exportFailed:string,readonly eraseFailed:string,readonly targetsSaved:string,readonly finishRecall:string,readonly soundsUnavailable:string,readonly feedExpired:string,readonly feedUnavailable:string,readonly pageSizeUnsupported:string,readonly cursorInvalid:string,readonly feedOwnerMismatch:string,readonly pageMismatch:string,readonly lessonUnavailable:string,readonly feedOpenFailed:string,readonly storageUnavailable:string,readonly learningDataUnavailable:string,readonly offlineMiss:string,readonly offlineUpgrade:string,readonly offlineFailed:string,readonly settingsRead:string,readonly settingsWrite:string,readonly settingsReset:string,readonly settingsInvalid:string,readonly openingApp:string,readonly discoverFailed:string,readonly reviewOpening:string,readonly libraryOpening:string,readonly discoverMarkup:import("./routes/discover.js").DiscoverMarkup}} */
   (readEmbeddedJson("app-copy"));
 const DEFAULT_SETTINGS = freeze({
   schemaVersion: /** @type {const} */ (2),
@@ -659,8 +659,8 @@ async function loadActiveRoute() {
           uploadPrefill = prefill;
           location.hash = "upload";
         },
-        navigateToLibrary: () => {
-          void libraryPageController?.load().catch(() => {
+        navigateToLibrary: (sourceId) => {
+          void libraryPageController?.revealSource(sourceId).catch(() => {
             libraryRouteIssue = APP_COPY.libraryRouteUnavailable;
             render();
           });
@@ -718,6 +718,7 @@ async function loadLibraryRoute() {
             confirm(
             `Remove "${source.title}" and all paired knowledge, questions, media, and schedules? Activity history will be preserved.`,
             ),
+        confirmCancel: (source) => confirm(APP_COPY.cancelProcessing.replace("{}",()=>source.title)),
         createObserver: (load) => {
           if (!("IntersectionObserver" in globalThis)) return null;
           const observer = new IntersectionObserver((entries) => {
@@ -1473,6 +1474,8 @@ function restoreFocus(focusKey, headingId) {
 function registerOfflineSupport() {
   addEventListener("online", () => render());
   addEventListener("offline", () => render());
+  addEventListener("pagehide", () => libraryPageController?.dispose());
+  addEventListener("pageshow", () => { void libraryPageController?.resume(); });
   systemThemeQuery.addEventListener("change", () => {
     if (experienceSettings.themeMode !== "system") return;
     void applyPresentationUpdate({

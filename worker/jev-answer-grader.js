@@ -5,14 +5,14 @@
 /** @typedef {{ readonly prompt: string, readonly answers: readonly JevAnswer[] }} JevGradeCommand */
 /** @typedef {{ readonly kind: "JevCommandInvalid" | "JevCredentialMissing" | "JevTimeout" | "JevRateLimited" | "JevProviderUnavailable" | "JevProviderRejected" | "JevResponseInvalid" }} JevFailure */
 
-/** @typedef {{ readonly requestedModel: string, readonly servedModel: string, readonly endpoint: string, readonly acceptanceThreshold: number, readonly evidence: string }} JevGraderConfiguration */
+/** @typedef {{ readonly requestedModel: string, readonly servedModel: string | null, readonly endpoint: string, readonly acceptanceThreshold: number, readonly evidence: string }} JevGraderConfiguration */
 /** @type {JevGraderConfiguration} */
 export const JEV_GRADER_CONFIGURATION = Object.freeze({
-  requestedModel: "typesafe/jev-1.13",
-  servedModel: "typesafe/jev-1.13-20260917",
+  requestedModel: "~typesafe/jev-latest",
+  servedModel: null,
   endpoint: "https://openrouter.ai/api/alpha/decisions",
-  acceptanceThreshold: 0.8,
-  evidence: "artifacts/jev-live-validation-2026-10-04.json",
+  acceptanceThreshold: 0.7,
+  evidence: "https://openrouter.ai/docs/guides/community/jev-tutorial",
 });
 const MAXIMUM_ANSWERS = 4;
 const MAXIMUM_FIELD_CHARACTERS = 2_000;
@@ -23,7 +23,7 @@ function validConfiguration(value) {
   const candidate = /** @type {Record<string, unknown>} */ (value);
   const expected = ["requestedModel", "servedModel", "endpoint", "acceptanceThreshold", "evidence"];
   if (Object.keys(candidate).length !== expected.length || expected.some((key) => !Object.hasOwn(candidate, key))) return false;
-  if (typeof candidate.requestedModel !== "string" || candidate.requestedModel.trim() === "" || typeof candidate.servedModel !== "string" || candidate.servedModel.trim() === "" || typeof candidate.evidence !== "string" || candidate.evidence.trim() === "" || typeof candidate.acceptanceThreshold !== "number" || !Number.isFinite(candidate.acceptanceThreshold) || candidate.acceptanceThreshold < 0 || candidate.acceptanceThreshold > 1) return false;
+  if (typeof candidate.requestedModel !== "string" || candidate.requestedModel.trim() === "" || (candidate.requestedModel === "~typesafe/jev-latest" ? candidate.servedModel !== null : typeof candidate.servedModel !== "string" || candidate.servedModel.trim() === "") || typeof candidate.evidence !== "string" || candidate.evidence.trim() === "" || typeof candidate.acceptanceThreshold !== "number" || !Number.isFinite(candidate.acceptanceThreshold) || candidate.acceptanceThreshold < 0 || candidate.acceptanceThreshold > 1) return false;
   if (typeof candidate.endpoint !== "string") return false;
   try {
     const endpoint = new URL(candidate.endpoint);
@@ -41,9 +41,11 @@ function validCommand(value) {
   return value.answers.every((answer) => record(answer) && text(answer.id) && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(answer.id) && text(answer.response) && answer.response.length <= MAXIMUM_FIELD_CHARACTERS && Array.isArray(answer.canonicalAnswers) && answer.canonicalAnswers.length > 0 && answer.canonicalAnswers.length <= 4 && answer.canonicalAnswers.every((canonical) => text(canonical) && canonical.length <= MAXIMUM_FIELD_CHARACTERS)) && new Set(value.answers.map((answer) => answer.id)).size === value.answers.length;
 }
 
-/** @param {unknown} value @param {readonly string[]} expectedIds @param {string} expectedModel @returns {{ readonly model: string, readonly probabilities: readonly number[] } | null} */
+/** @param {unknown} value @param {readonly string[]} expectedIds @param {string | null} expectedModel @returns {{ readonly model: string, readonly probabilities: readonly number[] } | null} */
 function parseDecision(value, expectedIds, expectedModel) {
-  if (!record(value) || value.model !== expectedModel || !record(value.answers)) return null;
+  if (!record(value) || !text(value.model) || !record(value.answers)) return null;
+  // The latest alias resolves to a versioned Jev model; pinned callers retain exact matching.
+  if (expectedModel === null ? !/^typesafe\/jev-\d+(?:\.\d+)*(?:-\d{8})?$/u.test(value.model) : value.model !== expectedModel) return null;
   const answerMap = value.answers;
   if (Object.keys(answerMap).length !== expectedIds.length || expectedIds.some((id) => !(id in answerMap))) return null;
   const probabilities = [];

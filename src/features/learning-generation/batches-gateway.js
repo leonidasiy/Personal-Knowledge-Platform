@@ -6,8 +6,8 @@ import { isSubjectId } from "../knowledge-subjects/public.js";
 /** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly sourceRevision: number, readonly questionId: string, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly media: { readonly assetId: string, readonly kind: string, readonly url: string, readonly attribution: string, readonly purpose?: "illustration" | "evidence" } | null, readonly questionLocked: boolean, readonly sourceClassification: { readonly mainSubject: string, readonly topic: string } | null, readonly sourceClassificationRevision: number }} LearningKnowledgeCard */
 /** @typedef {{ readonly batchId: string, readonly learningDay: string, readonly status: "open" | "completed", readonly itemIds: readonly string[], readonly revision: number, readonly createdAt: string, readonly completedAt: string | null }} LearningBatchProjection */
 /** @typedef {{ readonly batch: LearningBatchProjection | null, readonly items: readonly LearningKnowledgeCard[] }} FeedBatchProjection */
-/** @typedef {{ readonly id: string, readonly kind: "single-choice" | "multiple-choice", readonly prompt: string, readonly explanation: string, readonly choices: readonly { readonly id: string, readonly label: string }[], readonly blanks: null }} LearningReviewChoiceVariant */
-/** @typedef {{ readonly id: string, readonly kind: "fill-blank", readonly prompt: string, readonly explanation: string, readonly choices: null, readonly blanks: readonly { readonly id: string }[] }} LearningReviewFillBlankVariant */
+/** @typedef {{ readonly id: string, readonly kind: "single-choice" | "multiple-choice", readonly prompt: string, readonly choices: readonly { readonly id: string, readonly label: string }[], readonly blanks: null }} LearningReviewChoiceVariant */
+/** @typedef {{ readonly id: string, readonly kind: "fill-blank", readonly prompt: string, readonly choices: null, readonly blanks: readonly { readonly id: string }[] }} LearningReviewFillBlankVariant */
 /** @typedef {LearningReviewChoiceVariant | LearningReviewFillBlankVariant} LearningReviewVariant */
 /** @typedef {{ readonly questionId: string, readonly knowledgeId: string, readonly title: string, readonly prompt: string, readonly kind: string, readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly blanks: readonly { readonly id: string }[] | null, readonly pairedVariants: readonly [LearningReviewChoiceVariant, LearningReviewFillBlankVariant] | readonly [LearningReviewFillBlankVariant, LearningReviewChoiceVariant] | null, readonly sourceAnchorIds: readonly string[], readonly revision: number }} LearningReviewQuestion */
 /** @typedef {{ readonly correct: boolean, readonly score: number, readonly completed: boolean, readonly nextDueAt: string, readonly feedback: { readonly explanation: string, readonly correctAnswer: string, readonly components: readonly { readonly id: string, readonly correct: boolean, readonly correctAnswer: string }[] } }} LearningReviewAnswer */
@@ -62,19 +62,20 @@ function parsePairedVariants(value) {
   if (!Array.isArray(value) || value.length !== 2) return undefined;
   /** @type {LearningReviewVariant[]} */ const variants = [];
   for (const raw of value) {
-    if (!record(raw) || !exactKeys(raw, ["id", "kind", "prompt", "explanation", "choices", "blanks"]) || !text(raw.id) || !text(raw.prompt) || !text(raw.explanation) || !["single-choice", "multiple-choice", "fill-blank"].includes(String(raw.kind))) return undefined;
+    // Public questions omit feedback until submission, just like the native projection.
+    if (!record(raw) || !exactKeys(raw, ["id", "kind", "prompt", "choices", "blanks"]) || !text(raw.id) || !text(raw.prompt) || !["single-choice", "multiple-choice", "fill-blank"].includes(String(raw.kind))) return undefined;
     if (["correctChoiceIds", "acceptedAnswers", "canonicalAnswers", "correctAnswer"].some((key) => Object.hasOwn(raw, key))) return undefined;
     if (raw.kind === "fill-blank") {
       if (raw.choices !== null || !Array.isArray(raw.blanks) || raw.blanks.length === 0) return undefined;
       const blanks = raw.blanks.map((blank) => record(blank) && exactKeys(blank, ["id"]) && text(blank.id) ? freeze({ id: blank.id }) : null);
       if (blanks.some((blank) => blank === null) || new Set(blanks.map((blank) => blank?.id)).size !== blanks.length) return undefined;
-      variants.push(freeze({ id: raw.id, kind: "fill-blank", prompt: raw.prompt, explanation: raw.explanation, choices: null, blanks: freeze(/** @type {{readonly id:string}[]} */ (blanks)) }));
+      variants.push(freeze({ id: raw.id, kind: "fill-blank", prompt: raw.prompt, choices: null, blanks: freeze(/** @type {{readonly id:string}[]} */ (blanks)) }));
       continue;
     }
     if ((raw.kind !== "single-choice" && raw.kind !== "multiple-choice") || raw.blanks !== null || !Array.isArray(raw.choices) || raw.choices.length < 2) return undefined;
     const choices = raw.choices.map((choice) => record(choice) && exactKeys(choice, ["id", "label"]) && text(choice.id) && text(choice.label) ? freeze({ id: choice.id, label: choice.label }) : null);
     if (choices.some((choice) => choice === null) || new Set(choices.map((choice) => choice?.id)).size !== choices.length) return undefined;
-    variants.push(freeze({ id: raw.id, kind: raw.kind, prompt: raw.prompt, explanation: raw.explanation, choices: freeze(/** @type {{readonly id:string,readonly label:string}[]} */ (choices)), blanks: null }));
+    variants.push(freeze({ id: raw.id, kind: raw.kind, prompt: raw.prompt, choices: freeze(/** @type {{readonly id:string,readonly label:string}[]} */ (choices)), blanks: null }));
   }
   if (variants.filter((variant) => variant.kind === "fill-blank").length !== 1 || variants.filter((variant) => variant.kind === "single-choice" || variant.kind === "multiple-choice").length !== 1 || new Set(variants.map((variant) => variant.id)).size !== 2) return undefined;
   return /** @type {readonly [LearningReviewChoiceVariant, LearningReviewFillBlankVariant] | readonly [LearningReviewFillBlankVariant, LearningReviewChoiceVariant]} */ (freeze(variants));

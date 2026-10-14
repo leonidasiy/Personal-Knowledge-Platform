@@ -36,14 +36,14 @@ const verifierPrompt=`Prompt version: webpage-image-verify-v4. Independently com
 // JSON Schema sent through the production provider envelope; local identity/semantic validators remain authoritative.
 const matcherSchema={name:'webpage_image_match',schema:{type:'object',additionalProperties:false,required:['matches'],properties:{matches:{type:'array',items:{anyOf:[{type:'object',additionalProperties:false,required:['normalizedHash','status','imageId','imageDigest'],properties:{normalizedHash:{type:'string'},status:{type:'string',enum:['match']},imageId:{type:'string',minLength:1},imageDigest:{type:'string',minLength:1}}},{type:'object',additionalProperties:false,required:['normalizedHash','status','imageId','imageDigest'],properties:{normalizedHash:{type:'string'},status:{type:'string',enum:['no-support','ambiguous','unreadable']},imageId:{type:'null'},imageDigest:{type:'null'}}}]}}}}};
 const verifierSchema={name:'webpage_image_verify',schema:{type:'object',additionalProperties:false,required:['supported','imageId','imageDigest','visibleEvidence'],properties:{supported:{type:'boolean'},imageId:{type:'string'},imageDigest:{type:'string'},visibleEvidence:{type:'string',maxLength:500}}}};
-/** @typedef {{deferQualityReview?:boolean,attemptPolicy?:import("./webpage-facts.js").WebpageAttemptPolicy,scope:ImageScope,facts:readonly KnowledgeCandidate[],evidence:WebpageEvidence,readImage:(url:string,deadlineAtMs:number,maximumBytes:number)=>Promise<Result<{bytes:Uint8Array,mediaType:'image/png'|'image/jpeg'|'image/webp'|'image/gif'}>>,digest:(bytes:Uint8Array)=>Promise<string>,generate:(command:SourceCommand)=>Promise<Result<Record<string,unknown>>>,logger:(entry:{event:string,failureKind?:string})=>void,budget?:import("./webpage-image-budget.js").ImageBudget}} ImageAssociationDependencies */
+/** @typedef {{originalImageCache?:import("./webpage-image-cache.js").OriginalImageCache,deferQualityReview?:boolean,attemptPolicy?:import("./webpage-facts.js").WebpageAttemptPolicy,scope:ImageScope,facts:readonly KnowledgeCandidate[],evidence:WebpageEvidence,readImage:(url:string,deadlineAtMs:number,maximumBytes:number)=>Promise<Result<{bytes:Uint8Array,mediaType:'image/png'|'image/jpeg'|'image/webp'|'image/gif'}>>,digest:(bytes:Uint8Array)=>Promise<string>,generate:(command:SourceCommand)=>Promise<Result<Record<string,unknown>>>,logger:(entry:{event:string,failureKind?:string})=>void,budget?:import("./webpage-image-budget.js").ImageBudget}} ImageAssociationDependencies */
 /** @typedef {Omit<ImageAssociation,'status'|'selectedImageDigest'> & {status:Exclude<ImageAssociation['status'],'review-pending'>}} DefaultImageAssociation */
 /** @overload @param {ImageAssociationDependencies & {deferQualityReview?:false}} deps @returns {Promise<Result<readonly DefaultImageAssociation[]>>} */
 /** @overload @param {ImageAssociationDependencies & {deferQualityReview:true}} deps @returns {Promise<Result<readonly ImageAssociation[]>>} */
 /** @overload @param {ImageAssociationDependencies} deps @returns {Promise<Result<readonly ImageAssociation[]>>} */
 /** @param {ImageAssociationDependencies} deps @returns {Promise<Result<readonly ImageAssociation[]>>} */
 export async function associateWebpageImages(deps) {
- if(!deps||(deps.deferQualityReview!==undefined&&typeof deps.deferQualityReview!=='boolean')||(deps.attemptPolicy!==undefined&&typeof deps.attemptPolicy.dispatch!=='function')||!text(deps.scope?.ownerId)||!text(deps.scope.runId)||!Number.isSafeInteger(deps.scope.sourceRevision)||deps.scope.sourceRevision<=0||!Array.isArray(deps.facts)||!deps.facts.every(isKnowledgeCandidate)||!isWebpageEvidence(deps.evidence)||typeof deps.readImage!=='function'||typeof deps.digest!=='function'||typeof deps.generate!=='function'||typeof deps.logger!=='function')return {ok:false,error:{kind:'WebpageImagesCommandInvalid'}};
+ if(!deps||(deps.originalImageCache!==undefined&&(typeof deps.originalImageCache.load!=='function'||typeof deps.originalImageCache.save!=='function'))||(deps.deferQualityReview!==undefined&&typeof deps.deferQualityReview!=='boolean')||(deps.attemptPolicy!==undefined&&typeof deps.attemptPolicy.dispatch!=='function')||!text(deps.scope?.ownerId)||!text(deps.scope.runId)||!Number.isSafeInteger(deps.scope.sourceRevision)||deps.scope.sourceRevision<=0||!Array.isArray(deps.facts)||!deps.facts.every(isKnowledgeCandidate)||!isWebpageEvidence(deps.evidence)||typeof deps.readImage!=='function'||typeof deps.digest!=='function'||typeof deps.generate!=='function'||typeof deps.logger!=='function')return {ok:false,error:{kind:'WebpageImagesCommandInvalid'}};
  if(!deps.facts.length||!deps.evidence.images.length)return {ok:true,value:[]};
  if(!deps.budget||typeof deps.budget.reserve!=='function'||typeof deps.budget.settle!=='function')return {ok:true,value:deps.facts.map(f=>({normalizedHash:f.normalizedHash,status:'not-evaluated',failureKind:'WebpageImageBudgetUnavailable'}))};
  // Copy inputs so an injected model port cannot rewrite the accepted facts.
@@ -99,12 +99,21 @@ export async function associateWebpageImages(deps) {
    }
  }
  for(const metadata of deps.evidence.images) {
-   const reserved=await deps.budget.reserve({key:`read:${metadata.id}`,evaluations:1,decodedBytes:20*1024*1024,timeoutMs:ACQUISITION_POLICY.operationMilliseconds});
-   if(!reserved.ok){results.forEach(r=>{r.status='not-evaluated';r.failureKind=reserved.error.kind;r.failureKinds=[...new Set([...(r.failureKinds??[]),/** @type {string} */(r.failureKind)])];});continue;}
-   const read=await deps.readImage(metadata.url,reserved.value.deadlineAtMs,reserved.value.maximumBytes);
-   if(!read.ok){deps.logger({event:'webpage-images-failure',failureKind:read.error.kind});results.forEach(r=>{r.failureKind=read.error.kind;r.failureKinds=[...new Set([...(r.failureKinds??[]),/** @type {string} */(r.failureKind)])];});continue;}
-   if(!(read.value.bytes instanceof Uint8Array)||!['image/png','image/jpeg','image/webp','image/gif'].includes(read.value.mediaType)||read.value.bytes.length===0||read.value.bytes.length>20*1024*1024){results.forEach(r=>{r.failureKind='WebpageImageBytesInvalid';r.failureKinds=[...new Set([...(r.failureKinds??[]),/** @type {string} */(r.failureKind)])];});continue;}
-   const settled=await deps.budget.settle(`read:${metadata.id}`,read.value.bytes.length);if(!settled.ok)return settled;
+   const cached=deps.originalImageCache===undefined?{ok:/** @type {const} */(true),value:null}:await deps.originalImageCache.load(metadata);
+   if(!cached.ok){results.forEach(r=>{r.failureKind=cached.error.kind;r.failureKinds=[...new Set([...(r.failureKinds??[]),cached.error.kind])];});continue;}
+   /** @type {Result<import('./webpage-image-cache.js').OriginalImage>} */let read;
+   if(cached.value!==null)read={ok:true,value:cached.value};
+   else{
+     const reserved=await deps.budget.reserve({key:`read:${metadata.id}`,evaluations:1,decodedBytes:20*1024*1024,timeoutMs:ACQUISITION_POLICY.operationMilliseconds});
+     if(!reserved.ok){results.forEach(r=>{r.status='not-evaluated';r.failureKind=reserved.error.kind;r.failureKinds=[...new Set([...(r.failureKinds??[]),reserved.error.kind])];});continue;}
+     read=await deps.readImage(metadata.url,reserved.value.deadlineAtMs,reserved.value.maximumBytes);
+   }
+   if(!read.ok){deps.logger({event:'webpage-images-failure',failureKind:read.error.kind});results.forEach(r=>{r.failureKind=read.error.kind;r.failureKinds=[...new Set([...(r.failureKinds??[]),read.error.kind])];});continue;}
+   if(!(read.value.bytes instanceof Uint8Array)||!['image/png','image/jpeg','image/webp','image/gif'].includes(read.value.mediaType)||read.value.bytes.length===0||read.value.bytes.length>20*1024*1024){results.forEach(r=>{r.failureKind='WebpageImageBytesInvalid';r.failureKinds=[...new Set([...(r.failureKinds??[]),'WebpageImageBytesInvalid'])];});continue;}
+   if(cached.value===null){
+     const settled=await deps.budget.settle(`read:${metadata.id}`,read.value.bytes.length);if(!settled.ok)return settled;
+     if(deps.originalImageCache!==undefined){const saved=await deps.originalImageCache.save(metadata,read.value);if(!saved.ok){results.forEach(r=>{r.failureKind=saved.error.kind;r.failureKinds=[...new Set([...(r.failureKinds??[]),saved.error.kind])];});continue;}}
+   }
    if(batch.length===8||batch.reduce((n,i)=>n+i.bytes.length,0)+read.value.bytes.length>MAXIMUM_ATTACHMENT_TOTAL_BYTES){await evaluateBatch();batch=[];}
    const digest=await deps.digest(read.value.bytes);
    if(!/^sha256:[0-9a-f]{64}$/u.test(digest))return {ok:false,error:{kind:'WebpageImageDigestInvalid'}};

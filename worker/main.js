@@ -1,4 +1,5 @@
 import { D1KnowledgeContentRepository } from "./knowledge-workflow-content-d1.js";
+import { D1KnowledgeWorkflowProgressRepository } from './knowledge-workflow-progress-d1.js';
 import { D1SourceRenameRepository } from "./source-rename-d1.js";
 import { createSourceRenameService } from "../src/features/source-library/rename.js";
 // @ts-check
@@ -700,7 +701,12 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         return /** @type {const} */ ({ ok: true, value: { runId: created.value.run.runId, reused: created.value.reused } });
       },
       /** @param {unknown} command */
-      status: (command) => knowledgeWorkflowService.status(command),
+      status: async (command) => {
+        const status = await knowledgeWorkflowService.status(command);
+        if (!status.ok) return status;
+        const progress = await new D1KnowledgeWorkflowProgressRepository({database:/** @type {import('./knowledge-workflow-d1.js').D1DatabasePort} */(configuration.value.sourceLibraryDatabase),logger:knowledgeWorkflowLogger}).read(status.value);
+        return progress.ok ? {ok:true,value:{...status.value,progress:progress.value}} : progress;
+      },
       /** @param {unknown} command */
       sourceStatus: async (command) => {
         if (!isRecord(command) || typeof command.ownerId !== "string" || command.ownerId.trim() === "" || typeof command.sourceId !== "string" || command.sourceId.trim() === "") return { ok: false, error: { kind: "WorkflowCommandInvalid" } };
@@ -709,7 +715,9 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         const run=listed.value[0] ?? null;
         const warnings=run===null ? {ok:/** @type {const} */(true),value:[]} : await new D1KnowledgeContentRepository({database:/** @type {import('./knowledge-workflow-content-d1.js').D1DatabasePort} */(configuration.value.sourceLibraryDatabase),logger:knowledgeWorkflowLogger}).loadImageWarnings({ownerId:command.ownerId,runId:run.runId});
         if(!warnings.ok)return warnings;
-        return { ok: true, value: Object.freeze({ ownerId: command.ownerId, sourceId: command.sourceId, run, imageWarnings:warnings.value }) };
+        const progress = run === null ? {ok:/** @type {const} */(true),value:null} : await new D1KnowledgeWorkflowProgressRepository({database:/** @type {import('./knowledge-workflow-d1.js').D1DatabasePort} */(configuration.value.sourceLibraryDatabase),logger:knowledgeWorkflowLogger}).read(run);
+        if (!progress.ok) return progress;
+        return { ok: true, value: Object.freeze({ ownerId: command.ownerId, sourceId: command.sourceId, run:run === null ? null : {...run,progress:progress.value}, imageWarnings:warnings.value }) };
       },
       ...(knowledgeWorkflowMaterialService === null ? {} : {
         material: async (/** @type {unknown} */ command) => {

@@ -14,7 +14,7 @@ import { renderPdfPageImages } from "./pdf-image-pages.js";
 /** @import { WorkflowSourceStatus } from "../features/source-library/gateway.js" */
 
 const freeze = Object.freeze;
-const WORKFLOW_STATUS_REFRESH_MS = 5_000;
+const WORKFLOW_STATUS_REFRESH_MS = 60_000;
 
 /** @typedef {{ readonly observe: (element: Element) => void, readonly disconnect: () => void }} PageObserver */
 /** @typedef {{ readonly batchId: string, readonly learningDay: string, readonly status: "open" | "completed", readonly itemIds: readonly string[], readonly revision: number, readonly createdAt: string, readonly completedAt: string | null }} LibraryBatchModel */
@@ -30,6 +30,7 @@ const WORKFLOW_STATUS_REFRESH_MS = 5_000;
  *   readonly formatDate: (value: string) => string,
  *   readonly createId: () => string,
  *   readonly confirmDisable: (source: LibrarySource) => boolean,
+ *   readonly confirmCancel?: (source: LibrarySource) => boolean,
  *   readonly createObserver: (load: () => void) => PageObserver | null,
  *   readonly schedule: (callback: () => void, delayMs: number) => number,
  *   readonly cancel: (handle: number) => void,
@@ -87,10 +88,10 @@ export function createLibraryPage(dependencies) {
   try {
     const stored = dependencies.storage?.getItem("resonance-library-subject");
     if (stored === "unclassified" || isSubjectId(stored)) subject = stored;
-    else if (stored !== null && stored !== undefined) onError("Your saved Library subject is no longer available. Choose another shelf.");
+    else if (stored !== null && stored !== undefined) onError(libraryCopy(0));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    onError("Your Library subject preference could not be restored. You can still choose a shelf.");
+    onError(libraryCopy(1));
   }
   /** @type {SourceSearchScope} */ let searchScope = "knowledge";
   /** @type {string | null} */ let message = null;
@@ -98,6 +99,7 @@ export function createLibraryPage(dependencies) {
   /** @type {LibraryKnowledgeCard[]} */ let knowledge = [];
   /** @type {LibraryKnowledgeSearchCard[]} */ let knowledgeSearchResults = [];
   /** @type {WorkflowSourceStatus[]} */ let workflowStatuses = [];
+  /** @type {Set<string>} */const cancelledKnowledgeIds=new Set();
   /** @type {Map<string,Parameters<SourceLibraryGatewayClient["cancelWorkflow"]>[0]>} */ const cancellationRetries=new Map();
   const trackedSourceIds = new Set();
   let uploading = false;
@@ -113,6 +115,9 @@ export function createLibraryPage(dependencies) {
   /** @type {number | null} */ let workflowStatusRefreshHandle = null;
   /** @type {number} */ let workflowStatusGeneration = 0;
   /** @type {PageObserver | null} */ let observer = null;
+  let disposed=false;
+  /** @type {string|null} */let pendingFocusSourceId=null;
+  /** @type {number|null} */let focusHandle=null;
 
   const collection = () =>
     freeze({
@@ -125,17 +130,11 @@ export function createLibraryPage(dependencies) {
       searchScope,
       pendingSourceId,
       message,
-      knowledge: freeze(knowledge.map((card) => ({
-        knowledgeId: card.knowledgeId,
-        sourceId: card.sourceId,
-        summary: card.summary,
-        questionLocked: card.questionLocked,
-        primarySubject: card.primarySubject,
-        sourceTopic: card.sourceTopic,
-      }))),
+      knowledge: freeze([...knowledge]),
     });
 
   async function load(reset = true) {
+    if(disposed)return;
     if (read !== null) return await read;
     stopWorkflowStatusPolling();
     read = (async () => {
@@ -171,7 +170,7 @@ export function createLibraryPage(dependencies) {
       state = items.length === 0 ? "empty" : "success";
       message = null;
       rerender();
-      await Promise.all([loadKnowledge(), loadWorkflowStatuses()]);
+      await Promise.all([loadKnowledge(), loadWorkflowStatuses(true)]);
     })().finally(() => {
       read = null;
       rerender();
@@ -218,7 +217,7 @@ export function createLibraryPage(dependencies) {
       if (searchScope === "knowledge") {
         knowledgeSearchResults = result.value.map((hit) => {
           if (!("knowledge" in hit)) {
-            throw new TypeError("Knowledge search response is invalid.");
+            throw new TypeError(libraryCopy(2));
           }
           return {
             ...hit.knowledge,
@@ -244,7 +243,7 @@ export function createLibraryPage(dependencies) {
         : "success";
       if (searchScope === "sources") {
         for (const source of items) trackedSourceIds.add(source.id);
-        knowledge = []; await Promise.all([loadKnowledge(), loadWorkflowStatuses()]);
+        knowledge = []; await Promise.all([loadKnowledge(), loadWorkflowStatuses(true)]);
       }
     })().finally(() => {
       read = null;
@@ -253,15 +252,16 @@ export function createLibraryPage(dependencies) {
     await read;
   }
 
-  async function loadKnowledge() {
-    if (knowledgeRead !== null) return await knowledgeRead;
+  /** @param {boolean} [force] */
+  async function loadKnowledge(force = false) {
+    if (knowledgeRead !== null) {await knowledgeRead;if(!force)return;}
     knowledgeRead = (async () => {
       const result = await learningGateway.listKnowledge();
       if (!result.ok) {
         onError(friendlyLearning(result.error));
         return;
       }
-      knowledge = result.value.items.map((card) => ({
+      knowledge = result.value.items.filter(card=>!cancelledKnowledgeIds.has(card.knowledgeId)).map((card) => ({
         knowledgeId: card.knowledgeId,
         sourceId: card.sourceId,
         summary: card.summary,
@@ -278,11 +278,12 @@ export function createLibraryPage(dependencies) {
     return await knowledgeRead;
   }
 
-  async function loadWorkflowStatuses() {
+  /** @param {boolean} [refreshAll] */
+  async function loadWorkflowStatuses(refreshAll = false) {
     if (workflowStatusRead !== null) {
       const readingGeneration = workflowStatusReadGeneration;
       await workflowStatusRead;
-      if (readingGeneration !== workflowStatusGeneration) await loadWorkflowStatuses();
+      if (readingGeneration !== workflowStatusGeneration) await loadWorkflowStatuses(true);
       return;
     }
     const generation = workflowStatusGeneration;
@@ -298,10 +299,14 @@ export function createLibraryPage(dependencies) {
         if (generation !== workflowStatusGeneration) return;
         if (!page.ok) { recordStatusFailure(page.error); failed = true; break; }
         for (const source of page.value.items) trackedSourceIds.add(source.id);
+        const requested=page.value.items.find(source=>source.id===pendingFocusSourceId);
+        if(requested)items=merge(items,[requested]);
         statusDiscoveryPending = false;
         statusDiscoveryCursor = page.value.nextCursor;
       }
-      const results = await Promise.all([...trackedSourceIds].map(sourceId => gateway.workflowStatus(sourceId)));
+      const knownById=new Map(workflowStatuses.map(status=>[status.sourceId,status]));
+      const sourceIds=[...trackedSourceIds].filter(sourceId=>{const known=knownById.get(sourceId);return refreshAll||statusUnavailable||known===undefined||countProcessingWorkflowStatuses([known])>0||known.run!=null&&cancellationRetries.has(known.run.runId);});
+      const results = await Promise.all(sourceIds.map(sourceId => gateway.workflowStatus(sourceId)));
       if (generation !== workflowStatusGeneration) return;
       const known = new Map(workflowStatuses.map(status => [status.sourceId,status]));
       for (const result of results) {
@@ -344,6 +349,7 @@ export function createLibraryPage(dependencies) {
   function scheduleWorkflowStatusRefresh(generation) {
     if (
       generation !== workflowStatusGeneration ||
+      disposed ||
       workflowStatusRefreshHandle !== null ||
       (!statusRetryAllowed || !statusUnavailable && countProcessingWorkflowStatuses(workflowStatuses) === 0)
     ) return;
@@ -391,10 +397,10 @@ export function createLibraryPage(dependencies) {
       trackedSourceIds.delete(source.id);
       state = items.length === 0 ? "empty" : "success";
       onNotice(
-        "Source, knowledge, paired questions, media, and schedules removed. Activity history is preserved.",
+        libraryCopy(3),
       );
     }
-    await loadWorkflowStatuses();
+    await loadWorkflowStatuses(true);
     rerender();
   }
 
@@ -422,7 +428,7 @@ export function createLibraryPage(dependencies) {
         candidate.knowledgeId !== knowledgeId
       );
       onNotice(
-        "Knowledge, its paired question, media, and schedule were removed.",
+        libraryCopy(4),
       );
     }
     rerender();
@@ -444,6 +450,8 @@ export function createLibraryPage(dependencies) {
       candidate.run?.runId === runId
     );
     if (status?.run == null || pendingSourceId !== null || (cancel ? !cancellationRetries.has(runId) && ["completed","abandoned"].includes(status.run.state) : status.run.state !== "retryable-failure")) return;
+    const source=items.find(source=>source.id===status.sourceId);
+    if(cancel&&(source===undefined||!dependencies.confirmCancel?.(source)))return;
     pendingSourceId=status.sourceId;rerender();
     stopWorkflowStatusPolling();
     const command=cancellationRetries.get(runId) ?? {runId,expectedRevision,idempotencyKey:`workflow-${cancel?"cancel":"retry"}:${createId()}`};
@@ -451,17 +459,26 @@ export function createLibraryPage(dependencies) {
     const result = await gateway[cancel?"cancelWorkflow":"retryWorkflow"](command);
     pendingSourceId=null;
     if (!result.ok) {
-      onError(cancel ? `Cancellation failed: ${result.error.kind === "SourceGatewayRejected" ? result.error.failureKind : result.error.kind}.` : friendly(result.error));
-      await loadWorkflowStatuses();
+      onError(cancel ? libraryCopy(5) : friendly(result.error));
+      await loadWorkflowStatuses(true);
       rerender();
       return;
     }
-    if(cancel)cancellationRetries.delete(runId);
+    if(cancel){
+      cancellationRetries.delete(runId);
+      const removed=new Set(status.run.progress?.knowledgePoints.map(point=>point.knowledgeId)??[]);
+      for(const id of removed)cancelledKnowledgeIds.add(id);
+      knowledge=knowledge.filter(point=>!removed.has(point.knowledgeId));
+      knowledgeSearchResults=knowledgeSearchResults.filter(point=>!removed.has(point.knowledgeId));
+      workflowStatuses=workflowStatuses.map(candidate=>candidate.sourceId===status.sourceId?{...candidate,run:null,reasonCode:null,message:libraryCopy(6)}:candidate);
+    }
     onNotice(
-      cancel ? "Processing canceled. Attempt data cleaned." : "Retry started. The Library will refresh its processing status automatically.",
+      cancel ? libraryCopy(6) : libraryCopy(7),
     );
     rerender();
-    await loadWorkflowStatuses();
+    if(cancel)await loadKnowledge(true);
+    trackedSourceIds.add(status.sourceId);
+    await loadWorkflowStatuses(true);
   }
 
   let uploadMessage = "";
@@ -555,7 +572,7 @@ export function createLibraryPage(dependencies) {
         const types = /** @type {Record<string, string>} */ ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" });
         let pages;
         try { pages = await Promise.all(files.map(async (item, index) => ({ name: item.name, locator: `image:${index + 1}`, mediaType: item.type || types[item.name.split(".").at(-1)?.toLowerCase() ?? ""] || "", bytes: new Uint8Array(await item.arrayBuffer()) }))); }
-        catch (error) { return uploadFailure("ImageBatchReadFailed: the selected images could not be read."); }
+        catch (error) { return uploadFailure(libraryCopy(8)); }
         const packed = packImageBundle(pages);
         if (!packed.ok) return uploadFailure(`Image batch failed: ${packed.error.kind}.`);
         uploadFile = new File([packed.value], `${file.name}.pkpi`, { type: BUNDLE_TYPE });
@@ -582,7 +599,7 @@ export function createLibraryPage(dependencies) {
         ).join("");
       } catch (error) {
         return uploadFailure(
-          "Upload fingerprinting failed. The document has not been sent.",
+          libraryCopy(9),
         );
       }
       let runId = run?.runId;
@@ -600,7 +617,7 @@ export function createLibraryPage(dependencies) {
       }
       if (source === undefined || runId === undefined) {
         return uploadFailure(
-          "The document's source/run binding is unavailable.",
+          libraryCopy(10),
         );
       }
       const uploaded = await gateway.uploadWorkflowMaterial({
@@ -619,7 +636,7 @@ export function createLibraryPage(dependencies) {
         return;
       }
       uploadMessage =
-        "Content uploaded. Knowledge and question processing will continue.";
+        libraryCopy(11);
       uploadSucceeded = true;
       onNotice(uploadMessage);
       if (!items.some(item => item.id === source.id)) items.push(source);
@@ -627,7 +644,7 @@ export function createLibraryPage(dependencies) {
       pendingSourceId = null;
       uploading = false;
       rerender();
-      await loadWorkflowStatuses();
+      await loadWorkflowStatuses(true);
     }
   }
 
@@ -635,12 +652,19 @@ export function createLibraryPage(dependencies) {
   function bind(root) {
     observer?.disconnect();
     observer = null;
+    if(pendingFocusSourceId!==null){
+      const requested=[...root.querySelectorAll("[data-library-source]")].find(element=>element.getAttribute("data-library-source")===pendingFocusSourceId);
+      if(requested instanceof HTMLElement){
+        if(focusHandle!==null)cancel(focusHandle);
+        focusHandle=schedule(()=>{focusHandle=null;if(disposed||!requested.isConnected)return;requested.focus({preventScroll:true});requested.scrollIntoView({block:"center"});pendingFocusSourceId=null;},0);
+      }
+    }
     root.querySelector("[data-library-subject]")?.addEventListener("change", event => {
       const select = event.currentTarget;
       if (!(select instanceof HTMLSelectElement) || !(select.value === "unclassified" || isSubjectId(select.value))) return;
       subject = select.value;
       try { dependencies.storage?.setItem("resonance-library-subject", subject); }
-      catch (error) { if (!(error instanceof Error)) throw error; onError("This shelf is selected, but the preference could not be saved for next time."); }
+      catch (error) { if (!(error instanceof Error)) throw error; onError(libraryCopy(12)); }
       rerender();
       const restored = root.querySelector("[data-library-subject]");
       if (restored instanceof HTMLElement) restored.focus();
@@ -727,57 +751,34 @@ export function createLibraryPage(dependencies) {
     items = items.map(source => source.id === sourceId ? freeze({...source,title}) : source);
     knowledgeSearchResults = knowledgeSearchResults.map(point => point.sourceId === sourceId ? {...point,sourceTitle:title} : point);
   }
-  return freeze({ load, search, uploadMaterial, bind, render, renamed,
+  /** Open the source's shelf and focus its card, including a reused source on a later page.
+   * @param {string} sourceId */
+  async function revealSource(sourceId){
+    if(disposed||!sourceId.trim())return;
+    pendingFocusSourceId=sourceId;query="";searchScope="knowledge";
+    await load();
+    const requested=items.find(source=>source.id===sourceId);
+    if(requested){subject=librarySourceSubjects(sourceId,knowledge)[0];rerender();}
+    else{pendingFocusSourceId=null;onError(libraryCopy(13));}
+  }
+  function dispose(){disposed=true;stopWorkflowStatusPolling();observer?.disconnect();observer=null;if(focusHandle!==null){cancel(focusHandle);focusHandle=null;}pendingFocusSourceId=null;}
+  async function resume(){if(!disposed)return;disposed=false;await loadWorkflowStatuses(true);}
+  return freeze({ load, search, uploadMaterial, bind, render, renamed, revealSource, dispose, resume,
     renderProcessingStatus: () => renderProcessingStatus({workflowStatuses,escapeHtml,uploading,unavailable:statusUnavailable}), uploadResult: () => ({ok:uploadSucceeded,message:uploadMessage}) });
 }
 
 /** @param {import("../features/source-library/gateway.js").SourceGatewayFailure} failure */
-function friendly(failure) {
-  if (failure.kind === "SourceGatewayUnauthenticated") {
-    return "Sign in through the private source service, then try again.";
-  }
-  if (failure.kind === "SourceGatewayUnauthorized") {
-    return "This account cannot access the private source catalog.";
-  }
-  if (
-    failure.kind === "SourceGatewayUnavailable" ||
-    failure.kind === "SourceGatewayTimedOut"
-  ) {
-    return "Reconnect to the source service and try again. No local change was saved.";
-  }
-  if (
-    failure.kind === "SourceGatewayRejected" &&
-    (failure.failureKind === "SourceEmbeddingUnavailable" ||
-      failure.failureKind === "SourceSemanticIndexUnavailable")
-  ) {
-    return "Combined search is temporarily unavailable. Try again after the source catalog reconnects.";
-  }
-  if (
-    failure.kind === "SourceGatewayRejected" &&
-    failure.failureKind === "SourceRevisionStale"
-  ) {
-    return "This source changed elsewhere. Reload the Library before removing it.";
-  }
-  return "The source catalog could not complete this request.";
-}
+function friendly(failure) {return failureCopy(failure,"source");}
 
 /** @param {import("../features/learning-generation/batches-gateway.js").LearningBatchGatewayFailure} failure */
-function friendlyLearning(failure) {
-  if (
-    failure.kind === "LearningBatchGatewayUnavailable" ||
-    failure.kind === "LearningBatchGatewayTimedOut"
-  ) return "Reconnect to load the Library knowledge cards.";
-  if (
-    failure.kind === "LearningBatchGatewayUnauthenticated" ||
-    failure.kind === "LearningBatchGatewayUnauthorized"
-  ) {
-    return "Sign in through the private source service to view Library knowledge.";
-  }
-  if (
-    failure.kind === "LearningBatchGatewayRejected" &&
-    failure.failureKind === "KnowledgePurgeFailed"
-  ) return "Knowledge could not be removed. Refresh the Library and try again.";
-  return "Library knowledge could not be loaded or removed. The source remains in your Library.";
+function friendlyLearning(failure) {return failureCopy(failure,"knowledge");}
+
+/** User copy follows the closed gateway failure contract.
+ * @param {{kind:string,failureKind?:string}} failure @param {string} group */
+function failureCopy(failure,group){
+ const messages=readLibraryCopy().libraryFailureMessages?.[group];
+ const kind=failure.kind.endsWith("Rejected")?failure.failureKind:failure.kind;
+ return libraryCopy(messages?.[kind??""]??messages?.default);
 }
 
 /** @param {readonly LibrarySource[]} current @param {readonly LibrarySource[]} next */
@@ -789,11 +790,18 @@ function merge(current, next) {
 
 export {};
 
-/** Static validation text shares the cached application shell. @param {number} index */
-function uploadCopy(index) {
-  const content = document.getElementById("app-copy")?.textContent;
-  if (!content) throw new TypeError("UploadCopyUnavailable");
-  const copy = JSON.parse(content).uploadValidation?.[index];
+/** Static copy shares the cached application shell. @param {number} index @param {string} [group] */
+function uploadCopy(index,group="uploadValidation") {
+  const copy = readLibraryCopy()[group]?.[index];
   if (typeof copy !== "string") throw new TypeError("UploadCopyInvalid");
   return copy;
+}
+
+/** @param {number} index */
+function libraryCopy(index){return uploadCopy(index,"libraryMessages");}
+
+function readLibraryCopy(){
+ const content=document.getElementById("app-copy")?.textContent;
+ if(!content)throw new TypeError("LibraryCopyUnavailable");
+ return JSON.parse(content);
 }

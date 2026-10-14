@@ -19,6 +19,7 @@
   "./src/features/knowledge-subjects/presentation.js",
   "./src/features/knowledge-subjects/public.js",
   "./src/features/knowledge-workflows/image-upload.js",
+  "./src/features/knowledge-workflows/progress.js",
   "./src/features/learning-generation/batches-gateway.js",
   "./src/features/learning-generation/learner.js",
   "./src/features/notifications/controller.js",

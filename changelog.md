@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-14
+
+- Added hybrid browser navigation for public educational sources and durable
+  processed-page tracking. Unavailable robots metadata does not by itself block
+  processing accessible public content; access barriers remain respected.
+- Added per-source Library progress that refreshes every minute, source-card
+  navigation after extraction starts, and confirmed cancellation cleanup.
+- Updated the production reviewer to MiMo v2.6 Pro, repaired paired Review
+  projections, and preserved source-linked image associations.
+- Semantic answer grading uses `~typesafe/jev-latest` with an inclusive 70%
+  correctness-probability threshold. Recall preferences adjust intervals.
+- Expanded `SETUP.md` with beginner local-demo instructions, phone installation,
+  everyday use, and troubleshooting.
+
 ## 2026-10-04
 
 - Started approved source-wide classification milestone. Confirmed legacy classification is stored per knowledge point and is included in old extraction prompts; preserving those values while adding a source-owned record.

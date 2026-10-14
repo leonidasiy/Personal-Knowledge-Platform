@@ -1,4 +1,5 @@
 // @ts-check
+import { parseOriginalImageReceipt } from "./webpage-image-cache.js";
 
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 /** @typedef {{ readonly success: boolean, readonly meta?: { readonly changes?: number } }} D1Result */
@@ -42,6 +43,26 @@ export function createKnowledgeWorkflowCleanup(dependencies) {
         return { ok: false, error: { kind: "WorkflowCleanupFailed" } };
       }
     }
+    // Remove learner-visible artifacts before any remote storage operation. Media
+    // rows retain their keys until remote cleanup succeeds, so retries stay safe.
+    try {
+      const generationPrefix = `knowledge-workflow-generation:${run.runId}:`;
+      const visible = [
+        dependencies.database.prepare('DELETE FROM learning_generation_tasks WHERE owner_id=? AND generation_id IN (SELECT generation_id FROM learning_generation_jobs WHERE owner_id=? AND substr(generation_id,1,?)=?)').bind(run.ownerId,run.ownerId,generationPrefix.length,generationPrefix),
+        dependencies.database.prepare('DELETE FROM learning_generation_units WHERE owner_id=? AND generation_id IN (SELECT generation_id FROM learning_generation_jobs WHERE owner_id=? AND substr(generation_id,1,?)=?)').bind(run.ownerId,run.ownerId,generationPrefix.length,generationPrefix),
+        dependencies.database.prepare('DELETE FROM learning_generation_jobs WHERE owner_id=? AND substr(generation_id,1,?)=?').bind(run.ownerId,generationPrefix.length,generationPrefix),
+        dependencies.database.prepare('DELETE FROM extraction_knowledge_points WHERE owner_id=? AND run_id=?').bind(run.ownerId,run.runId),
+        dependencies.database.prepare('DELETE FROM knowledge_workflow_quizzes WHERE owner_id=? AND run_id=?').bind(run.ownerId,run.runId),
+        dependencies.database.prepare('DELETE FROM extraction_scratchpads WHERE owner_id=? AND run_id=?').bind(run.ownerId,run.runId),
+        dependencies.database.prepare('DELETE FROM knowledge_workflow_progress WHERE owner_id=? AND run_id=?').bind(run.ownerId,run.runId),
+        dependencies.database.prepare('INSERT OR IGNORE INTO knowledge_workflow_run_tombstones (owner_id,tombstone_id,run_id,purged_before,reason,occurred_at) VALUES (?,?,?,?,?,?)').bind(run.ownerId,`run-purge:${run.runId}`,run.runId,occurredAt,reason,occurredAt),
+      ];
+      const deleted = await dependencies.database.batch(visible);
+      if (deleted.length !== visible.length || deleted.some(result => !succeeded(result))) return {ok:false,error:{kind:'WorkflowCleanupFailed'}};
+    } catch (error) {
+      dependencies.logger({event:'knowledge-workflow-cleanup-failure',ownerId:run.ownerId,runId:run.runId,failureKind:'WorkflowCleanupFailed'});
+      return {ok:false,error:{kind:'WorkflowCleanupFailed'}};
+    }
     if (markTerminal && dependencies.sourceContent !== undefined) {
       const sourceContent = await dependencies.sourceContent.purge({ ownerId: run.ownerId, sourceId: run.sourceId, sourceRevision: run.sourceRevision });
       if (!sourceContent.ok) {
@@ -57,6 +78,23 @@ export function createKnowledgeWorkflowCleanup(dependencies) {
     } catch (error) {
       dependencies.logger({ event: "knowledge-workflow-cleanup-failure", ownerId: run.ownerId, runId: run.runId, failureKind: "WorkflowCleanupFailed" });
       return { ok: false, error: { kind: "WorkflowCleanupFailed" } };
+    }
+    try {
+      const cached = await dependencies.database.prepare("SELECT page_url,attempt_key,output_json FROM knowledge_workflow_image_attempts WHERE owner_id=? AND run_id=? AND attempt_key GLOB 'read:*' AND json_extract(output_json,'$.version')='webpage-original-image-v1'").bind(run.ownerId,run.runId).all();
+      if(!cached.success)return {ok:false,error:{kind:'WorkflowCleanupFailed'}};
+      for(const row of cached.results){
+        if(!record(row)||!text(row.page_url)||!text(row.attempt_key)||!text(row.output_json))return {ok:false,error:{kind:'WorkflowCleanupFailed'}};
+        const raw=JSON.parse(row.output_json);
+        if(!record(raw)||!text(raw.imageUrl)||!text(raw.imageId)||row.attempt_key!==`read:${raw.imageId}`)return {ok:false,error:{kind:'WorkflowCleanupFailed'}};
+        const receipt=await parseOriginalImageReceipt(raw,{ownerId:run.ownerId,runId:run.runId,sourceRevision:run.sourceRevision,pageUrl:row.page_url},{id:raw.imageId,url:raw.imageUrl});
+        if(receipt===null)return {ok:false,error:{kind:'WorkflowCleanupFailed'}};
+        mediaRows=[...mediaRows,{object_key:receipt.objectKey}];
+      }
+      // Keep cache key receipts with the debit history: a pending write can
+      // finish after this deletion and still needs a retryable cleanup key.
+    }catch(error){
+      dependencies.logger({event:'knowledge-workflow-cleanup-failure',ownerId:run.ownerId,runId:run.runId,failureKind:'WorkflowCleanupFailed'});
+      return {ok:false,error:{kind:'WorkflowCleanupFailed'}};
     }
     if (dependencies.bucket !== undefined && dependencies.bucket !== null) {
       for (const row of mediaRows) {

@@ -37,7 +37,7 @@ function setup() {
         return { ok: true, value: { id: `draft-${generatorCalls}`, knowledgeId: command.knowledge.id, knowledgeRevision: command.knowledge.sourceRevision, kind: "single-choice", prompt: generatorCalls === 1 ? "What is the core concept?" : "Which statement best explains the core concept?", options: ["Correct", "Incorrect"], answer: "Correct", citedEvidenceUrls: ["https://example.test/a"] } };
       },
     },
-    evaluator: {
+    reviewer: {
       async evaluate(command) {
         evaluatorCalls += 1;
         const score = command.knowledge.id === "knowledge-a" ? (command.attempt === 1 ? 6 : 9) : 7;
@@ -55,7 +55,7 @@ function setup() {
 Deno.test("quiz retries preserve published work and fail closed on publication reads", async () => {
   const fixture=setup();
   const scope=[];
-  const actor=createQuizActorCritic({generator:{generate:async()=>{throw new Error("MustNotRegenerate");}},evaluator:{evaluate:async()=>{throw new Error("MustNotReevaluate");}},repository:{...fixture.repository,findPublished:async(command)=>{scope.push(command);return {ok:true,value:{status:"published",attempt:2}};}},now:()=>"2026-10-02T00:00:00.000Z",logger:()=>{},maxAttempts:3});
+  const actor=createQuizActorCritic({generator:{generate:async()=>{throw new Error("MustNotRegenerate");}},reviewer:{evaluate:async()=>{throw new Error("MustNotReevaluate");}},repository:{...fixture.repository,findPublished:async(command)=>{scope.push(command);return {ok:true,value:{status:"published",attempt:2}};}},now:()=>"2026-10-02T00:00:00.000Z",logger:()=>{},maxAttempts:3});
   const command={ownerId:"owner-a",runId:"run-a",points:points()};
   const result=await actor.run(command);
   if (!result.ok) throw new Error(result.error.kind);
@@ -64,7 +64,7 @@ Deno.test("quiz retries preserve published work and fail closed on publication r
   assertEquals(fixture.published.length,0);
   assertEquals(fixture.purged.length,0);
   for (const throws of [false,true]) {
-    const failing=createQuizActorCritic({generator:{generate:async()=>{throw new Error("MustNotGenerate");}},evaluator:{evaluate:async()=>{throw new Error("MustNotEvaluate");}},repository:{...fixture.repository,findPublished:async()=>{if(throws)throw new Error("ReadUnavailable");return {ok:false,error:{kind:"ReadUnavailable"}};}},now:()=>"2026-10-02T00:00:00.000Z",logger:()=>{},maxAttempts:3});
+    const failing=createQuizActorCritic({generator:{generate:async()=>{throw new Error("MustNotGenerate");}},reviewer:{evaluate:async()=>{throw new Error("MustNotEvaluate");}},repository:{...fixture.repository,findPublished:async()=>{if(throws)throw new Error("ReadUnavailable");return {ok:false,error:{kind:"ReadUnavailable"}};}},now:()=>"2026-10-02T00:00:00.000Z",logger:()=>{},maxAttempts:3});
     const failed=await failing.run(command);
     if (failed.ok) throw new Error("Expected read failure");
     assertEquals(failed.error.kind,"QuizPersistenceFailed");
@@ -92,7 +92,7 @@ Deno.test("quiz actor-critic revises after feedback and continues sequentially",
 Deno.test("quiz gets three corrective retries, keeps final success and discards exhausted pairs", async () => {
   const fixture=setup();
   /** @type {(string|null)[]} */ const feedback=[];
-  const actor=createQuizActorCritic({generator:{async generate({knowledge,attempt,feedback:previous}){feedback.push(previous);return {ok:true,value:{id:`draft-${knowledge.id}-${attempt}`,knowledgeId:knowledge.id,knowledgeRevision:knowledge.sourceRevision,kind:"single-choice",prompt:"Which relationship follows from the evidence?",options:["A","B"],answer:"A",citedEvidenceUrls:["https://example.test/a"]}};}},evaluator:{async evaluate({knowledge,attempt}){return {ok:true,value:{score:knowledge.id==="knowledge-a"&&attempt===4?9:7,reasons:["Evidence checked"],feedback:"Make the distinction explicit.",groundingProblems:[]}};}},repository:fixture.repository,now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
+  const actor=createQuizActorCritic({generator:{async generate({knowledge,attempt,feedback:previous}){feedback.push(previous);return {ok:true,value:{id:`draft-${knowledge.id}-${attempt}`,knowledgeId:knowledge.id,knowledgeRevision:knowledge.sourceRevision,kind:"single-choice",prompt:"Which relationship follows from the evidence?",options:["A","B"],answer:"A",citedEvidenceUrls:["https://example.test/a"]}};}},reviewer:{async evaluate({knowledge,attempt}){return {ok:true,value:{score:knowledge.id==="knowledge-a"&&attempt===4?9:7,reasons:["Evidence checked"],feedback:"Make the distinction explicit.",groundingProblems:[]}};}},repository:fixture.repository,now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
   const result=await actor.run({ownerId:"owner-a",runId:"run-four",points:points()});
   if(!result.ok)throw new Error(result.error.kind);
   assertEquals(fixture.attempts.length,8);
@@ -108,7 +108,7 @@ Deno.test("quiz gets three corrective retries, keeps final success and discards 
   assertEquals(result.value.statistics?.extraAttempts,6);
   assertEquals(result.value.statistics?.quizDropRate,0.5);
   assertEquals(result.value.statistics?.exhaustedDropPoints,1);
-  const resumed=createQuizActorCritic({generator:{async generate(){throw new Error("MustNotRegenerate");}},evaluator:{async evaluate(){throw new Error("MustNotReevaluate");}},repository:{...fixture.repository,findPublished:async()=>({ok:true,value:{status:"published",attempt:4}})},now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
+  const resumed=createQuizActorCritic({generator:{async generate(){throw new Error("MustNotRegenerate");}},reviewer:{async evaluate(){throw new Error("MustNotReevaluate");}},repository:{...fixture.repository,findPublished:async()=>({ok:true,value:{status:"published",attempt:4}})},now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
   const reused=await resumed.run({ownerId:"owner-a",runId:"run-four",points:[points()[0]]});
   if(!reused.ok)throw new Error(reused.error.kind);
   assertEquals(reused.value.dispositions[0].attempts,4);
@@ -116,7 +116,7 @@ Deno.test("quiz gets three corrective retries, keeps final success and discards 
 
 Deno.test("four-attempt quiz policy propagates operational failures without dropping knowledge", async () => {
   const fixture=setup();
-  const actor=createQuizActorCritic({generator:{async generate(){return {ok:false,error:{kind:"ProviderUnavailable"}};}},evaluator:{async evaluate(){throw new Error("MustNotEvaluate");}},repository:fixture.repository,now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
+  const actor=createQuizActorCritic({generator:{async generate(){return {ok:false,error:{kind:"ProviderUnavailable"}};}},reviewer:{async evaluate(){throw new Error("MustNotEvaluate");}},repository:fixture.repository,now:()=>"2026-10-12T00:00:00.000Z",logger:()=>{},maxAttempts:QUIZ_MAX_ATTEMPTS});
   const result=await actor.run({ownerId:"owner-a",runId:"run-external",points:[points()[0]]});
   if(result.ok)throw new Error("Expected operational failure");
   assertEquals(result.error.kind,"QuizGeneratorFailed");
@@ -130,7 +130,7 @@ Deno.test("quiz generation receives the persisted knowledge classification uncha
   let received;
   const actor = createQuizActorCritic({
     generator: { async generate(command) { received = command.knowledge.classification; return { ok: true, value: { id: "draft-classification", knowledgeId: command.knowledge.id, knowledgeRevision: command.knowledge.sourceRevision, kind: "single-choice", prompt: "Which relationship applies?", options: ["A", "B"], answer: "A", citedEvidenceUrls: ["https://example.test/a"] } }; } },
-    evaluator: { async evaluate() { return { ok: true, value: { score: 9, reasons: ["Grounded"], feedback: "Ready", groundingProblems: [] } }; } },
+    reviewer: { async evaluate() { return { ok: true, value: { score: 9, reasons: ["Grounded"], feedback: "Ready", groundingProblems: [] } }; } },
     repository: fixture.repository, now: () => "2026-08-13T00:00:00.000Z", logger: () => {}, maxAttempts: 3,
   });
   await actor.run({ ownerId: "owner-a", runId: "run-classification", points: [points()[0]] });
@@ -142,7 +142,7 @@ Deno.test("quiz actor-critic preserves corrective explanation and rejects malfor
     const fixture = setup();
     const actor = createQuizActorCritic({
       generator: { async generate() { return { ok: true, value: { id: "draft-feedback", knowledgeId: "knowledge-a", knowledgeRevision: 1, kind: "single-choice", prompt: "Which case fits the rule?", options: ["A", "B"], answer: "A", explanation, citedEvidenceUrls: ["https://example.test/a"] } }; } },
-      evaluator: { async evaluate() { return { ok: true, value: { score: 9, reasons: ["Supported distinction"], feedback: "Ready", groundingProblems: [] } }; } },
+      reviewer: { async evaluate() { return { ok: true, value: { score: 9, reasons: ["Supported distinction"], feedback: "Ready", groundingProblems: [] } }; } },
       repository: fixture.repository, now: () => "2026-09-08T00:00:00.000Z", logger: () => {}, maxAttempts: 3,
     });
     await actor.run({ ownerId: "owner-a", runId: "run-feedback", points: [points()[0]] });
@@ -155,7 +155,7 @@ Deno.test("quiz actor-critic rejects ungrounded drafts before evaluator dispatch
   const fixture = setup();
   const actor = createQuizActorCritic({
     generator: { async generate() { return { ok: true, value: { id: "draft-ungrounded", knowledgeId: "knowledge-a", knowledgeRevision: 1, kind: "single-choice", prompt: "General question", options: ["A", "B"], answer: "A", citedEvidenceUrls: ["https://other.test/unknown"] } }; } },
-    evaluator: { async evaluate() { throw new Error("must not evaluate"); } },
+    reviewer: { async evaluate() { throw new Error("must not evaluate"); } },
     repository: fixture.repository,
     now: () => "2026-08-13T00:00:00.000Z",
     logger: () => {},
@@ -180,7 +180,7 @@ Deno.test("quiz actor-critic rejects duplicate choice meanings and duplicate ans
     const fixture = setup();
     const actor = createQuizActorCritic({
       generator: { async generate() { return { ok: true, value: { id: "duplicate", knowledgeId: "knowledge-a", knowledgeRevision: 1, prompt: "Which mapping applies?", citedEvidenceUrls: ["https://example.test/a"], ...draft } }; } },
-      evaluator: { async evaluate() { throw new Error("invalid draft reached evaluator"); } },
+      reviewer: { async evaluate() { throw new Error("invalid draft reached evaluator"); } },
       repository: fixture.repository, now: () => "2026-09-17T00:00:00.000Z", logger: () => {}, maxAttempts: 3,
     });
     const result = await actor.run({ ownerId: "owner-a", runId: "run-duplicate-options", points: [points()[0]] });
@@ -203,7 +203,7 @@ Deno.test("quiz actor-critic accepts ordered multi-blank drafts and rejects malf
     let evaluations = 0;
     const actor = createQuizActorCritic({
       generator: { async generate() { return { ok: true, value: { ...base, blanks } }; } },
-      evaluator: { async evaluate() { evaluations += 1; return { ok: true, value: { score: 9, reasons: ["Grounded"], feedback: "Ready", groundingProblems: [] } }; } },
+      reviewer: { async evaluate() { evaluations += 1; return { ok: true, value: { score: 9, reasons: ["Grounded"], feedback: "Ready", groundingProblems: [] } }; } },
       repository: fixture.repository, now: () => "2026-09-18T00:00:00.000Z", logger: () => {}, maxAttempts: 3,
     });
     await actor.run({ ownerId: "owner-a", runId: "run-blanks", points: [points()[0]] });
@@ -216,7 +216,7 @@ Deno.test("accepted quiz kinds are published directly after actor-critic approva
   const fixture = setup();
   const actor = createQuizActorCritic({
     generator: { async generate(command) { return { ok: true, value: { id: "draft-response", knowledgeId: command.knowledge.id, knowledgeRevision: 1, kind: "short-response", prompt: "Explain the specific concept.", options: [], answer: "A specific explanation", citedEvidenceUrls: ["https://example.test/a"] } }; } },
-    evaluator: { async evaluate() { return { ok: true, value: { score: 10, reasons: ["Precise"], feedback: "Ready for review.", groundingProblems: [] } }; } },
+    reviewer: { async evaluate() { return { ok: true, value: { score: 10, reasons: ["Precise"], feedback: "Ready for review.", groundingProblems: [] } }; } },
     repository: fixture.repository,
     now: () => "2026-08-13T00:00:00.000Z",
     logger: () => {},
@@ -234,7 +234,7 @@ Deno.test("malformed evaluator output discards the knowledge point after generat
     const fixture = setup();
     const actor = createQuizActorCritic({
       generator: { async generate(command) { return { ok: true, value: { id: `draft-${command.attempt}`, knowledgeId: command.knowledge.id, knowledgeRevision: 1, kind: "single-choice", prompt: "Specific?", options: ["yes", "no"], answer: "yes", citedEvidenceUrls: ["https://example.test/a"] } }; } },
-      evaluator: { async evaluate() { return { ok: true, value: grade }; } },
+      reviewer: { async evaluate() { return { ok: true, value: grade }; } },
       repository: fixture.repository,
       now: () => "2026-08-13T00:00:00.000Z",
       logger: () => {},
@@ -265,7 +265,7 @@ Deno.test("quiz actor-critic abandons a duplicate knowledge point without evalua
   const fixture = setup();
   const actor = createQuizActorCritic({
     generator: { async generate() { return { ok: false, error: { kind: "QuizDuplicate" } }; } },
-    evaluator: { async evaluate() { throw new Error("must not evaluate"); } },
+    reviewer: { async evaluate() { throw new Error("must not evaluate"); } },
     repository: fixture.repository,
     now: () => "2026-08-13T00:00:00.000Z",
     logger: () => {},
@@ -281,7 +281,7 @@ Deno.test("quiz actor-critic abandons a duplicate publication race and continues
   const fixture = setup();
   const actor = createQuizActorCritic({
     generator: { async generate(command) { return { ok: true, value: { id: "draft-race", knowledgeId: command.knowledge.id, knowledgeRevision: 1, kind: "single-choice", prompt: "Specific?", options: ["yes", "no"], answer: "yes", citedEvidenceUrls: ["https://example.test/a"] } }; } },
-    evaluator: { async evaluate() { return { ok: true, value: { score: 9, reasons: ["Precise"], feedback: "Ready.", groundingProblems: [] } }; } },
+    reviewer: { async evaluate() { return { ok: true, value: { score: 9, reasons: ["Precise"], feedback: "Ready.", groundingProblems: [] } }; } },
     repository: { ...fixture.repository, async publish() { return { ok: false, error: { kind: "QuizDuplicate" } }; } },
     now: () => "2026-08-13T00:00:00.000Z",
     logger: () => {},
@@ -298,7 +298,7 @@ Deno.test("quiz actor-critic reports discard persistence failure", async () => {
   const fixture = setup();
   const actor = createQuizActorCritic({
     generator: { async generate() { return { ok: false, error: { kind: "QuizDuplicate" } }; } },
-    evaluator: { async evaluate() { throw new Error("must not evaluate"); } },
+    reviewer: { async evaluate() { throw new Error("must not evaluate"); } },
     repository: { ...fixture.repository, async discard() { return { ok: false, error: { kind: "database-unavailable" } }; } },
     now: () => "2026-08-13T00:00:00.000Z",
     logger: () => {},

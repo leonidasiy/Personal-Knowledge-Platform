@@ -1,6 +1,7 @@
 // @ts-check
 
 import { createLearningBatchService } from "../worker/learning-batches-d1.js";
+import { LearningBatchGatewayClient } from "../src/features/learning-generation/batches-gateway.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
@@ -60,6 +61,29 @@ class Database {
 function rows(count = 5) {
   return Array.from({ length: count }, (_, index) => ({ point_json: point(index), knowledge_id: `knowledge-${index}`, source_id: "source-a", source_revision: 1, source_main_subject: null, source_topic: null, source_classification_revision: null, task_json: task(index), source_title: "Music theory", canonical_url: "https://example.test/lesson", view_count: 0, last_answer_correct: null, scheduled_days: 0, due_at: null, studied_at: null, preference: 0, asset_id: null, media_kind: null, media_attribution: null }));
 }
+
+Deno.test("native paired Review projection passes the gateway without pre-answer explanations or answer keys", async () => {
+  const entries = rows().map((entry, index) => ({
+    ...entry, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z",
+    task_json: JSON.stringify({ id: `task-${index}`, kind: "paired", prompt: "Recall the supported relationship.", explanation: "Post-answer feedback only.", sourceAnchorIds: [`anchor-${index}`], choices: null, correctChoiceIds: null, revision: 1, pairedVariants: [
+      { id: "choice-v1", kind: "single-choice", prompt: "Choose the supported relationship.", explanation: "Post-answer choice feedback.", choices: [{ id: "a", label: "Supported" }, { id: "b", label: "Unsupported" }], correctChoiceIds: ["a"] },
+      { id: "fill-v1", kind: "fill-blank", prompt: "Name the ____.", explanation: "Post-answer blank feedback.", blanks: [{ id: "blank-1", acceptedAnswers: ["tonic"] }] },
+    ] }),
+  }));
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (new Database(entries))), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
+  const projected = await service.loadReview("owner-a", "2026-08-19");
+  assertEquals(projected.ok, true);
+  if (!projected.ok) return;
+  const gateway = new LearningBatchGatewayClient({ baseUrl: "https://app.example.test/", timeoutMs: 1_000, fetch: async () => new Response(JSON.stringify({ ownerId: "owner-a", result: projected.value }), { headers: { "Content-Type": "application/json" } }) });
+  const loaded = await gateway.loadReview("2026-08-19");
+  assertEquals(loaded.ok, true);
+  if (!loaded.ok) return;
+  assertEquals(loaded.value.questions.length, 5);
+  for (const question of loaded.value.questions) {
+    assertEquals(question.pairedVariants?.length, 2);
+    for (const variant of question.pairedVariants ?? []) for (const field of ["explanation", "correctChoiceIds", "acceptedAnswers"]) assertEquals(Object.hasOwn(variant, field), false);
+  }
+});
 
 Deno.test("learner projection preserves illustration purpose only for a verified current binding", async () => {
   const parsedPoint = JSON.parse(point(0));

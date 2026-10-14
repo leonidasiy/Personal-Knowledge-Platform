@@ -20,6 +20,22 @@ const verdict=(decision,other={})=>({decision,reasons:['Source-backed concrete r
 const repair={summary:'A supported distinct relationship.',coverageGoalIds:['core'],useSupportingImage:false,evidenceClauses:['Captured immutable relationship.']};
 const reviewer=(evaluate,regenerate,mode='text')=>createKnowledgeQualityReviewer({context,sourceMode:mode,evaluate:async(p,attempt)=>{const r=await evaluate(p,attempt);return r.ok?{ok:true,value:auditedVerdict(p,r.value,mode)}:r;},regenerate,digest:async()=> 'sha256:repaired'});
 
+test('unknown response fields spend at most the existing second critique without stripping or repairing',async()=>{
+ for(const validSecond of [true,false]) {
+  let calls=0;
+  const extra={...auditedVerdict(point,verdict('pass')),'':''};
+  const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=>assert.fail('No repair'),regenerate:async()=>assert.fail('No repair'),evaluate:async(_point,attempt,history)=>{calls++;assert.equal(history,undefined);return {ok:true,value:attempt===2&&validSecond?auditedVerdict(point,verdict('pass')):extra};}}).review(point);
+  assert.equal(calls,2);assert.equal(result.ok,validSecond);
+  if(!validSecond)assert.equal(result.error.kind,'KnowledgeReviewOutputInvalid');
+  assert.equal(extra[''],'');
+ }
+});
+test('unknown fields cannot renew an assessment with invalid evidence spans',async()=>{
+ let calls=0;const invalid={...auditedVerdict(point,verdict('pass')),'':''};invalid.audit.finalClause.textEvidence[0].end=99999;
+ const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=>assert.fail('No repair'),regenerate:async()=>assert.fail('No repair'),evaluate:async()=>{calls++;return {ok:true,value:invalid};}}).review(point);
+ assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid'}});assert.equal(calls,1);
+});
+
 test('owner see-less meaning match drops immediately without regeneration',async()=>{
   let repairs=0;
   const result=await reviewer(async()=>({ok:true,value:verdict('drop-see-less')}),async()=>{repairs++;throw new Error('Forbidden repair');}).review(point);
@@ -38,7 +54,7 @@ test('second quality failure drops rather than generating a third output',async(
 });
 
 // Synthetic responses exercise production dispatch and validation, not model accuracy.
-const productionCases=[...[1,3].flatMap(anchors=>[false,true].map(mismatch=>({anchors,mismatch,media:'none'}))),...['text-remove','text-keep','raster-keep','raster-remove','reasoning-only','raw-pass-gap-keep','raw-pass-gap-remove','reliability-only','both-negative','basis-null','history-negative','history-gap','history-null-basis'].map(media=>({anchors:1,mismatch:false,media}))];
+const productionCases=[...[1,3].flatMap(anchors=>[false,true].map(mismatch=>({anchors,mismatch,media:'none'}))),...['text-remove','text-keep','raster-keep','raster-remove','reasoning-only','raw-pass-gap-keep','raw-pass-gap-remove','reliability-only','both-negative','basis-null','history-negative','history-gap','history-null-basis','legacy-config-claims'].map(media=>({anchors:1,mismatch:false,media}))];
 for(const {anchors,mismatch,media} of productionCases)test(`production repair schema fixes ${anchors} immutable anchors; mismatched count=${mismatch}; media=${media}`,async()=>{
   const db=new DatabaseSync(':memory:');
   try {
@@ -52,6 +68,16 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
     let run=unwrap(await service.createRun({ownerId:'synthetic-owner',sourceId:point.sourceId,sourceRevision:1,canonicalSourceIdentity:point.attribution.sourceUrl,contentSignature:'synthetic-source',idempotencyKey:'synthetic-run',configDigests:Object.fromEntries(Object.entries(configs).map(([role,config])=>[role,config.digest]))})).run;
     for(const nextState of ['rights-assessment','robots-check','extraction-loop'])run=unwrap(await service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState}));
     const candidate={...point,evidenceAnchors:Array.from({length:anchors},(_,index)=>({...point.evidenceAnchors[0],blockId:'block-'+index,quote:'Immutable passage '+index,quoteDigest:'sha256:passage-'+index}))};
+    const findOuter=()=>db.prepare('SELECT stage_key,input_digest,result_json FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key LIKE ?').get(run.ownerId,run.runId,'knowledge-quality:%:'+candidate.id);
+    let legacyRows,legacySignature;
+    if(media==='legacy-config-claims'){
+      const evaluatorSource=await readFile('agent-config/question-evaluator.yaml','utf8'),previousEvaluator=unwrap(await loader.load({source:evaluatorSource.replace(/version: question-evaluator-v\d+/,'version: question-evaluator-v5').replace(/name: [^\n]+/,'name: mistralai/mistral-large-4-0').replace('timeoutMs: 120000','timeoutMs: 30000'),expectedRole:'question-evaluator'})),oldConfigDigests={...run.configDigests,'question-evaluator':previousEvaluator.digest};assert.notEqual(previousEvaluator.digest,configs['question-evaluator'].digest);
+      const legacyEvidence={passages:candidate.evidenceAnchors.map(anchor=>anchor.quote),images:[{id:'source-only-image',alt:'Captured source image metadata is not an attachment.'}]},digest=value=>'sha256:'+createHash('sha256').update(value).digest('hex');
+      legacySignature=digest(JSON.stringify({point:candidate,evidenceDigest:digest(JSON.stringify(legacyEvidence)),sourceMode:'text',imagePurpose:'evidence',protocol:{review:knowledgeReviewerPrompt,repair:knowledgeRepairPrompt,repairContext:knowledgeCriticRepairContextPrompt,maximumCriticOutputTokens:4096},config:oldConfigDigests,attachments:[]}));
+      db.prepare("INSERT INTO knowledge_workflow_stages(owner_id,run_id,stage_key,input_digest,status,created_at) VALUES(?,?,?,?,'claimed',?)").run(run.ownerId,run.runId,'knowledge-quality:'+candidate.id,legacySignature,now());
+      db.prepare("INSERT INTO knowledge_workflow_stages(owner_id,run_id,stage_key,input_digest,status,result_json,created_at,completed_at) VALUES(?,?,?,?,'completed',?,?,?)").run(run.ownerId,run.runId,'knowledge-quality-context:'+candidate.id,legacySignature,JSON.stringify({ok:true,value:{lessOften:[{id:'legacy-preference-must-not-replay',summary:'Synthetic legacy-only context.'}],previousKnowledge:[],previousQuizzes:[]}}),now(),now());
+      legacyRows=db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key IN (?,?) ORDER BY stage_key').all('knowledge-quality:'+candidate.id,'knowledge-quality-context:'+candidate.id);
+    }
     const clauses=Array.from({length:anchors+(mismatch?1:0)},(_,index)=>'Supported clause '+index);
     const attached=media.startsWith('text-')||media.startsWith('raster-')||media.startsWith('raw-pass-'),keep=media.endsWith('-keep'),sourceMode=media.startsWith('raster')?'image':'text';
     const image={id:sourceMode==='image'?'source-image':'optional-image',mediaType:'image/png',bytes:Uint8Array.from([137,80,78,71,13,10,26,10])};
@@ -94,7 +120,7 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
       } else {
         assert.equal(schema.name,'knowledge_quality_review_v11');assert.match(body.messages[0].content,/relevant domain knowledge solely to flag a likely source error or unsupported certainty/);assert.match(body.messages[0].content,/model memory is not evidence, external verification or a certain correction/);criticCalls++;assert(schema.schema.required.includes('sourceReliability'));assert(schema.schema.required.includes('retrievalComparison'));assert.deepEqual(schema.schema.properties.retrievalComparison.anyOf[0].required,['question','answer','priorAnswer','priorEvidence','reason']);assert.match(body.messages[0].content,/then the answer actually taught by cited prior content/);assert.equal(Object.keys(schema.schema.properties)[0],'retrievalComparison');assert.deepEqual(schema.schema.properties.sourceReliability.anyOf[0].required,['basis','decision','reason']);assert.equal(Object.keys(schema.schema.properties.sourceReliability.anyOf[0].properties)[0],'basis');assert.equal(schema.schema.properties.sourceReliability.anyOf.length,1);assert.match(body.messages[0].content,/null basis or sourceReliability=revise remains a negative independently of qualityDecision/);
         assert.equal(body.max_tokens,4096,'critic uses existing reviewer4096 ceiling');
-        assert.equal(body.model,'mistralai/mistral-large-4-0');
+        assert.equal(body.model,configs['question-evaluator'].model.name);
         assert.deepEqual(task.auditEvidence.retainedText,candidate.evidenceAnchors.map((anchor,anchorIndex)=>({anchorIndex,tokens:knowledgeReviewTokens(anchor.quote).map((token,index)=>index+':'+token),endExclusiveTokenCount:knowledgeReviewTokens(anchor.quote).length})));
         assert.equal(task.auditEvidence.summaryTokenCount,knowledgeReviewTokens(task.knowledge.summary).length);assert.equal(task.auditEvidence.summaryNonFinalEndMaximum,Math.max(0,[...new Intl.Segmenter('en',{granularity:'word'}).segment(task.knowledge.summary)].filter(t=>t.segment.trim()).findLastIndex(t=>t.isWordLike===true)));assert.match(body.messages[0].content,/summaryNonFinalEndMaximum/);
         assert.deepEqual(schema.schema.properties.qualityDecision.enum,['pass','revise']);assert.equal(Object.hasOwn(schema.schema.properties,'decision'),false);assert.equal(Object.hasOwn(schema.schema.properties.audit.properties,'novelty'),false);assert.equal(Object.hasOwn(schema.schema.properties.audit.properties,'revisionReason'),false);
@@ -141,22 +167,27 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
     if(rejected||secondRejected)assert.equal(result.value,null);
     else {assert.equal(result.value.point.summary,repair.summary);assert.equal(result.value.point.evidenceAnchors.length,anchors);assert.equal(result.value.verdict.audit.version,8);assert.deepEqual(result.value.verdict.audit.clauses,[]);assert.deepEqual(result.value.verdict.audit.finalClause.textEvidence,sourceMode==='text'?[{anchorIndex:0,start:0,end:knowledgeReviewTokens(candidate.evidenceAnchors[0].quote).length}]:[]);
       const saved=db.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:knowledge-quality-%-2:%'").get();const raw=JSON.parse(saved.result_json).value;const {novelty,revisionReason,...wireAudit}=result.value.verdict.audit;assert.deepEqual(raw.audit,wireAudit);assert.equal(raw.qualityDecision,'pass');assert.equal(Object.hasOwn(raw,'decision'),false);assert.equal(result.value.verdict.decision,'pass');assert.equal(novelty,'new');assert.equal(revisionReason,'none');
-      const outer=db.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE stage_key=?").get('knowledge-quality:'+candidate.id);assert.deepEqual(JSON.parse(outer.result_json).value.verdict,result.value.verdict);}
+      const outer=findOuter();assert.deepEqual(JSON.parse(outer.result_json).value.verdict,result.value.verdict);}
     if(media.startsWith('raw-pass-')){const first=JSON.parse(db.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:knowledge-quality-%-1:%'").get().result_json).value;assert.equal(first.qualityDecision,'pass');assert.equal(first.allowTextOnly,true);assert.deepEqual(first.audit.finalClause.pixelEvidence,[]);assert.equal(Object.hasOwn(first.audit,'revisionReason'),false);assert.equal(first.feedback,'Keep everything; no regeneration needed.');}
     if(media==='reliability-only'||media==='both-negative'){const raw=JSON.parse(db.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:knowledge-quality-%-1:%'").get().result_json).value;assert.equal(raw.feedback,'Keep everything; no regeneration needed.');assert.equal(raw.sourceReliability.decision,'revise');assert.equal(raw.sourceReliability.reason,'Synthetic captured evidence does not establish the claimed causal strength.');assert.equal(raw.qualityDecision,media==='reliability-only'?'pass':'revise');assert.equal(Object.hasOwn(result.value.verdict,'sourceReliability'),false);}
     if(media==='basis-null'){const raw=JSON.parse(db.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:knowledge-quality-%-1:%'").get().result_json).value;assert.deepEqual(raw.sourceReliability,{basis:null,decision:'pass',reason:'Synthetic positive assertion fidelity is not a captured basis.'});assert.equal(raw.qualityDecision,'pass');assert.equal(raw.feedback,'Keep everything; no regeneration needed.');assert.equal(Object.hasOwn(result.value.verdict,'sourceReliability'),false);}
     assert.equal(repairCalls,1);assert.equal(criticCalls,rejected?1:2);
     assert.deepEqual(await runtime.reviewCapturedCandidate(command),result);
     assert.equal(repairCalls,1);assert.equal(criticCalls,rejected?1:2);
-    // An old missing-context outer cache is protected, not silently reinterpreted or retried.
+    if(media==='legacy-config-claims'){
+      assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key IN (?,?) ORDER BY stage_key').all('knowledge-quality:'+candidate.id,'knowledge-quality-context:'+candidate.id),legacyRows);
+      const outer=findOuter();assert.notEqual(outer.input_digest,legacySignature);assert.equal(outer.stage_key,'knowledge-quality:'+outer.input_digest+':'+candidate.id);
+      const freshContext=db.prepare('SELECT input_digest,status,result_json FROM knowledge_workflow_stages WHERE stage_key=?').get('knowledge-quality-context:'+outer.input_digest+':'+candidate.id);assert.equal(freshContext.status,'completed');assert.equal(freshContext.input_digest,outer.input_digest);assert.deepEqual(JSON.parse(freshContext.result_json).value.lessOften,[]);assert.equal(criticCalls,2);assert.equal(repairCalls,1);
+    }
+    // A tampered digest within the current versioned outer cache is protected, not silently reinterpreted or retried.
     if(media==='none'&&anchors===1&&!mismatch){
       const digest=value=>'sha256:'+createHash('sha256').update(value).digest('hex');
       const oldSignature=digest(JSON.stringify({point:candidate,evidenceDigest:digest(JSON.stringify(sourceEvidence)),sourceMode,protocol:{review:knowledgeReviewerPrompt,repair:knowledgeRepairPrompt},config:run.configDigests,attachments:[]}));
-      const current=db.prepare('SELECT input_digest,result_json FROM knowledge_workflow_stages WHERE stage_key=?').get('knowledge-quality:'+candidate.id);
+      const current=findOuter();
       assert.notEqual(current.input_digest,oldSignature);
-      db.prepare('UPDATE knowledge_workflow_stages SET input_digest=? WHERE stage_key=?').run(oldSignature,'knowledge-quality:'+candidate.id);
+      db.prepare('UPDATE knowledge_workflow_stages SET input_digest=? WHERE stage_key=?').run(oldSignature,current.stage_key);
       const protectedOld=await runtime.reviewCapturedCandidate(command);assert.deepEqual(protectedOld,{ok:false,error:{kind:'WorkflowStageInputChanged'}});
-      assert.equal(criticCalls,2);assert.equal(repairCalls,1);assert.equal(db.prepare('SELECT result_json FROM knowledge_workflow_stages WHERE stage_key=?').get('knowledge-quality:'+candidate.id).result_json,current.result_json);
+      assert.equal(criticCalls,2);assert.equal(repairCalls,1);assert.equal(db.prepare('SELECT result_json FROM knowledge_workflow_stages WHERE stage_key=?').get(current.stage_key).result_json,current.result_json);
     }
   } finally {db.close();}
 });
@@ -236,7 +267,7 @@ test('crash after claim and concurrent resumes never repeat an uncertain paid st
 function quizzes(overrides={}){
   const audit=[],published=[],dropped=[];
   const draft={id:'draft',knowledgeId:point.id,knowledgeRevision:1,kind:'single-choice',prompt:'Which specific relationship is supported?',options:['Correct relationship','Incorrect relationship'],answer:'Correct relationship',citedEvidenceUrls:['https://example.test/']};
-  const actor=createQuizActorCritic({maxAttempts:2,now:()=> '2026-10-09T00:00:00.000Z',logger:()=>{},generator:{generate:async()=>({ok:true,value:draft})},evaluator:{evaluate:async()=>({ok:true,value:{score:7,reasons:['Too generic'],feedback:'Test the actual central relationship.',groundingProblems:[]}})},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async(v)=>{audit.push(v);return {ok:true,value:null};},publish:async(v)=>{published.push(v);return {ok:true,value:null};},discard:async(v)=>{dropped.push(v);return {ok:true,value:null};},purge:async()=>({ok:true,value:null})},...overrides});
+  const actor=createQuizActorCritic({maxAttempts:2,now:()=> '2026-10-09T00:00:00.000Z',logger:()=>{},generator:{generate:async()=>({ok:true,value:draft})},reviewer:{evaluate:async()=>({ok:true,value:{score:7,reasons:['Too generic'],feedback:'Test the actual central relationship.',groundingProblems:[]}})},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async(v)=>{audit.push(v);return {ok:true,value:null};},publish:async(v)=>{published.push(v);return {ok:true,value:null};},discard:async(v)=>{dropped.push(v);return {ok:true,value:null};},purge:async()=>({ok:true,value:null})},...overrides});
   return {actor,audit,published,dropped};
 }
 test('new quiz pipeline allows exactly one repair and then removes failed knowledge',async()=>{
@@ -279,7 +310,7 @@ test('known nondispatch failures can recover while provider refusals retain a fi
 });
 test('new quiz mode returns evaluator outage without regeneration, discard or publication',async()=>{
   let generators=0;
-  const f=quizzes({generator:{generate:async()=>{generators++;return {ok:true,value:{id:'draft',knowledgeId:point.id,knowledgeRevision:1,kind:'single-choice',prompt:'A specific concept?',options:['yes','no'],answer:'yes',citedEvidenceUrls:['https://example.test/']}};}},evaluator:{evaluate:async()=>({ok:false,error:{kind:'WorkflowStageCallUncertain'}})}});
+  const f=quizzes({generator:{generate:async()=>{generators++;return {ok:true,value:{id:'draft',knowledgeId:point.id,knowledgeRevision:1,kind:'single-choice',prompt:'A specific concept?',options:['yes','no'],answer:'yes',citedEvidenceUrls:['https://example.test/']}};}},reviewer:{evaluate:async()=>({ok:false,error:{kind:'WorkflowStageCallUncertain'}})}});
   const result=await f.actor.run({ownerId:'owner',runId:'run',points:[point]});assert.equal(result.ok,false);assert.equal(result.error.causeKind,'WorkflowStageCallUncertain');assert.equal(generators,1);assert.equal(f.audit.length,0);assert.equal(f.dropped.length,0);assert.equal(f.published.length,0);
 });
 
@@ -306,8 +337,8 @@ test('review schema derives a unique owner ID domain without mutating the public
 
 // Prompt-contract fixture only: it does not assess model quality or any particular source.
 test('attribution and probability caveats require independent captured support while argument analysis teaches evidential limits',()=>{
- assert.match(knowledgeReviewerPrompt,/Prompt version: knowledge-quality-review-v35\./);
- assert.match(knowledgeRepairPrompt,/Prompt version: knowledge-quality-repair-v27\./);
+ assert.match(knowledgeReviewerPrompt,/Prompt version: knowledge-quality-review-v38-visible-sequence\./);
+ assert.match(knowledgeRepairPrompt,/Prompt version: knowledge-quality-repair-v30-visible-sequence\./);
  assert.match(knowledgeReviewerPrompt,/Do not pass unsupported causal certainty merely because the summary reports what the author says or adds a probability caveat/);
  assert.match(knowledgeReviewerPrompt,/Require independently supported descriptive or causal content within the captured evidence/);
  assert.match(knowledgeReviewerPrompt,/reporting the argument itself is appropriate only when the learning purpose is the argument and its evidential limits are explicitly taught/);

@@ -6,13 +6,14 @@ import {
   isPublicHttpsUrl,
   isRecord,
 } from "./contracts.js";
+import { parseWorkflowProgress } from '../knowledge-workflows/progress.js';
 
 /** @import { KnowledgeSearchHit, LibrarySource, Result, SourceCatalogPage, SourceInterestArea, SourceSearchHit, SourceSearchScope, SourceSuppression } from "./contracts.js" */
 
 /** @typedef {{ readonly kind: "SourceGatewayCommandInvalid", readonly field: string } | { readonly kind: "SourceGatewayUnauthenticated" } | { readonly kind: "SourceGatewayUnauthorized" } | { readonly kind: "SourceGatewayUnavailable" } | { readonly kind: "SourceGatewayTimedOut" } | { readonly kind: "SourceGatewayResponseInvalid" } | { readonly kind: "SourceGatewayRejected", readonly failureKind: string }} SourceGatewayFailure */
 /** @typedef {{ readonly runId: string }} WorkflowStartProjection */
 /** @typedef {{ readonly robotsUrl: string, readonly targetUrl: string, readonly httpStatus: number, readonly availability: "present" | "absent" | "unavailable", readonly content: string, readonly checkedAt: string, readonly matchedRule: string | null }} WorkflowRobotsEvidence */
-/** @typedef {{ readonly runId: string, readonly state: string, readonly revision: number, readonly counts: Readonly<{ readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }>, readonly extractionStartedAt: string | null, readonly extractionDeadlineAt: string | null, readonly elapsedMs: number | null, readonly remainingMs: number | null, readonly decisionRequired: string | null, readonly failureKind: string | null, readonly robotsEvidence: WorkflowRobotsEvidence | null }} WorkflowRunStatus */
+/** @typedef {{ readonly runId: string, readonly state: string, readonly revision: number, readonly counts: Readonly<{ readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }>, readonly extractionStartedAt: string | null, readonly extractionDeadlineAt: string | null, readonly elapsedMs: number | null, readonly remainingMs: number | null, readonly decisionRequired: string | null, readonly failureKind: string | null, readonly robotsEvidence: WorkflowRobotsEvidence | null, readonly progress?: import('../knowledge-workflows/progress.js').WorkflowProgress }} WorkflowRunStatus */
 /** @typedef {{ readonly sourceId: string, readonly run: WorkflowRunStatus | null, readonly reasonCode: string | null, readonly message: string | null }} WorkflowSourceStatus */
 
 const freeze = Object.freeze;
@@ -523,12 +524,14 @@ function parseWorkflowRunStatus(value) {
   const pendingQuizzes = /** @type {number} */ (counts.pendingQuizzes);
   const robotsEvidence = value.robotsEvidence == null ? null : parseWorkflowRobotsEvidence(value.robotsEvidence);
   if (value.robotsEvidence != null && robotsEvidence === null) return null;
-  return freeze({ runId: value.runId, state: value.state, revision: value.revision, counts: freeze({ pages, knowledgePoints, acceptedQuizzes, pendingQuizzes }), extractionStartedAt, extractionDeadlineAt, elapsedMs, remainingMs, decisionRequired, failureKind, robotsEvidence });
+  const progress = value.progress === undefined ? undefined : parseWorkflowProgress(value.progress);
+  if (progress === null) return null;
+  return freeze({ runId: value.runId, state: value.state, revision: value.revision, counts: freeze({ pages, knowledgePoints, acceptedQuizzes, pendingQuizzes }), extractionStartedAt, extractionDeadlineAt, elapsedMs, remainingMs, decisionRequired, failureKind, robotsEvidence, ...(progress === undefined ? {} : {progress}) });
 }
 
 /** @param {unknown} value @returns {WorkflowRobotsEvidence | null} */
 function parseWorkflowRobotsEvidence(value) {
-  if (!isRecord(value) || !isNonEmptyText(value.robotsUrl) || !isPublicHttpsUrl(value.robotsUrl) || !isNonEmptyText(value.targetUrl) || !isPublicHttpsUrl(value.targetUrl) || typeof value.httpStatus !== "number" || !Number.isSafeInteger(value.httpStatus) || !(value.httpStatus >= 200 && value.httpStatus <= 299 || value.httpStatus === 403 || value.httpStatus === 404 || value.httpStatus === 410) || (value.availability !== "present" && value.availability !== "absent" && value.availability !== "unavailable") || typeof value.content !== "string" || value.content.length > 262_144 || (value.availability === "absent" ? value.content !== "" || (value.httpStatus !== 404 && value.httpStatus !== 410) : value.availability === "unavailable" ? value.content !== "" || value.httpStatus !== 403 : value.httpStatus < 200 || value.httpStatus > 299) || !isIsoDateTime(value.checkedAt) || (value.matchedRule !== null && !isNonEmptyText(value.matchedRule))) return null;
+  if (!isRecord(value) || !isNonEmptyText(value.robotsUrl) || !isPublicHttpsUrl(value.robotsUrl) || !isNonEmptyText(value.targetUrl) || !isPublicHttpsUrl(value.targetUrl) || typeof value.httpStatus !== "number" || !Number.isSafeInteger(value.httpStatus) || !(value.httpStatus === 0 || value.httpStatus >= 100 && value.httpStatus <= 599) || (value.availability !== "present" && value.availability !== "absent" && value.availability !== "unavailable") || typeof value.content !== "string" || value.content.length > 262_144 || (value.availability === "absent" ? value.content !== "" || (value.httpStatus !== 404 && value.httpStatus !== 410) : value.availability === "unavailable" ? value.content !== "" && (value.httpStatus < 200 || value.httpStatus > 299) : value.httpStatus < 200 || value.httpStatus > 299) || !isIsoDateTime(value.checkedAt) || (value.matchedRule !== null && !isNonEmptyText(value.matchedRule))) return null;
   return freeze({ robotsUrl: value.robotsUrl, targetUrl: value.targetUrl, httpStatus: value.httpStatus, availability: value.availability, content: value.content, checkedAt: value.checkedAt, matchedRule: value.matchedRule });
 }
 

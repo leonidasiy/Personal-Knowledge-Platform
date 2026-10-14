@@ -461,11 +461,37 @@ export function createLearningBatchService(dependencies) {
     if (!record(command) || !text(command.ownerId) || !text(command.knowledgeId) || (command.choice !== "more" && command.choice !== "less") || !text(command.idempotencyKey)) return { ok: false, error: { kind: "LearningPreferenceInvalid" } };
     const preference = command.choice === "more" ? 1 : -1;
     const now = dependencies.now();
-    const result = await database.batch([
-      database.prepare("INSERT INTO learner_preference_feedback (owner_id, knowledge_id, preference, choice, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(owner_id, knowledge_id) DO UPDATE SET preference = excluded.preference, choice = excluded.choice, created_at = excluded.created_at").bind(command.ownerId, command.knowledgeId, preference, command.choice, now),
-      database.prepare("INSERT INTO learner_knowledge_state (owner_id, knowledge_id, source_id, view_count, last_answer_correct, scheduled_days, due_at, studied_at, review_count, preference, updated_at) SELECT ?, ?, source_id, 0, NULL, 0, NULL, NULL, 0, ?, ? FROM extraction_knowledge_points WHERE owner_id = ? AND knowledge_id = ? ON CONFLICT(owner_id, knowledge_id) DO UPDATE SET preference = excluded.preference, updated_at = excluded.updated_at").bind(command.ownerId, command.knowledgeId, preference, now, command.ownerId, command.knowledgeId),
-    ]);
-    return result.every((entry) => entry.success) ? { ok: true, value: Object.freeze({ knowledgeId: command.knowledgeId, preference }) } : { ok: false, error: { kind: "LearningPreferencePersistenceFailed" } };
+    if (!iso(now)) return {ok:false,error:{kind:'LearningBatchClockInvalid'}};
+    const replay = await commandResult(command.ownerId, command.idempotencyKey);
+    if (!replay.ok) return replay;
+    if (replay.value !== null) return replay.value;
+    const value = Object.freeze({knowledgeId:command.knowledgeId,preference});
+    // Derive adjacent intervals from the established one-day/doubling scheduler,
+    // including its 365-day endpoint. Keep elapsed cooldown time and recall evidence.
+    const nextInterval = command.choice === 'more'
+      ? 'CASE WHEN scheduled_days = 0 THEN 0 ELSE COALESCE((SELECT MAX(days) FROM intervals WHERE days < scheduled_days), 1) END'
+      : 'COALESCE((SELECT MIN(days) FROM intervals WHERE days > scheduled_days), 365)';
+    try {
+      const owned = await database.prepare('SELECT source_id FROM extraction_knowledge_points WHERE owner_id = ? AND knowledge_id = ? LIMIT 1').bind(command.ownerId,command.knowledgeId).first();
+      if (!record(owned) || !text(owned.source_id)) return {ok:false,error:{kind:'KnowledgePairNotFound'}};
+      const result = await database.batch([
+        database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) VALUES (?, ?, 'preference', ?, ?)").bind(command.ownerId,command.idempotencyKey,JSON.stringify(value),now),
+        database.prepare("INSERT INTO learner_preference_feedback (owner_id, knowledge_id, preference, choice, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(owner_id, knowledge_id) DO UPDATE SET preference = excluded.preference, choice = excluded.choice, created_at = excluded.created_at").bind(command.ownerId, command.knowledgeId, preference, command.choice, now),
+        database.prepare("INSERT INTO learner_knowledge_state (owner_id, knowledge_id, source_id, view_count, last_answer_correct, scheduled_days, due_at, studied_at, review_count, preference, updated_at) VALUES (?, ?, ?, 0, NULL, 0, NULL, NULL, 0, ?, ?) ON CONFLICT(owner_id, knowledge_id) DO UPDATE SET preference = excluded.preference, updated_at = excluded.updated_at").bind(command.ownerId,command.knowledgeId,owned.source_id,preference,now),
+        database.prepare(`WITH RECURSIVE intervals(days) AS (VALUES(1) UNION ALL SELECT MIN(365, days * 2) FROM intervals WHERE days < 365)
+          UPDATE learner_knowledge_state SET
+            due_at = CASE WHEN ${nextInterval} = scheduled_days THEN due_at ELSE strftime('%Y-%m-%dT%H:%M:%fZ', MAX(julianday(?), julianday(due_at)) + (${nextInterval} - scheduled_days)) END,
+            scheduled_days = ${nextInterval}
+          WHERE owner_id = ? AND knowledge_id = ? AND studied_at IS NOT NULL AND due_at IS NOT NULL`).bind(now,command.ownerId,command.knowledgeId),
+      ]);
+      return result.every(entry=>entry.success) ? {ok:true,value} : {ok:false,error:{kind:'LearningPreferencePersistenceFailed'}};
+    } catch (error) {
+      // A concurrent retry can lose the unique-key race; the atomic batch rolls back.
+      const saved = await commandResult(command.ownerId,command.idempotencyKey);
+      if (saved.ok && saved.value !== null) return saved.value;
+      dependencies.logger({event:'learning-preference-failure',ownerId:command.ownerId,knowledgeId:command.knowledgeId,failureKind:'LearningPreferencePersistenceFailed'});
+      return {ok:false,error:{kind:'LearningPreferencePersistenceFailed'}};
+    }
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */

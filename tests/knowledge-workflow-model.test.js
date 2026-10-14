@@ -186,6 +186,25 @@ Deno.test('configured evaluator timeout remains bounded by its own role limit',a
  const result=await model.generate({...command(),role:'question-evaluator',timeoutMs:1000});assertEquals(result.ok,false);if(!result.ok)assertEquals(result.error.kind,'KnowledgeModelTimeout');
 });
 
+Deno.test('configured roles retain separate trusted provider price ceilings',async()=>{
+ const roles=/** @type {const} */(['rights-assessor','knowledge-scraper','question-generator','question-evaluator']);
+ const limits={maxTurns:3,maxToolCalls:6,timeoutMs:1000,maxOutputBytes:131072,compactionThresholdTokens:500000};
+ const configSnapshots=/** @type {Record<import('../worker/knowledge-workflow-model.js').KnowledgeAgentRole,{model:import('../src/features/knowledge-workflows/config.js').AgentModel,limits:typeof limits}>} */(Object.fromEntries(roles.map(role=>[role,{model:{provider:'openrouter',name:`synthetic/${role}`,reasoningEffort:role==='question-evaluator'?'none':'high'},limits}])));
+ const modelProtocols=/** @type {Partial<Record<import('../worker/knowledge-workflow-model.js').KnowledgeAgentRole,import('../worker/knowledge-workflow-model.js').KnowledgeModelProtocol>>} */(Object.fromEntries(roles.map(role=>[role,{source:'synthetic-price-ceiling',responseFormat:'json_object',reasoningEffort:role==='question-evaluator'?'none':'high',receiptOptional:true,provider:{sort:'throughput',require_parameters:true,allow_fallbacks:true,max_price:{prompt:role==='question-evaluator'?1:0.027,completion:role==='question-evaluator'?2:0.9,request:0,image:0}}}])));
+ let calls=0;
+ const model=createRoleConfiguredKnowledgeModel({apiKey:'synthetic',endpoint:'https://api.example.test/chat/completions',configSnapshots,modelProtocols,maximumInputCharacters:10000,now:Date.now,logger:()=>{},fetch:async(_url,init)=>{
+   const body=JSON.parse(String(init?.body)),role=roles[calls++];
+   assertEquals(JSON.stringify(body.provider),JSON.stringify(modelProtocols[role]?.provider));
+   assertEquals(body.reasoning.effort,configSnapshots[role].model.reasoningEffort);
+   assertEquals(body.response_format.type,'json_object');
+   return Response.json({id:'synthetic-protocol',choices:[{finish_reason:'stop',message:{content:'{"valid":true}'}}]});
+ }});
+ for(const role of roles)assertEquals((await model.generate({...command(),role})).ok,true);
+ assertEquals(calls,4);
+ let rejected=false;try{createRoleConfiguredKnowledgeModel({.../** @type {Parameters<typeof createRoleConfiguredKnowledgeModel>[0]} */({apiKey:'synthetic',endpoint:'https://api.example.test/chat/completions',configSnapshots,maximumInputCharacters:10000,now:Date.now,logger:()=>{},fetch}),modelProtocols:/** @type {never} */({unknown:{}})});}catch(error){rejected=error instanceof TypeError;}
+ assertEquals(rejected,true);
+});
+
 Deno.test('response format and optional validated reasoning effort are independent protocol choices',async()=>{
  for(const responseFormat of /** @type {const} */(['json_schema','json_object']))for(const reasoningEffort of /** @type {const} */([undefined,'none','low','high'])) {
    const protocol={source:'synthetic-protocol',responseFormat,...(reasoningEffort===undefined?{}:{reasoningEffort}),receiptOptional:/** @type {const} */(true),provider:{sort:/** @type {const} */('throughput'),require_parameters:/** @type {const} */(true),allow_fallbacks:true,max_price:{prompt:1,completion:2,request:/** @type {const} */(0),image:/** @type {const} */(0)}}};
@@ -197,4 +216,13 @@ Deno.test('response format and optional validated reasoning effort are independe
    const result=await model.generate({...command(),responseSchema:{name:'synthetic_schema',schema:{type:'object',additionalProperties:false,properties:{valid:{type:'boolean'}},required:['valid']}}});assertEquals(result.ok,true);assertEquals(calls,1);
    if(reasoningEffort==='none'||reasoningEffort==='high'){const mismatched=await model.generate({...command(),reasoningEffort:'low'});assertEquals(mismatched.ok,false);if(!mismatched.ok)assertEquals(mismatched.error.kind,'KnowledgeModelCommandInvalid');assertEquals(calls,1);}
  }
+});
+
+
+Deno.test("MiMo evaluator uses automatic provider routing with strict schema and retained reasoning setting", async () => {
+  /** @type {Record<string, any> | undefined} */ let body;
+  const model = createOpenRouterKnowledgeModel({apiKey:"synthetic-key",endpoint:"https://example.test/model",model:"xiaomi/mimo-v2.6-pro",timeoutMs:1000,maximumInputCharacters:10000,fetch:async(_url,init)=>{body=JSON.parse(String(init?.body));return Response.json({id:"synthetic-mimo",choices:[{finish_reason:"stop",message:{content:'{"score":9}'}}]});},now:Date.now,logger:()=>{}});
+  const responseSchema={name:"synthetic_review",schema:{type:"object",properties:{score:{type:"integer"}},required:["score"],additionalProperties:false}};
+  assertEquals((await model.generate({...command(),role:"question-evaluator",reasoningEffort:"none",responseSchema})).ok,true);
+  if(body===undefined)throw new Error("Model body was not captured.");assertEquals(body.model,"xiaomi/mimo-v2.6-pro");assertEquals(body.provider.sort,undefined);assertEquals(body.provider.only,undefined);assertEquals(body.provider.require_parameters,true);assertEquals(body.provider.allow_fallbacks,true);assertEquals(body.reasoning.effort,"none");assertEquals(body.response_format.type,"json_schema");assertEquals(body.response_format.json_schema.strict,true);
 });

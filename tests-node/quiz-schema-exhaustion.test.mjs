@@ -12,7 +12,7 @@ const point=id=>({id,sourceId:'synthetic',sourceRevision:1,summary:'The construc
 const draft=p=>({id:'draft:'+p.id,knowledgeId:p.id,knowledgeRevision:1,kind:'single-choice',prompt:'Which constructed relation?',options:['relation','alternative'],answer:'relation',explanation:'Constructed support.',citedEvidenceUrls:['https://synthetic.invalid']});
 function fixture({maxAttempts=2,generate,evaluate=async()=>ok({score:9,reasons:['Constructed support.'],feedback:'Keep.',groundingProblems:[]})}) {
  const generated=[],evaluated=[],attempts=[],discarded=[],published=[];
- const actor=createQuizActorCritic({maxAttempts,now:()=> '2026-10-12T00:00:00.000Z',logger:()=>{},generator:{generate:async input=>{generated.push(input);return generate(input);}},evaluator:{evaluate:async input=>{evaluated.push(input);return evaluate(input);}},repository:{findPublished:async()=>ok(null),appendAttempt:async a=>{attempts.push(a);return ok(null);},publish:async p=>{published.push(p);return ok(null);},discard:async d=>{discarded.push(d);return ok(null);},purge:async()=>ok(null)}});
+ const actor=createQuizActorCritic({maxAttempts,now:()=> '2026-10-12T00:00:00.000Z',logger:()=>{},generator:{generate:async input=>{generated.push(input);return generate(input);}},reviewer:{evaluate:async input=>{evaluated.push(input);return evaluate(input);}},repository:{findPublished:async()=>ok(null),appendAttempt:async a=>{attempts.push(a);return ok(null);},publish:async p=>{published.push(p);return ok(null);},discard:async d=>{discarded.push(d);return ok(null);},purge:async()=>ok(null)}});
  return {actor,generated,evaluated,attempts,discarded,published};
 }
 test('flat required schema retains complete pair and strict missing-field/count boundaries',()=>{

@@ -14,6 +14,8 @@ import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
 import { executeAuthoritativeWorkflowStep } from "./knowledge-workflow-step.js";
 import { createAcquisitionClient, createAcquisitionWorkflowBrowser } from "./acquisition-client.js";
 import { ACQUISITION_POLICY } from "./acquisition-policy.js";
+import { createFirecrawlWorkflowBrowser } from "./firecrawl-browser.js";
+import { createHybridBrowserBudget } from "./hybrid-browser-budget.js";
 import { createOpenSourceImageSearch } from "./open-source-image-search.js";
 import { createReminderRuntime } from "./reminders/runtime.js";
 import { notifyKnowledgeWorkflowOutcome } from "./knowledge-workflow-notifications.js";
@@ -23,6 +25,8 @@ const roleNames = /** @type {const} */ (["rights-assessor", "knowledge-scraper",
 const supportedTools = new Set([
   "rights-evidence.read",
   "browser.page.read",
+  "browser.navigation.inspect",
+  "browser.navigation.click",
   "browser.screenshot.capture",
   "extraction.frontier.observe",
   "extraction.knowledge.commit",
@@ -47,7 +51,7 @@ async function sha256(input) {
 
 /** @param {Readonly<Record<string, string>>} expected @returns {Promise<import("../src/features/knowledge-workflows/config.js").Result<Readonly<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>, { readonly kind: string }>>} */
 async function loadConfigurationSnapshots(expected) {
-  const loader = createAgentConfigurationLoader({ sha256, supportedModels: new Set(["openrouter/z-ai/glm-5.3-flash", "openrouter/mistralai/mistral-large-4-0"]), supportedTools });
+  const loader = createAgentConfigurationLoader({ sha256, supportedModels: new Set(["openrouter/z-ai/glm-5.3-flash", "openrouter/mistralai/mistral-large-4-0", "openrouter/xiaomi/mimo-v2.6-pro"]), supportedTools });
   /** @type {Partial<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>} */
   const snapshots = {};
   for (const role of roleNames) {
@@ -93,9 +97,15 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       policy: ACQUISITION_POLICY,
       createId: () => crypto.randomUUID(),
     });
-    const createBrowser = () => createAcquisitionWorkflowBrowser({ client: acquisition, policy: ACQUISITION_POLICY,
-      logger: (entry) => logger({ event: entry.event, ownerId, stage: "browser", failureKind: entry.failureKind }),
-    });
+    const browserLogger=(entry)=>logger({event:entry.event,ownerId,runId,stage:'browser',failureKind:entry.failureKind});
+    // The owner's navigation test authorizes at most 100 provider credits; reservations persist across workflow steps.
+    const browserBudget=createHybridBrowserBudget({database,ownerId,runId,maximumCredits:100,now,createId:()=>crypto.randomUUID(),logger:browserLogger});
+    const createBrowser = () => {
+      const acquisitionBrowser=createAcquisitionWorkflowBrowser({client:acquisition,policy:ACQUISITION_POLICY,logger:browserLogger});
+      return createFirecrawlWorkflowBrowser({apiKey:typeof this.env.FIRECRAWL_API_KEY==='string'?this.env.FIRECRAWL_API_KEY:null,fetch:workerFetch,policy:ACQUISITION_POLICY,
+        resolveAddresses:(hostname)=>resolvePublicAddresses(hostname,workerFetch),reserveSession:browserBudget.reserveSession,nowMs:()=>Date.now(),logger:browserLogger,
+        readRobots:acquisitionBrowser.readRobots,closeRobots:acquisitionBrowser.close});
+    };
     const mediaRepository = new D1KnowledgeMediaRepository({ database, bucket, logger: (entry) => logger({ event: entry.event, ownerId: entry.ownerId, stage: "media", failureKind: entry.failureKind }) });
     const publicEgress = createMediaPublicEgress(acquisition.mediaCapability);
     const fallbackManifest = createUserAttestedLocalManifest(fallbackMediaEntries);

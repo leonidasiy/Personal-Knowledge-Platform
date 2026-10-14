@@ -5,6 +5,7 @@ import { validatePublisherDestination } from "./destination-policy.js";
 
 import { isRecord, validateRssAcquisitionCommand } from "./contracts.js";
 import { isWorkflowRobotsEvidence } from "../src/features/knowledge-workflows/workflow.js";
+import { parseWorkflowProgress } from '../src/features/knowledge-workflows/progress.js';
 import { createDiscoveryRequestLogger } from "./request-logging.js";
 import { handleReminderRequest } from "./reminders/http.js";
 
@@ -643,7 +644,14 @@ export function createDiscoveryWorker(configuration, dependencies) {
         if (dependencies.knowledgeWorkflow == null) return knowledgeWorkflowFailureResponse({ kind: "KnowledgeWorkflowUnavailable" });
         if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return knowledgeWorkflowFailureResponse({ kind: "WorkflowCommandInvalid" });
         const result = await dependencies.knowledgeWorkflow.control(Object.freeze({ ...document, ownerId: authenticated.value.ownerId }));
-        return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : knowledgeWorkflowFailureResponse(result.error);
+        if (!result.ok) return knowledgeWorkflowFailureResponse(result.error);
+        const projection = publicWorkflowStatus(result.value, dependencies.now?.());
+        if (projection === null) {
+          const logged = emit({ event: "dependency-failure", operation: "knowledge-workflow-control", ownerId: authenticated.value.ownerId, ...(isNonEmptyText(document.runId) ? {runId:document.runId} : {}), failureKind: "WorkflowStatusProjectionInvalid" });
+          if (!logged.ok) return failureResponse(logged.error);
+          return knowledgeWorkflowFailureResponse({ kind: "WorkflowStatusProjectionInvalid" });
+        }
+        return json({ ownerId: authenticated.value.ownerId, result: projection }, 200);
       }
       if (learningReview || learningRevocation) {
         if (dependencies.learningGeneration == null) return json({ error: "LearningGenerationUnavailable" }, 503);
@@ -1222,7 +1230,8 @@ function publicSourceWorkflowStatus(value, ownerId, nowValue) {
   const reason = run === null ? null : workflowStatusReason(run.failureKind, run.state, run.remainingMs);
   const warnings=value.imageWarnings ?? [];
   if(!Array.isArray(warnings)||!warnings.every(isNonEmptyText))return null;
-  return Object.freeze({ sourceId: value.sourceId, run, reasonCode: reason?.reasonCode ?? null, message: [reason?.message,...warnings].filter(Boolean).join(" ") || null });
+  const mediaNotice=warnings.some(warning=>warning.startsWith('Image warning:'))?'Some source images were omitted. Extracted knowledge has been retained.':null;
+  return Object.freeze({ sourceId: value.sourceId, run, reasonCode: reason?.reasonCode ?? null, message: [reason?.message,mediaNotice].filter(Boolean).join(" ") || null });
 }
 
 /** @param {unknown} value @returns {{ readonly robotsUrl: string, readonly targetUrl: string, readonly httpStatus: number, readonly availability: "present" | "absent" | "unavailable", readonly content: string, readonly checkedAt: string, readonly matchedRule: string | null } | null} */
@@ -1255,7 +1264,9 @@ function publicWorkflowStatus(value, nowValue) {
   }
   const robotsEvidence = value.robotsEvidence === undefined || value.robotsEvidence === null ? null : publicRobotsEvidence(value.robotsEvidence);
   if (value.robotsEvidence !== undefined && value.robotsEvidence !== null && robotsEvidence === null) return null;
-  return Object.freeze({ runId: value.runId, state: value.state, revision, counts: Object.freeze({ pages, knowledgePoints, acceptedQuizzes, pendingQuizzes }), extractionStartedAt: value.extractionStartedAt, extractionDeadlineAt: value.extractionDeadlineAt, elapsedMs, remainingMs, decisionRequired: value.decisionRequired, failureKind: value.failureKind, robotsEvidence });
+  const progress = value.progress === undefined ? undefined : parseWorkflowProgress(value.progress);
+  if (progress === null) return null;
+  return Object.freeze({ runId: value.runId, state: value.state, revision, counts: Object.freeze({ pages, knowledgePoints, acceptedQuizzes, pendingQuizzes }), extractionStartedAt: value.extractionStartedAt, extractionDeadlineAt: value.extractionDeadlineAt, elapsedMs, remainingMs, decisionRequired: value.decisionRequired, failureKind: value.failureKind, robotsEvidence, ...(progress === undefined ? {} : {progress}) });
 }
 
 /** @param {Request} request @param {number} maximumRequestBytes @param {number} maximumMaterialBytes @returns {Promise<Result<Record<string, unknown> & { readonly bytes: Uint8Array }, { readonly kind: string }>>} */

@@ -11,10 +11,10 @@ function dependencies(fetcher) { return { apiKey: "synthetic-key", configuration
 function response(probabilities) { return Response.json({ model: "typesafe/jev-1.13-20260917", answers: Object.fromEntries(Object.entries(probabilities).map(([id, probability]) => [id, { type: "noul", noul: probability }])), usage: { input_tokens: 5, output_tokens: 0 } }); }
 function command() { return { prompt: "The tonal center is the ____. ", answers: [{ id: "blank-1", response: "home note", canonicalAnswers: ["tonic"] }] }; }
 
-Deno.test("Jev grader sends only the bounded answer state and uses pinned Decisions API", async () => {
-  assertEquals(JEV_GRADER_CONFIGURATION.requestedModel, "typesafe/jev-1.13");
-  assertEquals(JEV_GRADER_CONFIGURATION.servedModel, "typesafe/jev-1.13-20260917");
-  assertEquals(JEV_GRADER_CONFIGURATION.evidence, "artifacts/jev-live-validation-2026-10-04.json");
+Deno.test("Jev grader sends only the bounded answer state and uses the latest Jev alias on the Decisions API", async () => {
+  assertEquals(JEV_GRADER_CONFIGURATION.requestedModel, "~typesafe/jev-latest");
+  assertEquals(JEV_GRADER_CONFIGURATION.servedModel, null);
+  assertEquals(JEV_GRADER_CONFIGURATION.evidence, "https://openrouter.ai/docs/guides/community/jev-tutorial");
   /** @type {RequestInit | undefined} */ let request;
   const grader = createJevAnswerGrader(dependencies(async (input, init) => { assertEquals(String(input), "https://openrouter.ai/api/alpha/decisions"); request = init; return response({ "blank-1": 0.8 }); }));
   const result = await grader.grade(command());
@@ -25,14 +25,14 @@ Deno.test("Jev grader sends only the bounded answer state and uses pinned Decisi
   assertEquals(result.value.model, "typesafe/jev-1.13-20260917");
   if (request?.body === undefined || typeof request.body !== "string") throw new Error("Expected bounded Decisions request.");
   const body = JSON.parse(request.body);
-  assertEquals(body.model, "typesafe/jev-1.13");
+  assertEquals(body.model, "~typesafe/jev-latest");
   assertEquals(body.questions["blank-1"].type, "noul");
   assertEquals(body.questions["blank-1"].criteria.true.includes("without contradiction"), true);
   assertEquals(JSON.stringify(body.state), JSON.stringify({ prompt: command().prompt, answers: [{ id: "blank-1", response: "home note", canonicalAnswers: ["tonic"] }] }));
 });
 
-Deno.test("Jev grader applies the inclusive 0.80 boundary and rejects lower probability", async () => {
-  for (const [probability, expected] of /** @type {readonly (readonly [number, boolean])[]} */ ([[0.799999, false], [0.8, true]])) {
+Deno.test("Jev grader applies the inclusive 0.70 boundary and rejects lower probability", async () => {
+  for (const [probability, expected] of /** @type {readonly (readonly [number, boolean])[]} */ ([[0, false], [0.699999, false], [0.7, true], [0.75, true], [1, true]])) {
     const grader = createJevAnswerGrader(dependencies(async () => response({ "blank-1": probability })));
     const result = await grader.grade(command());
     assertEquals(result.ok, true);
@@ -41,7 +41,7 @@ Deno.test("Jev grader applies the inclusive 0.80 boundary and rejects lower prob
 });
 
 Deno.test("Jev grader uses its injected served model and acceptance threshold", async () => {
-  const configuration = Object.freeze({ ...JEV_GRADER_CONFIGURATION, servedModel: "typesafe/jev-1.13-test", acceptanceThreshold: 0.9 });
+  const configuration = Object.freeze({ ...JEV_GRADER_CONFIGURATION, requestedModel: "typesafe/jev-1.13", servedModel: "typesafe/jev-1.13-test", acceptanceThreshold: 0.9 });
   const grader = createJevAnswerGrader({ ...dependencies(async () => Response.json({ model: configuration.servedModel, answers: { "blank-1": { type: "noul", noul: 0.85 } } })), configuration });
   const result = await grader.grade(command());
   assertEquals(result.ok, true);
@@ -80,7 +80,8 @@ Deno.test("Jev grader rejects invalid commands before calling the provider", asy
 });
 
 Deno.test("Jev grader requires the evidence-backed served model identifier", async () => {
-  const grader = createJevAnswerGrader(dependencies(async () => Response.json({ model: "typesafe/jev-1.13", answers: { "blank-1": { type: "noul", noul: 0.99 } } })));
+  const configuration = { ...JEV_GRADER_CONFIGURATION, requestedModel: "typesafe/jev-1.13", servedModel: "typesafe/jev-1.13-20260917" };
+  const grader = createJevAnswerGrader({ ...dependencies(async () => Response.json({ model: "typesafe/jev-1.13", answers: { "blank-1": { type: "noul", noul: 0.99 } } })), configuration });
   const result = await grader.grade(command());
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.kind, "JevResponseInvalid");
@@ -91,4 +92,27 @@ Deno.test("Jev grader rejects duplicate JSON keys before parsing the decision", 
   const result = await grader.grade(command());
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.kind, "JevResponseInvalid");
+});
+
+Deno.test("Jev latest accepts resolved versions without an obsolete snapshot pin", async () => {
+  for (const model of ["typesafe/jev-1.13-20260917", "typesafe/jev-1.14-20261014", "typesafe/jev-2.0"]) {
+    const grader = createJevAnswerGrader(dependencies(async () => Response.json({ model, answers: { "blank-1": { type: "noul", noul: 0.7 } } })));
+    const result = await grader.grade(command());
+    assertEquals(result.ok, true);
+    if (result.ok) { assertEquals(result.value.model, model); assertEquals(result.value.accepted[0], true); }
+  }
+});
+
+Deno.test("Jev latest rejects unrelated models and unbounded or missing probabilities", async () => {
+  for (const model of ["z-ai/glm-5.3-flash", "typesafe/jev-router", "~typesafe/jev-latest", "", null]) {
+    const grader = createJevAnswerGrader(dependencies(async () => Response.json({ model, answers: { "blank-1": { type: "noul", noul: 0.99 } } })));
+    const result = await grader.grade(command());
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.error.kind, "JevResponseInvalid");
+  }
+  for (const noul of [null, "0.7", -0.01, 1.01]) {
+    const grader = createJevAnswerGrader(dependencies(async () => Response.json({ model: "typesafe/jev-1.13-20260917", answers: { "blank-1": { type: "noul", noul } } })));
+    const result = await grader.grade(command());
+    assertEquals(result.ok, false);
+  }
 });

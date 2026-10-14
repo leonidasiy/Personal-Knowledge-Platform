@@ -22,7 +22,7 @@ test('fourth quiz attempt persists; exhaustion removes knowledge and quiz from t
   const points=[point('kept'),point('dropped')];
   for(const value of points)assert.equal((await content.appendKnowledgePoint(value,'owner','run',now())).ok,true);
   const attempts=[];
-  const actor=createQuizActorCritic({maxAttempts:QUIZ_MAX_ATTEMPTS,repository,now,logger:()=>{},generator:{async generate({knowledge,attempt}){attempts.push({id:knowledge.id,attempt});return {ok:true,value:{id:`draft-${knowledge.id}-${attempt}`,knowledgeId:knowledge.id,knowledgeRevision:1,kind:'single-choice',prompt:`Which supported relationship applies to ${knowledge.id}?`,options:['A','B'],answer:'A',citedEvidenceUrls:['https://example.test/source']}};}},evaluator:{async evaluate({knowledge,attempt}){return {ok:true,value:{score:knowledge.id==='kept'&&attempt===4?9:7,reasons:['Grounded'],feedback:'Clarify the distinction.',groundingProblems:[]}};}}});
+  const actor=createQuizActorCritic({maxAttempts:QUIZ_MAX_ATTEMPTS,repository,now,logger:()=>{},generator:{async generate({knowledge,attempt}){attempts.push({id:knowledge.id,attempt});return {ok:true,value:{id:`draft-${knowledge.id}-${attempt}`,knowledgeId:knowledge.id,knowledgeRevision:1,kind:'single-choice',prompt:`Which supported relationship applies to ${knowledge.id}?`,options:['A','B'],answer:'A',citedEvidenceUrls:['https://example.test/source']}};}},reviewer:{async evaluate({knowledge,attempt}){return {ok:true,value:{score:knowledge.id==='kept'&&attempt===4?9:7,reasons:['Grounded'],feedback:'Clarify the distinction.',groundingProblems:[]}};}}});
   const result=await actor.run({ownerId:'owner',runId:'run',points});
   assert.equal(result.ok,true,JSON.stringify(result));
   assert.equal(attempts.length,8);
@@ -75,7 +75,7 @@ test('quiz statistics preserve an earlier dropped point through interruption and
    if(knowledge.id==='kept'&&interrupted)return {ok:false,error:{kind:'ProviderUnavailable'}};
    generations++;
    return stageRepository.run(run,`question-generator:quiz-generator-${knowledge.id}-${attempt}:signature`,'signature',async()=>({ok:true,value:{id:`draft-${knowledge.id}-${attempt}`,knowledgeId:knowledge.id,knowledgeRevision:1,kind:'single-choice',prompt:`Which supported relationship applies to ${knowledge.id}?`,options:['A','B'],answer:'A',citedEvidenceUrls:['https://example.test/source']}}));
-  }},evaluator:{async evaluate({knowledge,attempt}){return {ok:true,value:{score:knowledge.id==='kept'&&attempt===2?9:7,reasons:['Grounded'],feedback:'Clarify.',groundingProblems:[]}};}}});
+  }},reviewer:{async evaluate({knowledge,attempt}){return {ok:true,value:{score:knowledge.id==='kept'&&attempt===2?9:7,reasons:['Grounded'],feedback:'Clarify.',groundingProblems:[]}};}}});
   const initial=await runReviewedQuizPoints({actor,stageRepository,run,points});
   assert.equal(initial.ok,false);
   assert.equal(generations,4);

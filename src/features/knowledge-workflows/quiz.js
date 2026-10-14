@@ -82,7 +82,8 @@ import { validateAssembledQuizPair } from "./quiz-pair.js";
  */
 
 /** @typedef {{ readonly generate: (command: { readonly knowledge: KnowledgePoint, readonly attempt: number, readonly feedback: string | null }) => Promise<Result<unknown, unknown>> }} QuestionGenerator */
-/** @typedef {{ readonly evaluate: (command: { readonly draft: QuestionDraft, readonly knowledge: { readonly id: string, readonly summary: string, readonly evidenceAnchors: readonly { readonly url: string, readonly selector: string }[] }, readonly deterministicValidation: { readonly ok: true }, readonly attempt: number, readonly rubric: string }) => Promise<Result<unknown, unknown>> }} QuestionEvaluator */
+// Production reviewer only. External benchmark evaluators are never dependencies of this actor.
+/** @typedef {{ readonly evaluate: (command: { readonly draft: QuestionDraft, readonly knowledge: { readonly id: string, readonly summary: string, readonly evidenceAnchors: readonly { readonly url: string, readonly selector: string }[] }, readonly deterministicValidation: { readonly ok: true }, readonly attempt: number, readonly rubric: string }) => Promise<Result<unknown, unknown>> }} QuestionReviewer */
 /**
  * @typedef {{
  *   readonly findPublished: (scope: {readonly ownerId:string,readonly runId:string,readonly knowledgeId:string}) => Promise<Result<{readonly status:"published"|"pending-review",readonly attempt:number}|null,unknown>>,
@@ -93,7 +94,7 @@ import { validateAssembledQuizPair } from "./quiz-pair.js";
  *   readonly purge: (command: { readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly before: string }) => Promise<Result<null, unknown>>
  * }} QuizRepository
  */
-/** @typedef {{ readonly generator: QuestionGenerator, readonly evaluator: QuestionEvaluator, readonly repository: QuizRepository, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly knowledgeId?: string, readonly failureKind?: string }) => void, readonly maxAttempts: number, readonly beforeGenerate?: (knowledge: KnowledgePoint) => Promise<Result<boolean, {readonly kind:string}>>, readonly publicationPolicy?: { readonly samplingVersion: string, readonly factualSamplingRatePercent: number } }} QuizDependencies */
+/** @typedef {{ readonly generator: QuestionGenerator, readonly reviewer: QuestionReviewer, readonly repository: QuizRepository, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly knowledgeId?: string, readonly failureKind?: string }) => void, readonly maxAttempts: number, readonly beforeGenerate?: (knowledge: KnowledgePoint) => Promise<Result<boolean, {readonly kind:string}>>, readonly publicationPolicy?: { readonly samplingVersion: string, readonly factualSamplingRatePercent: number } }} QuizDependencies */
 
 const freeze = Object.freeze;
 // Initial generation plus three corrective retries.
@@ -182,7 +183,7 @@ function fail(failure, dependencies, runId, knowledgeId) { dependencies.logger({
 /** @param {QuizDependencies} dependencies */
 export function createQuizActorCritic(dependencies) {
   const policy = dependencies?.publicationPolicy ?? { samplingVersion: "factual-sampling-v1", factualSamplingRatePercent: 30 };
-  if (!dependencies || typeof dependencies.generator?.generate !== "function" || typeof dependencies.evaluator?.evaluate !== "function" || typeof dependencies.repository?.findPublished !== "function" || typeof dependencies.repository.appendAttempt !== "function" || typeof dependencies.repository.publish !== "function" || typeof dependencies.repository.discard !== "function" || typeof dependencies.repository.purge !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || ![2, 3, QUIZ_MAX_ATTEMPTS].includes(dependencies.maxAttempts) || !text(policy.samplingVersion) || !Number.isInteger(policy.factualSamplingRatePercent) || policy.factualSamplingRatePercent < 0 || policy.factualSamplingRatePercent > 100) throw new TypeError("Quiz actor-critic dependencies are invalid.");
+  if (!dependencies || typeof dependencies.generator?.generate !== "function" || typeof dependencies.reviewer?.evaluate !== "function" || typeof dependencies.repository?.findPublished !== "function" || typeof dependencies.repository.appendAttempt !== "function" || typeof dependencies.repository.publish !== "function" || typeof dependencies.repository.discard !== "function" || typeof dependencies.repository.purge !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || ![2, 3, QUIZ_MAX_ATTEMPTS].includes(dependencies.maxAttempts) || !text(policy.samplingVersion) || !Number.isInteger(policy.factualSamplingRatePercent) || policy.factualSamplingRatePercent < 0 || policy.factualSamplingRatePercent > 100) throw new TypeError("Quiz actor-critic dependencies are invalid.");
   return Object.freeze({
     /** @param {unknown} command @returns {Promise<Result<QuizRunResult, QuizFailure>>} */
     async run(command) {
@@ -260,7 +261,7 @@ export function createQuizActorCritic(dependencies) {
             continue;
           }
           let evaluated;
-          try { evaluated = await dependencies.evaluator.evaluate({ draft, knowledge: { id: knowledge.id, summary: knowledge.summary, evidenceAnchors: knowledge.evidenceAnchors }, deterministicValidation: { ok: true }, attempt, rubric: "10 means the draft tests the key concept precisely; 1 means irrelevant or too general." }); } catch (error) {
+          try { evaluated = await dependencies.reviewer.evaluate({ draft, knowledge: { id: knowledge.id, summary: knowledge.summary, evidenceAnchors: knowledge.evidenceAnchors }, deterministicValidation: { ok: true }, attempt, rubric: "10 means the draft tests the key concept precisely; 1 means irrelevant or too general." }); } catch (error) {
             if(error instanceof AgentExecutionBoundaryFailure)throw error;
             if(dependencies.maxAttempts!==3)return fail({kind:"QuizEvaluatorFailed"},dependencies,command.runId,knowledge.id);
             lastFailure = "QuizEvaluatorFailed";

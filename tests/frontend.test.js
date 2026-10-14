@@ -611,8 +611,8 @@ Deno.test("Discover remains a lazy destination with one bounded search command",
     source.indexOf("rerender:", source.indexOf("navigateToLibrary:")),
   );
   assert(
-    libraryNavigation.includes("libraryPageController?.load()"),
-    "A Discover approval must refresh an already-opened Library before navigation.",
+    libraryNavigation.includes("libraryPageController?.revealSource(sourceId)"),
+    "A Discover approval must reveal its source in an already-opened Library before navigation.",
   );
   assert(
     discoveryPage.includes("data-discovery-search-form") &&

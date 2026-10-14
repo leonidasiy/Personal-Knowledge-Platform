@@ -209,6 +209,25 @@ Deno.test("source gateway reads the user-facing workflow blocker explanation", a
   assertEquals(new URL(requested).searchParams.get("sourceId"), "source-a");
 });
 
+Deno.test("source gateway preserves actual progress when robots verification is unavailable", async () => {
+  const evidence={robotsUrl:"https://www.open.edu/robots.txt",targetUrl:"https://www.open.edu/openlearn/course",httpStatus:0,availability:"unavailable",content:"",checkedAt:"2026-10-13T07:00:00.000Z",matchedRule:null};
+  const progress={currentUrl:evidence.targetUrl,pageTitle:"Public course",sectionTitle:"Introduction",stage:"Reviewing knowledge",updatedAt:evidence.checkedAt,knowledgePoints:[{knowledgeId:"actual-point-contract",summary:"A retained knowledge summary."}],generatedQuizQuestions:0,processedPageCount:0,totalPages:null};
+  const run={runId:"run-a",state:"extraction-loop",revision:4,counts:{pages:0,knowledgePoints:0,acceptedQuizzes:0,pendingQuizzes:0},extractionStartedAt:evidence.checkedAt,extractionDeadlineAt:"2026-10-13T07:30:00.000Z",elapsedMs:1_000,remainingMs:1_799_000,decisionRequired:null,failureKind:null,robotsEvidence:evidence,progress};
+  for(const httpStatus of [0,100,200,299,403,429,500,599]){
+    const result=await gateway(async()=>Response.json({result:{sourceId:"source-a",run:{...run,robotsEvidence:{...evidence,httpStatus}},reasonCode:null,message:null}})).workflowStatus("source-a");
+    assertEquals(result.ok,true);if(!result.ok)throw new Error(result.error.kind);
+    assertEquals(result.value.run?.progress?.knowledgePoints[0].summary,progress.knowledgePoints[0].summary);
+    assertEquals(result.value.run?.robotsEvidence?.httpStatus,httpStatus);
+  }
+  for(const candidate of [{httpStatus:-1},{httpStatus:600},{httpStatus:0,content:"Unexpected response content"},{httpStatus:500,content:"Unexpected response content"},{httpStatus:200,availability:"absent"},{httpStatus:500,availability:"present"},{robotsUrl:"http://www.open.edu/robots.txt"}]){
+    const result=await gateway(async()=>Response.json({result:{sourceId:"source-a",run:{...run,robotsEvidence:{...evidence,...candidate}},reasonCode:null,message:null}})).workflowStatus("source-a");
+    assertEquals(result.ok,false);
+  }
+  const malformed=await gateway(async()=>Response.json({result:{sourceId:"source-a",run:{...run,robotsEvidence:{...evidence,httpStatus:200,content:"Unparseable robots text"}},reasonCode:null,message:null}})).workflowStatus("source-a");
+  assertEquals(malformed.ok,true);
+  const foreign=await gateway(async()=>Response.json({result:{sourceId:"source-b",run,reasonCode:null,message:null}})).workflowStatus("source-a");assertEquals(foreign.ok,false);
+});
+
 Deno.test("source gateway posts an owner-free workflow retry command and validates its public result", async () => {
   /** @type {Request | null} */ let received = null;
   const client = gateway(async (request) => {

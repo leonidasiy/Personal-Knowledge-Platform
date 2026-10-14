@@ -38,7 +38,7 @@ function setup() {
     scratchpad: {
       async load() { return { ok: true, value: scratchpad }; },
       /** @param {import("../src/features/knowledge-workflows/extraction.js").ExtractionScratchpad} value */
-      async save(value) { scratchpad = value; return { ok: true, value: null }; },
+      async save(value) { if (value.revision <= scratchpad.revision) return {ok:false,error:{kind:"ScratchpadPersistenceFailed"}}; scratchpad = value; return { ok: true, value: null }; },
     },
     knowledge: {
       /** @param {import("../src/features/knowledge-workflows/extraction.js").KnowledgePoint} value */
@@ -448,4 +448,57 @@ Deno.test("repaired knowledge acceptance uses its new identity and refuses alter
     if(result.ok)assertEquals(result.value.scratchpad.acceptedHashes.join(","),"repaired");else assertEquals(result.error.kind,"KnowledgePersistenceFailed");
     assertEquals(fixture.points.length,foreign?0:1);
   }
+});
+
+Deno.test('hybrid lesson inventory preserves displayed order across model replans and workflow resume',async()=>{
+  const fixture=setup();
+  const urls=['https://example.test/a','https://example.test/b','https://example.test/c'];
+  /** @type {string[]} */const fetched=[];
+  let paused=true;
+  const runner=createExtractionRunner({...fixture.dependencies,orderedUrls:urls,stopRequested:()=>paused&&fetched.length>0,planner:{async plan(){return {ok:true,value:{revision:1,frontier:urls,coverageGoals:[{id:'goal-a',priority:'high',description:'Core concept'}],unresolvedGaps:[],stopDecision:{decision:'continue',rationale:'Fixture inventory.',evidenceUrls:[],unresolvedGapIds:[]}}};},async replan({previous,scratchpad}){return {ok:true,value:{...previous,revision:previous.revision+1,frontier:urls.filter(url=>!scratchpad.processedUrls.includes(url)).reverse(),stopDecision:{...previous.stopDecision,decision:scratchpad.processedUrls.length===3?'complete':'continue'}}};}},acquirer:{async fetchPage(command){fetched.push(command.url);return fixture.dependencies.acquirer.fetchPage(command);}}});
+  const command={ownerId:'owner-a',runId:'run-a',sourceId:'source-a',sourceRevision:1,rootUrl:'https://example.test/',startedAtMs:0,deadlineAtMs:1800000};
+  const first=await runner.run(command);assertEquals(first.ok,true);paused=false;
+  const second=await runner.run(command);assertEquals(second.ok,true);
+  assertEquals(fetched.join(','),urls.join(','));
+});
+
+Deno.test('known response aliases are skipped and identical captured content is reviewed only once',async()=>{
+  const fixture=setup();
+  /** @type {string[]} */const fetched=[];
+  let reviews=0;
+  const runner=createExtractionRunner({...fixture.dependencies,planner:{async plan(){return {ok:true,value:{revision:1,frontier:['https://example.test/a','https://example.test/canonical-a','https://example.test/a?tab=alias'],coverageGoals:[{id:'goal-a',priority:'high',description:'Core concept'}],unresolvedGaps:[],stopDecision:{decision:'continue',rationale:'Fixture aliases.',evidenceUrls:[],unresolvedGapIds:[]}}};},async replan({previous}){return {ok:true,value:{...previous,revision:previous.revision+1,stopDecision:{...previous.stopDecision,decision:'complete'}}};}},acquirer:{async fetchPage({url}){fetched.push(url);return {ok:true,value:{url,responseUrl:'https://example.test/canonical-a',contentDigest:'sha256:identical-fixture-content',title:'A',byteCount:100,redirects:1,links:[],observedAt:'2026-10-13T00:00:00.000Z',candidates:[{summary:'Synthetic core relationship.',normalizedHash:url,evidenceAnchors:[{url:'https://example.test/canonical-a',selector:'#a'}],coverageGoalIds:['goal-a'],mediaCandidates:[]}]}};}},reviewer:{async review(point){reviews++;return {ok:true,value:point};}}});
+  const result=await runner.run({ownerId:'owner-a',runId:'run-a',sourceId:'source-a',sourceRevision:1,rootUrl:'https://example.test/',startedAtMs:0,deadlineAtMs:1800000});
+  assertEquals(result.ok,true);assertEquals(fetched.join(','),'https://example.test/a,https://example.test/a?tab=alias');assertEquals(reviews,1);assertEquals(fixture.points.length,1);
+  if(result.ok)assertEquals(result.value.scratchpad.processedContentDigests?.join(','),'sha256:identical-fixture-content');
+});
+
+Deno.test('updated hybrid inventory replaces a stale excluded frontier before resumed acquisition',async()=>{
+  const fixture=setup();
+  const scope={ownerId:'owner-a',runId:'run-a',sourceId:'source-a',sourceRevision:1};
+  const loaded=await fixture.dependencies.scratchpad.load(scope);if(!loaded.ok)throw new Error('Fixture load failed.');
+  let scratchpad={...loaded.value,frontier:['https://example.test/c'],discoveredUrls:['https://example.test/c']};
+  /** @type {string[]} */const fetched=[];
+  const runner=createExtractionRunner({...fixture.dependencies,orderedUrls:['https://example.test/a','https://example.test/b'],scratchpad:{async load(){return {ok:true,value:scratchpad};},async save(value){scratchpad={...value,frontier:[...(value.frontier??[])],discoveredUrls:[...(value.discoveredUrls??[])]};return {ok:true,value:null};}},planner:{...fixture.dependencies.planner,async replan({previous}){return {ok:true,value:{...previous,revision:previous.revision+1,frontier:['https://example.test/c'],stopDecision:{...previous.stopDecision,decision:'complete'}}};}},acquirer:{async fetchPage(command){fetched.push(command.url);return fixture.dependencies.acquirer.fetchPage(command);}}});
+  const result=await runner.run({...scope,rootUrl:'https://example.test/',startedAtMs:0,deadlineAtMs:1800000});
+  assertEquals(result.ok,true);assertEquals(fetched.join(','),'https://example.test/a,https://example.test/b');
+  if(result.ok)assertEquals(result.value.scratchpad.discoveredUrls?.includes('https://example.test/c'),false);
+});
+
+Deno.test("mid-page accepted knowledge checkpoints survive a later reviewer failure without re-review", async () => {
+  const fixture=setup();
+  let failSecond=true;
+  const reviewed=/** @type {string[]} */([]);
+  const original=fixture.dependencies.acquirer.fetchPage;
+  const dependencies={...fixture.dependencies,acquirer:{async fetchPage(/** @type {{readonly url:string,readonly rootUrl:string,readonly plan:import("../src/features/knowledge-workflows/extraction.js").ExtractionPlan}} */ command){const page=await original(command);if(!page.ok||!command.url.endsWith("/a"))return page;return {ok:/** @type {const} */(true),value:{...page.value,candidates:[...page.value.candidates,{...page.value.candidates[0],summary:"Second supported relationship",normalizedHash:"hash-second"}]}};}},reviewer:{async review(/** @type {import("../src/features/knowledge-workflows/extraction.js").KnowledgePoint} */ point){reviewed.push(point.normalizedHash);if(point.normalizedHash==="hash-second"&&failSecond)return {ok:/** @type {const} */(false),error:{kind:"ReviewerUnavailable"}};return {ok:/** @type {const} */(true),value:point};}}};
+  const command={ownerId:"owner-a",runId:"run-a",sourceId:"source-a",sourceRevision:1,rootUrl:"https://example.test",startedAtMs:0,deadlineAtMs:1_800_000};
+  assertEquals((await createExtractionRunner(dependencies).run(command)).ok,false);
+  const checkpoint=await fixture.dependencies.scratchpad.load(command);
+  if(!checkpoint.ok)throw new Error("Checkpoint unavailable");
+  assertEquals(checkpoint.value.acceptedHashes.join(","),"hash-a");
+  assertEquals(checkpoint.value.processedUrls.length,0);
+  failSecond=false;
+  const resumed=await createExtractionRunner(dependencies).run(command);
+  assertEquals(resumed.ok,true);
+  assertEquals(reviewed.join(","),"hash-a,hash-second,hash-second");
+  assertEquals(fixture.points.length,2);
 });
