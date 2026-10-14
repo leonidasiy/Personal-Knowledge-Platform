@@ -1015,7 +1015,7 @@ function renderStartupRecovery() {
 }
 
 function renderHeader() {
-  return `<header class="topbar"><div class="brand-group"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><svg class="brand-symbol" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M6 28V8h11a7 7 0 0 1 0 14H6m11 0 11 7" stroke="currentColor" stroke-width="3"/><circle cx="29" cy="8" r="3" fill="currentColor"/></svg><span>resonance</span></button><span class="brand-caption">A place for<br>what stays.</span></div><div class="topbar-actions">${libraryPageController?.renderProcessingStatus() ?? ""}<span class="local-badge">${
+  return `<header class="topbar"><div class="brand-group"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><svg class="brand-symbol" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M6 28V8h11a7 7 0 0 1 0 14H6m11 0 11 7" stroke="currentColor" stroke-width="3"/><circle cx="29" cy="8" r="3" fill="currentColor"/></svg><span>resonance</span></button><span class="brand-caption">A place for <br>what stays.</span></div><div class="topbar-actions">${libraryPageController?.renderProcessingStatus() ?? ""}<span class="local-badge">${
     navigator.onLine ? "Personal space" : "Offline"
   }</span><button class="button quiet" type="button" data-view="settings" data-focus-key="settings-button"${activeView === "settings" ? ' aria-current="page"' : ""}>Settings</button></div></header>`;
 }

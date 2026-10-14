@@ -861,3 +861,8 @@ Deno.test("native picker rotation and transition require normal motion and the i
   }
   assert(!css.slice(0, start).includes("transition: rotate") && !css.slice(0, start).includes("rotate: 180deg"), "No unconditional picker motion may escape the preference/toggle gate.");
 });
+
+Deno.test("desktop brand caption retains its word spacing when the line break is hidden", async () => {
+  const source = await Deno.readTextFile(new URL("../src/app.js", import.meta.url));
+  assert(source.includes("A place for <br>what stays."), "The caption must retain a space when its line break is hidden.");
+});

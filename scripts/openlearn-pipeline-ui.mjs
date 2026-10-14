@@ -149,7 +149,17 @@ try{
   else for(const choice of variant.correctChoiceIds){const index=variant.choices.findIndex(item=>item.id===choice);assert.ok(index>=0);await question.locator('input[name="selectedChoiceIds"]').nth(index).check();}
  }
  await question.getByRole('button',{name:'Check both answers'}).click();
- await question.locator('.answer-feedback.is-correct').waitFor();await screenshot(page,'review-actual-feedback');
+ await question.locator('.answer-feedback.is-correct').waitFor();
+ const componentFeedback=await question.locator('.source-details li').allTextContents();
+ assert.match(componentFeedback[0],/^Choice question: correct/u);
+ for(let index=1;index<componentFeedback.length;index++)assert.match(componentFeedback[index],new RegExp(`^Blank ${index}: correct`,'u'));
+ assert.ok(componentFeedback.every(text=>!text.includes('quiz:')),'Learner feedback hides internal quiz identifiers');
+ report.checks.readableComponentFeedback=true;await screenshot(page,'review-actual-feedback');
+ await page.reload();
+ await page.locator('[data-review-question]').first().waitFor();
+ assert.equal(await page.locator(`[data-review-question="${questionId}"]`).count(),0,'Reload must not reopen an answered question');
+ assert.equal(await page.locator('[data-review-question]').count(),studyIds.length-1,'Only unanswered questions resume');
+ report.checks.reviewResumesUnanswered=true;
  report.checks.pairedQuizRendered=true;report.checks.nativeCanonicalAnswerFeedback=true;report.actions.push({action:'actual-native-feed-study-and-paired-review',studiedCount:studyIds.length,questionId});
  }
  if(partial){report.untested=['Completed extraction across six pages','Feed with published pairs','Review quiz rendering and grading','Generated media rendering'];report.fullPipeline={result:'BLOCKED',reason:'The source extraction run is incomplete; this partial UI check does not verify Feed, Review grading, or generated media.'};}

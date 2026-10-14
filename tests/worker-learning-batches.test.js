@@ -34,13 +34,15 @@ class Database {
   /** @type {unknown[]} */ rows;
   /** @type {unknown | null} */ reviewRow = null;
   /** @type {number | null} */ answerCount = null;
+  /** @type {unknown[]} */ answeredRows = [];
+  answerReadFails = false;
   /** @type {Map<string, string>} */ commandResults = new Map();
   /** @param {unknown[]} rows */
   constructor(rows) { this.rows = rows; }
   /** @param {string} query */
   prepare(query) { this.queries.push(query); return new Statement(this, query); }
   /** @param {string} query */
-  async all(query) { return { success: true, results: query.includes("FROM extraction_knowledge_points kp") ? this.rows : [] }; }
+  async all(query) { if (query.includes("FROM learner_review_answers")) return { success: !this.answerReadFails, results: this.answeredRows }; return { success: true, results: query.includes("FROM extraction_knowledge_points kp") ? this.rows : [] }; }
   /** @param {string} query */
   /** @param {string} query @param {readonly (string | number | null)[]} [bindings] */
   async first(query, bindings = []) {
@@ -313,4 +315,24 @@ Deno.test("learner D1 full generated-content reset preserves durable more-or-les
   assertEquals(result.ok, true);
   assertEquals(database.queries.some((query) => query.includes("DELETE FROM learner_preference_feedback")), false);
   assertEquals(database.queries.some((query) => query.includes("DELETE FROM extraction_knowledge_points")), true);
+});
+
+Deno.test("reloading an open Review batch resumes only unanswered questions", async () => {
+  for (const answeredRows of [[], [{ question_id: "task-0" }], [{ question_id: "task-0" }, { question_id: "task-1" }]]) {
+    const database = new Database(rows().map(row => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" })));
+    database.reviewRow = { batch_id: "review:resume", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0", "task-1", "task-2"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
+    database.answeredRows = answeredRows;
+    const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
+    const result = await service.loadReview("owner-a", "2026-08-19");
+    assertEquals(result.ok, true);
+    if (!result.ok) continue;
+    const projection = /** @type {{questions: {questionId:string}[]}} */ (result.value);
+    assertEquals(projection.questions.length, 3 - answeredRows.length);
+    assertEquals(projection.questions.some(question => answeredRows.some(row => row.question_id === question.questionId)), false);
+    assertEquals(database.queries.some(query => query.includes("FROM learner_review_answers WHERE owner_id = ? AND batch_id = ?")), true);
+    database.answerReadFails = true;
+    const failure = await service.loadReview("owner-a", "2026-08-19");
+    assertEquals(failure.ok, false);
+    if (!failure.ok) assertEquals(failure.error.kind, "LearningBatchPersistenceFailed");
+  }
 });

@@ -2,6 +2,10 @@
 
 ## 2026-10-14
 
+- Follow-up user exploration by Luna verified signed-in production navigation,
+  responsive layouts, keyboard access and empty states. Fixed internal quiz IDs
+  in answer feedback, desktop tagline spacing, and Review reloads reopening
+  already answered questions. Actual-content isolated browser regression passed.
 - Added hybrid browser navigation for public educational sources and durable
   processed-page tracking. Unavailable robots metadata does not by itself block
   processing accessible public content; access barriers remain respected.

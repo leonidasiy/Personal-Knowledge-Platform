@@ -275,7 +275,7 @@ export function createLearningBatchService(dependencies) {
     const current = await reviewRow(ownerId);
     if (!current.ok) return current;
     if (!force && current.value !== null && current.value.learningDay === day) {
-      return hydrateReview(current.value, all.value);
+      return hydrateReview(ownerId, current.value, all.value);
     }
     if (force && current.value !== null && current.value.status !== "completed") return { ok: false, error: { kind: "ReviewRefreshLocked" } };
     const due = all.value.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now()));
@@ -303,12 +303,23 @@ export function createLearningBatchService(dependencies) {
     return { ok: true, value: Object.freeze({ items: Object.freeze(selected.map(publicCandidate)) }) };
   }
 
-  /** @param {BatchRow} batch @param {readonly LearnerCandidate[]} all @returns {Promise<Result<unknown>>} */
-  async function hydrateReview(batch, all) {
+  /** @param {string} ownerId @param {BatchRow} batch @param {readonly LearnerCandidate[]} all @returns {Promise<Result<unknown>>} */
+  async function hydrateReview(ownerId, batch, all) {
     const byQuestion = new Map(all.map((candidate) => [candidate.questionId, candidate]));
     const selected = batch.itemIds.map((id) => byQuestion.get(id)).filter((candidate) => candidate !== undefined);
     if (selected.length !== batch.itemIds.length) return { ok: false, error: { kind: "KnowledgePairNotFound" } };
-    return { ok: true, value: Object.freeze({ batch, questions: Object.freeze(selected.map(publicQuestion)), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
+    const answeredIds = new Set();
+    if (batch.status === "open") {
+      try {
+        const answered = await database.prepare("SELECT question_id FROM learner_review_answers WHERE owner_id = ? AND batch_id = ?").bind(ownerId, batch.batchId).all();
+        if (!answered.success || !Array.isArray(answered.results) || answered.results.some(row => !record(row) || !text(row.question_id))) throw new Error("Review answer projection invalid");
+        for (const row of answered.results) answeredIds.add(/** @type {{question_id:string}} */ (row).question_id);
+      } catch (error) {
+        dependencies.logger({ event: "learning-review-hydration-failure", ownerId, batchId: batch.batchId, failureKind: "LearningBatchPersistenceFailed" });
+        return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+      }
+    }
+    return { ok: true, value: Object.freeze({ batch, questions: Object.freeze(selected.filter(candidate => !answeredIds.has(candidate.questionId)).map(publicQuestion)), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
