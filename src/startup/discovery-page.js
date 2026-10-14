@@ -135,11 +135,14 @@ export function createDiscoveryPage(dependencies) {
         sourceLibrary.browse({ limit: 1 }),
       ]);
       if (capabilities.ok) {
+        const initializeProviders = searchCapabilities.length === 0;
         searchCapabilities = [...capabilities.value];
         if (!searchInitialized) {
-          selectedProviderIds = searchCapabilities.filter((provider) =>
-            provider.enabled
-          ).map((provider) => provider.id);
+          if (initializeProviders) {
+            selectedProviderIds = searchCapabilities.filter((provider) =>
+              provider.enabled && provider.id !== "youtube"
+            ).map((provider) => provider.id);
+          }
           searchFailure = null;
         }
       } else if (!searchInitialized) {
@@ -218,6 +221,13 @@ export function createDiscoveryPage(dependencies) {
         },
       );
       searchForm?.setAttribute("data-discovery-search-bound", "true");
+      searchForm?.addEventListener("input", () => {
+        if (!(searchForm instanceof HTMLFormElement)) return;
+        const values = new FormData(searchForm);
+        searchQuery = String(values.get("query") ?? "");
+        selectedProviderIds = values.getAll("provider").map(String);
+        searchLimit = Number(values.get("limit"));
+      });
       root.querySelectorAll("[data-discovery-approve]").forEach((element) =>
         element.addEventListener("submit", (event) => {
           event.preventDefault();
@@ -264,7 +274,7 @@ export function createDiscoveryPage(dependencies) {
       projected,
       escapeHtml,
     );
-    const visibleItems = liveItems ?? [...projectedModel.items];
+    const visibleItems = liveItems ?? [];
     const items = visibleItems.filter((item) =>
       !suppressed.has(item.candidate.canonicalIdentity)
     );
@@ -280,8 +290,12 @@ export function createDiscoveryPage(dependencies) {
         state: route.online
           ? searchFailure === null
             ? items.length === 0
-              ? /** @type {const} */ ("empty")
+              ? searchInitialized
+                ? /** @type {const} */ ("empty")
+                : /** @type {const} */ ("never-run")
               : /** @type {const} */ ("success")
+            : items.length === 0
+            ? /** @type {const} */ ("error")
             : /** @type {const} */ ("partial")
           : projectedModel.state,
         stateMessage: route.online
@@ -409,7 +423,12 @@ export function createDiscoveryPage(dependencies) {
   function openUpload(itemId) {
     const item = typeof itemId === "string" ? routeItems.get(itemId) : undefined;
     if (item === undefined) return { ok: false, error: { kind: "DiscoveryUploadSourceUnavailable" } };
-    dependencies.navigateToUpload({title: item.title});
+    dependencies.navigateToUpload({
+      title: item.title,
+      reason: item.youtubeWatchUrl !== null
+        ? markup.youtubeTranscriptGuidance
+        : markup.manualUploadGuidance,
+    });
     return { ok: true, value: undefined };
   }
 

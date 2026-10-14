@@ -59,14 +59,18 @@ export function createYouTubeConnectionController(dependencies) {
       if (!(mount instanceof HTMLElement)) return;
       const offline =
         root.querySelector('[data-discovery-state="offline"]') !== null;
-      mount.innerHTML = renderYouTubeConnection(
-        connection,
-        offline,
-        dependencies.markup,
-      );
-      mount.querySelector("[data-youtube-policy-accept]")?.addEventListener(
+      const provider = root.querySelector('input[name="provider"][value="youtube"]');
+      const updateNotice = () => {
+        const selected = provider instanceof HTMLInputElement && provider.checked;
+        mount.hidden = !selected || connection.status === "accepted";
+        mount.innerHTML = mount.hidden ? "" : renderYouTubeConnection(connection, offline, dependencies.markup);
+      };
+      updateNotice();
+      provider?.addEventListener("change", updateNotice);
+      mount.addEventListener(
         "submit",
         (event) => {
+          if (!(event.target instanceof HTMLFormElement) || !event.target.matches("[data-youtube-policy-accept]")) return;
           event.preventDefault();
           const acceptedAt = dependencies.now();
           if (!Number.isFinite(Date.parse(acceptedAt))) {

@@ -25,6 +25,7 @@ const SHELL_URLS = [
   "./assets/fonts/LICENSE.txt",
   "./assets/catalog-fixtures.json",
   "./assets/discovery-starters.json",
+  "./assets/empty-states.svg",
   "./assets/fallback-media/Heungsoon%20Sheet%20Music.jpg",
   "./assets/fallback-media/Headphones%20Music%20Image.jpg",
 ];

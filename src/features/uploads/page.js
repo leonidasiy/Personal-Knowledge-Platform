@@ -1,9 +1,10 @@
 // @ts-check
+import { emptyArt } from "../../empty-state.js";
 import { createShellMarkup } from "../../shell-markup.js";
 import { validateSubmittedLink } from "../source-library/submitted-link.js";
 import { SourceLibraryGatewayClient } from "../source-library/gateway.js";
 /** @typedef {"text"|"documents"|"pdf"|"images"|"link"} UploadInput */
-/** @typedef {{readonly title:string}} UploadPrefill */
+/** @typedef {{readonly title:string,readonly reason?:string}} UploadPrefill */
 /** @typedef {{readonly source:import('../source-library/contracts.js').LibrarySource,readonly runId:string,readonly reason:string}} UploadContext */
 /** @typedef {{readonly fetch:typeof fetch,readonly baseUrl:string,readonly onChange:()=>void,readonly createId:()=>string,readonly onExtracted?:(sourceId:string)=>void,readonly onRenamed:(sourceId:string,title:string)=>void,readonly upload:(sourceId:string,form:FormData,context:UploadContext|null)=>Promise<{readonly ok:boolean,readonly message:string}>}} UploadDependencies */
 /** @param {UploadDependencies} dependencies */
@@ -20,6 +21,7 @@ export function createUploadPage(dependencies) {
   /** @type {readonly import("../source-library/contracts.js").SourceInterestArea[]} */ let areas = [];
   /** @type {{fingerprint:string,key:string}|null} */ let linkAttempt = null;
   let title = "";
+  let prefillReason = "";
   let draft = new FormData();
   let busy = false;
   const gateway = new SourceLibraryGatewayClient({
@@ -219,7 +221,8 @@ export function createUploadPage(dependencies) {
   /** @param {string} hash @param {UploadPrefill|null} [prefill] */
   async function load(hash, prefill = null) {
     if (typeof hash !== "string" || prefill !== null &&
-      (hash !== "#upload" || typeof prefill.title !== "string" || !prefill.title.trim())) {
+      (hash !== "#upload" || typeof prefill.title !== "string" || !prefill.title.trim() ||
+        prefill.reason !== undefined && (typeof prefill.reason !== "string" || !prefill.reason.trim()))) {
       throw new TypeError("UploadPrefillInvalid");
     }
     const current = ++generation;
@@ -230,6 +233,7 @@ export function createUploadPage(dependencies) {
     linkAttempt = null;
     areas = [];
     title = prefill?.title ?? "";
+    prefillReason = prefill?.reason ?? "";
     message = "";
     const [route, query] = hash.split("?");
     if (route !== "#upload") {
@@ -314,9 +318,8 @@ export function createUploadPage(dependencies) {
           : ".png,.jpg,.jpeg,.webp,.gif", files.length ? "" : " required", shellMarkup(4, files.length ? "" : " hidden", files.map((file) => escape(/** @type {File} */ (file).name)).join(
               ", ",
             )));
-    return shellMarkup(5, context === null
-        ? ""
-        : shellMarkup(6, escape(context.reason)), escape(context?.source.id ?? ""), busy, escape(title), context !== null || input === "text" || input === "link" ? " required" : "", ["text", "documents", "pdf", "images", ...(context === null ? ["link"] : [])].map((value, index) =>
+    const reason = context?.reason ?? prefillReason;
+    return shellMarkup(5, (!files.length && !String(draft.get("content") ?? draft.get("url") ?? "").trim() ? emptyArt("library") : "") + (reason ? shellMarkup(6, escape(reason)) : ""), escape(context?.source.id ?? ""), busy, escape(title), context !== null || input === "text" || input === "link" ? " required" : "", ["text", "documents", "pdf", "images", ...(context === null ? ["link"] : [])].map((value, index) =>
         shellMarkup(24 + index, input === value ? " selected" : "")
       ).join(""), control, input === "pdf"
         ? shellMarkup(8, draft.has("imageProcessing")

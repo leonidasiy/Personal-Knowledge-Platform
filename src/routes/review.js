@@ -1,4 +1,5 @@
 // @ts-check
+import { emptyArt } from "../empty-state.js";
 
 const freeze = Object.freeze;
 
@@ -222,7 +223,7 @@ function renderTodayPanel(
     Math.max(total, 1)
   }" value="${completed}">${progressPercentage}%</progress></div>${
     model.currentCandidate === null
-      ? `<section class="empty-state" aria-live="polite"><h2>Today's recall is complete</h2><p>New prompts will appear after studied material reaches its next recall interval.</p></section>`
+      ? `<section class="empty-state illustrated-empty" aria-live="polite">${emptyArt("review")}<h2>Today's recall is complete</h2><p>New prompts will appear after studied material reaches its next recall interval.</p></section>`
       : renderCurrentQuestion(
         model.currentCandidate,
         currentPosition,
@@ -326,7 +327,7 @@ function renderAnswerControl(quiz, escapeHtml) {
 function renderOpenResponses(items, escapeHtml) {
   return `<div class="review-tab-panel" role="tabpanel" id="review-panel-open" aria-labelledby="review-tab-open">${
     items.length === 0
-      ? `<section class="empty-state" aria-live="polite"><h2>No responses need review</h2><p>Free responses and case studies that need a decision will appear here.</p></section>`
+      ? `<section class="empty-state illustrated-empty" aria-live="polite">${emptyArt("review")}<h2>No responses need review</h2><p>Free responses and case studies that need a decision will appear here.</p></section>`
       : `<div class="open-response-list">${
         items.map((item) =>
           `<article class="open-response-card"><div><p class="selection-reason">Awaiting your review</p><h2>${

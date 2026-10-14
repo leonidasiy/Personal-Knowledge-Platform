@@ -655,3 +655,15 @@ Deno.test("Link interest-load errors use readable copy and gateway retains diagn
   const result=await gateway.extract({title:"Draft",url:"https://publisher.example/lesson",interestAreaId:"area-a",idempotencyKey:"fixture"});
   assert(!result.ok&&result.error.kind==="SourceGatewayRejected"&&result.error.failureKind===failureKind,"Display copy must not overwrite the internal typed failure.");
 });
+
+Deno.test("YouTube transcript handoff starts in text mode with escaped guidance and resets on new Upload", async () => {
+  const page = createUploadPage(deps);
+  await page.select("pdf");
+  await page.load("#upload", { title: 'Video <title>', reason: 'Paste the <video> transcript you are permitted to process.' });
+  const html = page.render();
+  assert(html.includes('value="text" selected') && html.includes('name="content"'), "Handoff resets a previous file selection to text entry.");
+  assert(html.includes('value="Video &lt;title&gt;"') && html.includes('Paste the &lt;video&gt; transcript'), "Title and guidance are exact and escaped.");
+  assert(html.includes("empty-states.svg#library"), "Blank intake includes artwork.");
+  await page.load("#upload");
+  assert(!page.render().includes("transcript"), "New Upload does not retain another source's guidance.");
+});

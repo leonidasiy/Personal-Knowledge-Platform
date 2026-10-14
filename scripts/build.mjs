@@ -284,6 +284,7 @@ export async function buildProject(configuration, dependencies) {
       ["service-worker.js", "service-worker.js"],
       ["assets/catalog-fixtures.json", "assets/catalog-fixtures.json"],
       ["assets/discovery-starters.json", "assets/discovery-starters.json"],
+      ["assets/empty-states.svg", "assets/empty-states.svg"],
       ["assets/fallback-media/manifest.json", "assets/fallback-media/manifest.json"],
       ["node_modules/unpdf/dist/pdfjs.mjs", "pdfjs.mjs"],
       ...fallbackPaths.value.map((path) => [path, path]),

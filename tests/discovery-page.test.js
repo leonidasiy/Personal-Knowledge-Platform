@@ -20,6 +20,17 @@ const STARTERS = JSON.parse(
   ),
 );
 
+function starterSearchResult() {
+  return { result: {
+    items: STARTERS.items.slice(0, 3).map((/** @type {{title:string,publisherLabel:string,canonicalUrl:string}} */ item) => ({
+      providerId: "web", resultKind: "web", sourceLevel: "site",
+      title: item.publisherLabel, description: item.title, canonicalUrl: item.canonicalUrl,
+      publisherLabel: item.publisherLabel, publishedAt: null, identityEvidence: [{ attribute: "provider-result-page", value: item.canonicalUrl, provenanceUrl: item.canonicalUrl }],
+    })),
+    providerFailures: [], submittedQuery: "starter-sources", providerQuery: "starter-sources", policyVersion: "raw-provider-v1",
+  } };
+}
+
 /** @param {boolean} condition @param {string} message */
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -66,8 +77,10 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   /** @type {string[]} */ const errors = [];
   /** @type {string[]} */ const destinations = [];
   const uploadTitles = /** @type {string[]} */ ([]);
+  const uploadReasons = /** @type {string[]} */ ([]);
   let nextId = 0;
-  const page = createDiscoveryPage({
+  /** @type {Parameters<typeof createDiscoveryPage>[0]} */
+  const dependencies = {
     ownerId: "owner-a",
     persistence: {
       appendBatch: (records) => {
@@ -90,6 +103,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
         centralSearchRequests += 1;
         centralSearchCommand = await request.json();
         const searchCommand = /** @type {{readonly query?:unknown}} */ (centralSearchCommand);
+        if (searchCommand.query === "starter-sources") return Response.json(starterSearchResult());
         if (searchCommand.query === "replacement-failure") {
           return Response.json({ error: "DiscoverySearchFailed" }, { status: 503 });
         }
@@ -241,18 +255,19 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
     now: () => "2026-07-22T08:00:00.000Z",
     onNotice: (message) => notices.push(message),
     onError: (message) => errors.push(message),
-    navigateToUpload: ({title}) => uploadTitles.push(title),
+    navigateToUpload: ({title, reason}) => { uploadTitles.push(title); uploadReasons.push(reason ?? ""); },
     navigateToLibrary: (sourceId) => destinations.push(sourceId),
     rerender: () => {},
-  });
+  };
+  const page = createDiscoveryPage(dependencies);
   const loaded = await page.load();
   assert(loaded.ok, "Starter discovery must load.");
   assert(oauthRequests === 0, "Page load must not call removed OAuth routes.");
   const writesAfterLoad = appendCalls;
-  const list = page.render({ selectedItemId: null, online: true });
+  let list = page.render({ selectedItemId: null, online: true });
   assert(
-    list.includes("Ableton Learning Music"),
-    "Starter source must render.",
+    !list.includes("data-discovery-item-id") && !list.includes("Ableton Learning Music") && list.includes("empty-states.svg#discover") && list.includes('data-discovery-state="never-run"'),
+    "Before a submitted search, show artwork without starter source cards.",
   );
   let invalidDetail = "";
   try {
@@ -295,6 +310,10 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       !list.includes("data-discovery-youtube-form"),
     "Discover must expose one centralized search form.",
   );
+  const explicitSearch = await page.search({ query: "starter-sources", providerIds: ["web"], limit: 10 });
+  assert(explicitSearch.ok, "Explicit search must supply the decision fixture.");
+  list = page.render({ selectedItemId: null, online: true });
+  const requestsBeforeNextSearch = centralSearchRequests;
   const missingDetail = page.render({
     selectedItemId: "persisted-search-result-that-is-not-visible",
     online: true,
@@ -358,7 +377,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   });
   assert(searched.ok, "Central search must succeed.");
   assert(
-    centralSearchRequests === requestsAfterInitialFailure + 1 &&
+    centralSearchRequests === requestsBeforeNextSearch + 1 &&
       JSON.stringify(centralSearchCommand) === JSON.stringify({
         query: "counterpoint",
         providerIds: ["web", "podcasts", "youtube"],
@@ -381,6 +400,8 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   );
   const searchedIds = [...searchedHtml.matchAll(/data-discovery-item-id="([^"]+)"/g)]
     .map((match) => match[1]);
+  const youtubeUpload = page.openUpload(searchedIds[1]);
+  assert(youtubeUpload.ok && uploadTitles.at(-1) === "Official harmony tutorial title" && (uploadReasons.at(-1) ?? "").includes("transcript"), "YouTube handoff must use the video's exact title and request a permitted transcript.");
   const offlineYouTubeDetail = page.render({
     selectedItemId: searchedIds[1],
     online: false,
@@ -433,6 +454,12 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       !afterFailedReplacement.includes("Counterpoint course library"),
     "A failed replacement must preserve the last successful controls and results.",
   );
+  const requestsBeforeReopen = centralSearchRequests;
+  const reopened = createDiscoveryPage(dependencies);
+  await reopened.load();
+  const reopenedHtml = reopened.render({ selectedItemId: null, online: true });
+  assert(centralSearchRequests === requestsBeforeReopen && !reopenedHtml.includes("data-discovery-item-id") && reopenedHtml.includes('data-discovery-state="never-run"') && reopenedHtml.includes('value=""'), "Reopening with the same saved data clears session results and query without issuing a search.");
+
 });
 
 Deno.test("Central search requires YouTube consent only when YouTube is selected", async () => {
@@ -495,6 +522,8 @@ Deno.test("Central search requires YouTube consent only when YouTube is selected
     rerender: () => {},
   });
   await page.load();
+  const initial = page.render({ selectedItemId: null, online: true });
+  assert(!/value="youtube"[^>]*checked/.test(initial) && !initial.includes("I accept the"), "YouTube must require an explicit checkbox selection, with no initial policy text.");
   const blocked = await page.search({
     query: "harmony",
     providerIds: ["youtube"],
@@ -566,6 +595,7 @@ Deno.test("Discovery controller ignores stale central search completions", async
 Deno.test("Discovery source actions recover after a transient catalog failure", async () => {
   const storage = new MemoryPersistence();
   let browseCalls = 0;
+  let recoveryId = 0;
   const page = createDiscoveryPage({
     ownerId: "owner-a",
     persistence: {
@@ -584,6 +614,7 @@ Deno.test("Discovery source actions recover after a transient catalog failure", 
           enabled: true,
         }] });
       }
+      if (path === "/api/discovery/search") return Response.json(starterSearchResult());
       if (path === "/api/source-library" && request.method === "GET") {
         browseCalls += 1;
         return browseCalls === 1
@@ -611,7 +642,7 @@ Deno.test("Discovery source actions recover after a transient catalog failure", 
     starterInventory: STARTERS,
     markup: MARKUP,
     escapeHtml: (value) => value,
-    createId: () => `recovery-${browseCalls}`,
+    createId: () => `recovery-${++recoveryId}`,
     now: () => "2026-07-28T08:00:00.000Z",
     onNotice: () => {},
     onError: () => {},
@@ -620,12 +651,14 @@ Deno.test("Discovery source actions recover after a transient catalog failure", 
     rerender: () => {},
   });
   await page.load();
+  const searched = await page.search({ query: "starter-sources", providerIds: ["web"], limit: 10 });
+  assert(searched.ok, "Recovery fixture must submit a search.");
   const list = page.render({ selectedItemId: null, online: true });
   const selectedItemId = list.match(/data-discovery-item-id="([^"]+)"/)?.[1] ??
     null;
   assert(
     selectedItemId !== null,
-    "Recovery fixture must expose a starter result.",
+    "Recovery fixture must expose a searched result.",
   );
   assert(
     page.render({ selectedItemId, online: true }).includes(

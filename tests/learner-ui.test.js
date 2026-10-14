@@ -195,3 +195,12 @@ Deno.test("Feed completion is not triggered by an intersection observer", async 
   assert(!source.includes("IntersectionObserver"), "Feed completion must remain an explicit learner action.");
   assert(source.includes("data-action='complete-learner-feed'"), "Feed must retain its explicit completion action.");
 });
+
+Deno.test("Empty Feed and Review offer artwork and a next action without invented learning content", async () => {
+  const controller = createLearnerController({ fetch: async () => response({ result: { batch: null, items: [], questions: [], dueCount: 0 } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-10-14T00:00:00.000Z", createId: () => "empty", onChange: () => {} });
+  await controller.loadFeed();
+  await controller.loadReview();
+  const feed = controller.renderFeed(), review = controller.renderReview();
+  assert(feed.includes("empty-states.svg#library") && feed.includes('href="#discover"') && !feed.includes('data-knowledge-id'), "Empty Feed guides discovery without sample cards.");
+  assert(review.includes("empty-states.svg#review") && review.includes('href="#feed"') && !review.includes('data-question-id'), "Empty Review guides study without sample questions.");
+});

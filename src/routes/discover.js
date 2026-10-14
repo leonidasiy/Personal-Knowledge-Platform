@@ -2,7 +2,7 @@
 
 /** @typedef {"never-run" | "loading" | "partial" | "error" | "offline" | "empty" | "success"} DiscoverRouteState */
 /** @typedef {"link-only" | "learner-notes" | "publisher-transcript" | "user-original"} DiscoverEvidenceStatus */
-/** @typedef {{readonly exploreUnavailable:string,readonly exploreLink:string,readonly provider:string,readonly podcast:string,readonly extractionUnavailable:string,readonly decisionUnavailable:string,readonly offlineNotice:string,readonly stateNotice:string,readonly youtubeNotice:string,readonly workspace:string,readonly neverRunState:string,readonly loadingState:string,readonly emptyState:string,readonly errorState:string,readonly offlineState:string,readonly partialState:string,readonly route:string,readonly controls:string,readonly missingDetail:string,readonly selectDetail:string,readonly evidenceBoundary:string,readonly statePanel:string,readonly results:string,readonly resultRow:string,readonly youtubeConnected:string,readonly youtubeDisconnected:string,readonly youtubeUnavailable:string,readonly failureMessages:Readonly<Record<string,string>>,readonly youtubeSource:import("../startup/discovery-runtime.js").YouTubeSourceContract,readonly sourceUnavailable:string,readonly sourceLink:string,readonly detail:string,readonly youtubePolicy:string,readonly manualUpload:string,readonly decisionActions:string,readonly sourceAreaRequired:string,readonly sourceAlreadyAdded:string,readonly sourceAdded:string,readonly uploadRequired:string,readonly uploadReadFailed:string,readonly uploadStoreFailed:string,readonly uploadStored:string,readonly sourceRejected:string,readonly enterDiscoveryValue:string,readonly sourceReconnect:string,readonly sourceSignIn:string,readonly sourceAreaMissing:string,readonly sourceDecisionFailed:string}} DiscoverMarkup */
+/** @typedef {{readonly exploreUnavailable:string,readonly exploreLink:string,readonly provider:string,readonly podcast:string,readonly extractionUnavailable:string,readonly decisionUnavailable:string,readonly offlineNotice:string,readonly stateNotice:string,readonly youtubeNotice:string,readonly workspace:string,readonly neverRunState:string,readonly loadingState:string,readonly emptyState:string,readonly errorState:string,readonly offlineState:string,readonly partialState:string,readonly route:string,readonly controls:string,readonly missingDetail:string,readonly selectDetail:string,readonly evidenceBoundary:string,readonly statePanel:string,readonly results:string,readonly resultRow:string,readonly youtubeConnected:string,readonly youtubeDisconnected:string,readonly youtubeUnavailable:string,readonly failureMessages:Readonly<Record<string,string>>,readonly youtubeSource:import("../startup/discovery-runtime.js").YouTubeSourceContract,readonly sourceUnavailable:string,readonly sourceLink:string,readonly detail:string,readonly youtubePolicy:string,readonly youtubeActions:string,readonly youtubeTranscriptGuidance:string,readonly manualUploadGuidance:string,readonly manualUpload:string,readonly decisionActions:string,readonly sourceAreaRequired:string,readonly sourceAlreadyAdded:string,readonly sourceAdded:string,readonly uploadRequired:string,readonly uploadReadFailed:string,readonly uploadStoreFailed:string,readonly uploadStored:string,readonly sourceRejected:string,readonly enterDiscoveryValue:string,readonly sourceReconnect:string,readonly sourceSignIn:string,readonly sourceAreaMissing:string,readonly sourceDecisionFailed:string}} DiscoverMarkup */
 
 /**
  * @typedef {{
@@ -115,9 +115,7 @@ function renderDiscoveryControls(model) {
     providerFilters: providers,
     limitOptions: limits,
   });
-  return controls + (model.search.selectedProviderIds.includes("youtube")
-    ? model.markup.youtubeNotice
-    : "");
+  return controls;
 }
 
 /** @param {DiscoverRouteModel} model */
@@ -218,8 +216,14 @@ function renderDecisionActions(model, item, offline) {
   const manualUpload = template(model, "manualUpload", {
     itemId: remoteText(model, item.id),
     submitDisabled: pending ? "disabled" : "",
+    label: item.youtubeWatchUrl !== null ? "Upload video transcript" : "Provide permitted learning material",
   });
-  return youtubePolicy + template(model, "decisionActions", {
+  if (item.youtubeWatchUrl !== null) return youtubePolicy + template(model, "youtubeActions", {
+    upload: manualUpload,
+    itemId: remoteText(model, item.id),
+    rejectDisabled: unavailable ? "disabled" : "",
+  });
+  return template(model, "decisionActions", {
     itemId: remoteText(model, item.id),
     sourceGranularity: remoteText(model, item.candidate.adapter.granularity),
     sourceCapabilities: remoteText(model, item.candidate.adapter.capabilities.join(",")),

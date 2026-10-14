@@ -340,11 +340,9 @@ Deno.test("Discovery exposes only source approval and rejection without learning
   assert(
     html.includes('aria-label="Source action"') &&
       html.includes("Watch on YouTube") &&
-      html.includes("Extract Knowledge Points") &&
-      html.includes('data-source-granularity="individual-video"') &&
-      html.includes('data-source-capabilities="metadata,manual-transcript"') &&
-      html.includes("data-discovery-reject") &&
-      html.includes("Interest area"),
+      html.includes("Upload video transcript") &&
+      !html.includes("data-discovery-approve") &&
+      html.includes("data-discovery-reject"),
     "The attributed source and the two approved Library decisions must remain available.",
   );
   assert(
@@ -363,6 +361,7 @@ Deno.test("Discovery exposes only source approval and rejection without learning
 Deno.test("Discover renders the actual feed approval contract with metadata-only capabilities", () => {
   const feedCandidate = item({
     id: "feed-observed-1",
+    youtubeWatchUrl: null,
     candidate: Object.freeze({
       ...item().candidate,
       adapter: Object.freeze({
@@ -521,12 +520,11 @@ Deno.test("Explore is unavailable offline while detail and provenance remain acc
   assert(html.includes('href="#discover/item/observed-item-1"'), "Retain cached details.");
 });
 
-Deno.test("raw Discover explains unreviewed results and disables unsupported extraction while retaining Explore", () => {
+Deno.test("raw Discover routes YouTube processing to transcript upload while retaining Explore", () => {
   const sample=item();
   const html=renderDiscoverRoute(model("success",[sample],{page:"detail",selectedItemId:sample.id}));
   assert(html.includes("Unreviewed provider results"),"Explicit unreviewed notice");
-  assert(html.includes("Extract Knowledge Points"),"Explicit extraction action");
-  assert(/disabled[^>]*>Extract Knowledge Points/.test(html),"Video extraction unavailable");
-  assert(html.includes("Extraction is unavailable for this format"),"Unsupported format explanation");
+  assert(html.includes("Upload video transcript") && html.includes("data-discovery-open-upload"), "Explicit transcript upload action");
+  assert(!html.includes("data-discovery-approve"), "YouTube processing cannot start automatic extraction");
   assert(html.includes('target="_blank"'),"Safe Explore retained");
 });

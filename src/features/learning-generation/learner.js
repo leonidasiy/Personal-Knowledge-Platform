@@ -173,10 +173,10 @@ export function createLearnerController(dependencies) {
   }
 
   function renderFeedBody() {
-    if (feed.state === "loading" && feed.value === null) return `<section class="wide-view state-panel" role="status" aria-busy="true"><p class="eyebrow">Feed</p><h2>Preparing today's five knowledge cards</h2><p>Matching paired source knowledge and media.</p></section>`;
+    if (feed.state === "loading" && feed.value === null) return feedMarkup(3);
     if (feed.state === "error" && feed.value === null) return statePanel("Feed", friendly(feed.error), "retry-learner-feed", "h2");
     const value = feed.value;
-    if (value === null || value.batch === null || value.items.length === 0) return `<section class="wide-view state-panel" aria-labelledby="feed-title"><p class="eyebrow">Feed</p><h2 id="feed-title">No complete learning batch yet</h2><p>Five paired knowledge cards are required before Feed can open a batch.</p><button class="button primary" type="button" data-action="retry-learner-feed">Refresh</button></section>`;
+    if (value === null || value.batch === null || value.items.length === 0) return feedMarkup(1);
     const complete = value.batch.status === "completed";
     return `<section class="feed-column learner-feed" aria-labelledby="feed-title">${classificationMessage === "" ? "" : `<p role="status">${escapeHtml(classificationMessage)}</p>`}<div class="feed-stack">${value.items.map(renderCard).join("")}</div><div class="learner-feed-sentinel" data-learner-feed-sentinel><div><h2>${complete ? "Ready to bring it back?" : "A natural place to pause."}</h2><p role="status">${complete ? "Batch studied. Paired questions are unlocked in Review." : "When you’ve studied all five ideas, mark this batch studied to unlock its questions."}</p></div><div class="hero-actions">${complete ? `<button class="button primary" type="button" data-view="review">Open Review</button>` : `<button class="button primary" type="button" data-action="complete-learner-feed">Mark batch studied</button>`}<button class="button quiet" type="button" data-view="progress">Explore your progress</button></div></div>${feed.state === "error" ? `<p class="state-inline" role="alert">${escapeHtml(friendly(feed.error))}</p>` : ""}</section>`;
   }
@@ -207,10 +207,10 @@ export function createLearnerController(dependencies) {
   }
 
   function renderReview() {
-    if (review.state === "loading" && review.value === null) return `<section class="wide-view state-panel" role="status" aria-busy="true"><p class="eyebrow">Review</p><h1>Preparing today's questions</h1></section>`;
+    if (review.state === "loading" && review.value === null) return feedMarkup(4);
     if (review.state === "error" && review.value === null) return statePanel("Review", friendly(review.error), "retry-learner-review");
     const value = review.value;
-    if (value === null || value.questions.length === 0) return `<section class="wide-view state-panel" aria-labelledby="review-title"><p class="eyebrow">Review</p><h1 id="review-title">No questions are due</h1><p>Questions unlock after a Feed batch is studied and return according to their review interval.</p><button class="button secondary" type="button" data-action="refresh-learner-review">Refresh questions</button></section>`;
+    if (value === null || value.questions.length === 0) return feedMarkup(2);
     const complete = value.batch?.status === "completed" || [...answers.keys()].filter((id) => value.questions.some((question) => question.questionId === id)).length === value.questions.length;
     return `<section class="review-route wide-view" aria-labelledby="review-title"><div class="section-heading"><div><p class="eyebrow">Due batch · ${value.questions.length} question${value.questions.length === 1 ? "" : "s"}</p><h1 id="review-title">Meet an idea again.</h1><p>Bring it back before you look. Then let the feedback guide your next attempt.</p></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-review">Refresh questions</button>` : `<p class="batch-lock-status">Answer every question before refreshing</p>`}</div>${review.error === null ? "" : `<p class="state-inline" role="alert">${escapeHtml(friendly(review.error))}</p>`}<div class="review-question-list">${value.questions.map(renderQuestion).join("")}</div></section>`;
   }
@@ -235,7 +235,7 @@ export function createLearnerController(dependencies) {
   }
 
   /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */
-  function statePanel(title, message, action, heading = "h1") { return `<section class="wide-view state-panel" role="alert"><p class="eyebrow">${escapeHtml(title)}</p><${heading}>${escapeHtml(message)}</${heading}><button class="button primary" type="button" data-action="${action}">Try again</button></section>`; }
+  function statePanel(title, message, action, heading = "h1") { return feedMarkup(5, escapeHtml(title), heading, escapeHtml(message), heading, action); }
 
   /** @param {HTMLElement} root */
   function bind(root) {

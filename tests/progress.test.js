@@ -1,4 +1,8 @@
 // @ts-check
+const shell = Deno.readTextFileSync("index.html");
+Object.defineProperty(globalThis, "document", { configurable: true, value: {
+  getElementById: (/** @type {string} */ id) => ({ textContent: shell.match(new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`))?.[1] ?? "" }),
+} });
 import { buildProgress, isProgressSummary } from "../src/features/progress/public.js";
 import { createProgressPage } from "../src/features/progress/page.js";
 
@@ -23,7 +27,7 @@ Deno.test("empty progress replaces unused plots with guidance and keeps real act
   const result = buildProgress(input({ attempts: [] })); if (!result.ok) throw new Error("fixture invalid");
   const page = createProgressPage({ fetch: async () => new Response(JSON.stringify({ result: result.value })), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
   await page.load(); const html = page.render();
-  assert(html.includes('href="#review">Start reviewing'), "Review action");
+  assert(html.includes('href="#review">Start reviewing') && html.includes("empty-states.svg#progress"), "Review action and decorative empty-state art");
   assert(!html.includes('aria-label="Daily accuracy chart"') && html.includes('aria-label="Activity calendar chart"'), "no blank accuracy canvas; activity remains");
   assert(html.includes("0/0 attempts") && html.includes("Unavailable") && html.includes("Daily accuracy data table"), "honest empty metrics and accessible table");
 });
