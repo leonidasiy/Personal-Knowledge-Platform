@@ -516,6 +516,18 @@ export function createLearningBatchService(dependencies) {
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
   async function removeKnowledge(command) {
     if (!record(command) || !text(command.ownerId) || !text(command.knowledgeId) || !text(command.idempotencyKey)) return { ok: false, error: { kind: "KnowledgePurgeFailed" } };
+    if (command.target !== undefined && command.target !== "image" && command.target !== "knowledge") return { ok: false, error: { kind: "LearningBatchCommandInvalid" } };
+    if (command.target === "image") {
+      try {
+        const owned = await database.prepare("SELECT source_id FROM extraction_knowledge_points WHERE owner_id = ? AND knowledge_id = ? LIMIT 1").bind(command.ownerId, command.knowledgeId).first();
+        if (!record(owned) || !text(owned.source_id)) return { ok: false, error: { kind: "KnowledgePairNotFound" } };
+        const result = await database.prepare("UPDATE knowledge_workflow_media_assets SET revoked_at = ? WHERE owner_id = ? AND knowledge_id = ? AND revoked_at IS NULL").bind(dependencies.now(), command.ownerId, command.knowledgeId).run();
+        return result.success ? { ok: true, value: { knowledgeId: command.knowledgeId, imageRemoved: true } } : { ok: false, error: { kind: "KnowledgePurgeFailed" } };
+      } catch {
+        dependencies.logger({ event: "learning-knowledge-image-remove-failure", ownerId: command.ownerId, knowledgeId: command.knowledgeId, failureKind: "KnowledgePurgeFailed" });
+        return { ok: false, error: { kind: "KnowledgePurgeFailed" } };
+      }
+    }
     const media = await database.prepare("SELECT private_original_key, private_object_key FROM knowledge_workflow_media_assets a LEFT JOIN knowledge_workflow_media_derivatives d ON d.owner_id = a.owner_id AND d.asset_id = a.asset_id WHERE a.owner_id = ? AND a.knowledge_id = ?").bind(command.ownerId, command.knowledgeId).all();
     if (!media.success) return { ok: false, error: { kind: "KnowledgePurgeFailed" } };
     if (dependencies.bucket !== null && dependencies.bucket !== undefined) {

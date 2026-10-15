@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFile,readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { D1KnowledgeMediaRepository } from '../worker/knowledge-workflow-media-d1.js';
+import { createLearningBatchService } from '../worker/learning-batches-d1.js';
 const hash=b=>'sha256:'+createHash('sha256').update(b).digest('hex');
 for (const purpose of [undefined, 'evidence', 'illustration']) test(`actual migrated SQLite retains ${purpose ?? 'legacy evidence'} purpose and verifies binding/object integrity`,async()=>{
  const db=new DatabaseSync(':memory:');
@@ -38,5 +39,22 @@ for (const purpose of [undefined, 'evidence', 'illustration']) test(`actual migr
  const corrupt=bytes.slice();corrupt[corrupt.length-1]^=1;objects.set('derivative',corrupt);
  const changed=await repo.read({ownerId:'owner',assetId:'asset',variant:'feed'});assert.equal(changed.ok,false);assert.equal(changed.error.kind,'MediaIntegrityMismatch');
  assert.equal(db.prepare('SELECT point_json FROM extraction_knowledge_points').get().point_json,JSON.stringify(point));
+ objects.set('derivative',bytes);
+ db.prepare('INSERT INTO knowledge_workflow_quizzes VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run('owner','quiz','run','fact','source',1,'quiz-hash','{"prompt":"Preserve this quiz"}',9,1,'published','now');
+ const snapshot=()=>Object.fromEntries(['extraction_knowledge_points','knowledge_workflow_quizzes','learner_feed_batches','learner_review_batches','learner_knowledge_state'].map(table=>[table,db.prepare(`SELECT * FROM ${table}`).all()]));
+ const before=snapshot(), originals=objects.size;
+ const service=createLearningBatchService({database,bucket,now:()=> '2026-10-15T04:00:00.000Z',logger:()=>{}});
+ const command={ownerId:'owner',knowledgeId:'fact',idempotencyKey:'image-remove',target:'image'};
+ assert.equal((await service.removeKnowledge({...command,target:'invalid'})).ok,false);
+ assert.equal((await service.removeKnowledge({...command,ownerId:'foreign'})).ok,false);
+ const failing=createLearningBatchService({database:{...database,prepare(sql){if(sql.startsWith('UPDATE knowledge_workflow_media_assets'))return {bind(){return this;},run:async()=>{throw new Error('Storage unavailable');}};return database.prepare(sql);}},bucket,now:()=> '2026-10-15T04:00:00.000Z',logger:()=>{}});
+ assert.equal((await failing.removeKnowledge(command)).error.kind,'KnowledgePurgeFailed');
+ assert.equal(db.prepare('SELECT revoked_at FROM knowledge_workflow_media_assets').get().revoked_at,null);
+ assert.equal((await service.removeKnowledge(command)).ok,true);
+ assert.equal((await service.removeKnowledge(command)).ok,true,'retrying removal is safe');
+ assert.deepEqual(snapshot(),before,'image-only removal preserves knowledge, quizzes and learning state');
+ assert.equal(objects.size,originals,'detaching does not delete source material');
+ assert.equal((await repo.read({ownerId:'owner',assetId:'asset',variant:'feed'})).value.revoked,true);
+ assert.equal((await repo.readOriginal({ownerId:'owner',runId:'run',knowledgeId:'fact',sourceRevision:1})).value,null);
  }finally{db.close();}
 });

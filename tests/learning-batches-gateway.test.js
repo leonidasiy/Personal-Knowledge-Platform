@@ -183,6 +183,8 @@ Deno.test("learner gateway sends bounded completion, answer, preference, and del
   assertEquals(bodies.length, 2);
   assertEquals((await gateway.setPreference("k1", "more", "id-more")).ok, true);
   assertEquals((await gateway.removeKnowledge("k1", "id-remove")).ok, true);
+  assertEquals((await gateway.removeKnowledge("k1", "id-image-remove", "image")).ok, true);
+  assertEquals(/** @type {Record<string,unknown>} */ (bodies.at(-1)).target, "image");
   assertEquals(methods.every((method) => method === "POST"), true);
   assertEquals(bodies.every((body) => typeof body === "object" && body !== null && !Object.hasOwn(/** @type {Record<string, unknown>} */ (body), "ownerId")), true);
 });

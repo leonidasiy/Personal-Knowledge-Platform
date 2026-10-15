@@ -179,8 +179,8 @@ export class LearningBatchGatewayClient {
   }
   /** @param {string} knowledgeId @param {"more" | "less"} choice @param {string} idempotencyKey @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */
   async setPreference(knowledgeId, choice, idempotencyKey) { return this.#command("api/learning-generation/knowledge-preference", { knowledgeId, choice, idempotencyKey }); }
-  /** @param {string} knowledgeId @param {string} idempotencyKey @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */
-  async removeKnowledge(knowledgeId, idempotencyKey) { return this.#command("api/learning-generation/knowledge-remove", { knowledgeId, idempotencyKey }); }
+  /** @param {string} knowledgeId @param {string} idempotencyKey @param {"image"|"knowledge"} [target] @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */
+  async removeKnowledge(knowledgeId, idempotencyKey, target) { return this.#command("api/learning-generation/knowledge-remove", { knowledgeId, idempotencyKey, target }); }
 
   /** @param {{ readonly sourceId: string, readonly sourceRevision: number, readonly expectedRevision: number, readonly mainSubject: string, readonly topic: string }} command @returns {Promise<Result<true, LearningBatchGatewayFailure>>} */
   async updateSourceClassification(command) {

@@ -174,11 +174,21 @@ export function createLearnerController(dependencies) {
   /** @param {HTMLElement} button */
   async function removeKnowledge(button) {
     const knowledgeId = button.dataset.knowledgeId ?? "";
-    if (knowledgeId === "") return;
-    const result = await gateway.removeKnowledge(knowledgeId, `knowledge-remove:${knowledgeId}:${createId()}`);
+    const target = button.dataset.removeTarget;
+    if (knowledgeId === "" || (target !== "image" && target !== "knowledge")) return;
+    const key = `remove:${knowledgeId}`;
+    if (!begin(key)) return;
+    const result = await gateway.removeKnowledge(knowledgeId, `knowledge-remove:${knowledgeId}:${createId()}`, target);
+    pending.delete(key);
     if (!result.ok) {
       feed = { state: "error", value: feed.value, error: result.error };
-      onChange();
+      onChange(undefined, key);
+      return;
+    }
+    if (target === "image" && feed.value) {
+      feed = { state: "success", error: null, value: { ...feed.value, items: feed.value.items.map(card => card.knowledgeId === knowledgeId ? { ...card, media: null } : card) } };
+      onChange(undefined, key);
+      onChange("Image removed. Knowledge point and quizzes kept.");
       return;
     }
     await Promise.all([loadFeed(), loadReview()]);
@@ -223,8 +233,11 @@ export function createLearnerController(dependencies) {
     const presentation = subjectPresentation(classification?.mainSubject ?? null);
     const subject = presentation === null ? "" : ` data-subject="${escapeHtml(classification?.mainSubject ?? "")}"`;
     const mark = presentation === null ? "" : `<svg class="subject-mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="${presentation.path}"/></svg>`;
-    const media = card.media === null || card.media.url.startsWith("/assets/fallback-media/") ? "" : `<figure class="card-media"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true"><figcaption class="media-attribution">${card.media.purpose === "illustration" ? "Illustration — facts are supported by the source text<br>" : ""}${escapeHtml(card.media.attribution)}</figcaption></figure>`;
-    return `<article class="learning-card"${subject} data-reveal="knowledge:${escapeHtml(card.knowledgeId)}" data-knowledge-id="${escapeHtml(card.knowledgeId)}"><div class="card-body"><p class="card-knowledge">${escapeHtml(card.summary)}</p>${media}<h3 class="card-source"><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">${escapeHtml(card.title)}</a></h3><p class="card-subject">${mark}${escapeHtml(presentation?.label ?? "Unclassified")}</p>${classification ? `<p>${escapeHtml(classification.topic)}</p>` : ""}<div class="card-context">${classificationEditor(card)}<details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details></div><div class="preference-controls"><button class="button preference-more ${preferences.get(card.knowledgeId) === "more" ? "spark-saved" : ""}" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:more`)}>${actionLabel(`preference:${card.knowledgeId}:more`, `${sparkIcon()}${preferences.get(card.knowledgeId) === "more" ? "Preference saved" : "More like this"}`, "Saving…")}</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:less`)}>${actionLabel(`preference:${card.knowledgeId}:less`, preferences.get(card.knowledgeId) === "less" ? "Preference saved" : "Less like this", "Saving…")}</button><button class="button quiet" type="button" data-action="remove-learner-knowledge" data-knowledge-id="${escapeHtml(card.knowledgeId)}">Remove</button></div></div></article>`;
+    const hasImage = card.media !== null && !card.media.url.startsWith("/assets/fallback-media/");
+    const media = !hasImage || card.media === null ? "" : `<figure class="card-media"><button class="image-zoom" type="button" data-image-zoom aria-label="Enlarge image"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6m-3-3v6"/></svg></button></figure>`;
+    const key = `remove:${card.knowledgeId}`;
+    const removal = `<details class="card-remove" data-library-details-key="${escapeHtml(key)}" ${pending.has(key) ? "open" : ""}><summary class="button quiet" data-focus-key="${escapeHtml(key)}">Remove ▾</summary><div class="removal-actions">${[["image", "Image only"], ["knowledge", "Knowledge point"]].map(([target, label]) => `<button class="button secondary" type="button" data-action="remove-learner-knowledge" data-remove-target="${target}" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${pending.has(key) || target === "image" && !hasImage ? "disabled" : ""}>${pending.has(key) ? "Removing…" : label}</button>`).join("")}</div></details>`;
+    return `<article class="learning-card"${subject} data-reveal="knowledge:${escapeHtml(card.knowledgeId)}" data-knowledge-id="${escapeHtml(card.knowledgeId)}"><div class="card-body"><p class="card-knowledge">${escapeHtml(card.summary)}</p>${media}<h3 class="card-source"><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">${escapeHtml(card.title)}</a></h3><p class="card-subject">${mark}${escapeHtml(presentation?.label ?? "Unclassified")}</p>${classification ? `<p>${escapeHtml(classification.topic)}</p>` : ""}<div class="card-context">${classificationEditor(card)}<details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(card.sourceUrl)}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details></div><div class="preference-controls"><button class="button preference-more ${preferences.get(card.knowledgeId) === "more" ? "spark-saved" : ""}" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:more`)}>${actionLabel(`preference:${card.knowledgeId}:more`, `${sparkIcon()}${preferences.get(card.knowledgeId) === "more" ? "Preference saved" : "More like this"}`, "Saving…")}</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:less`)}>${actionLabel(`preference:${card.knowledgeId}:less`, preferences.get(card.knowledgeId) === "less" ? "Preference saved" : "Less like this", "Saving…")}</button>${removal}</div></div></article>`;
   }
 
   /** @param {LearningKnowledgeCard} card */
@@ -292,6 +305,25 @@ export function createLearnerController(dependencies) {
     root.querySelector("[data-action='refresh-learner-review']")?.addEventListener("click", () => void refreshReview());
     root.querySelectorAll("[data-action='learner-preference']").forEach((element) => element.addEventListener("click", () => { if (element instanceof HTMLElement) void preference(element); }));
     root.querySelectorAll("[data-action='remove-learner-knowledge']").forEach((element) => element.addEventListener("click", () => { if (element instanceof HTMLElement) void removeKnowledge(element); }));
+    root.querySelectorAll("[data-image-zoom]").forEach(button => button.addEventListener("click", () => {
+      const source = button.querySelector("img");
+      if (!(source instanceof HTMLImageElement)) return;
+      const dialog = document.createElement("dialog");
+      dialog.className = "image-viewer";
+      dialog.setAttribute("aria-label", "Image detail");
+      dialog.innerHTML = `<form method="dialog" class="hero-actions"><button class="button secondary" type="button" data-zoom-toggle aria-pressed="false">Zoom in</button><button class="button primary">Close</button></form><div class="image-view"><img src="${escapeHtml(source.src)}" alt="${escapeHtml(source.alt)}"></div>`;
+      dialog.querySelector("[data-zoom-toggle]")?.addEventListener("click", event => {
+        const zoomed = dialog.classList.toggle("is-zoomed");
+        if (event.currentTarget instanceof HTMLElement) {
+          event.currentTarget.textContent = zoomed ? "Zoom out" : "Zoom in";
+          event.currentTarget.setAttribute("aria-pressed", String(zoomed));
+        }
+      });
+      dialog.addEventListener("close", () => dialog.remove());
+      dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close(); });
+      root.append(dialog);
+      dialog.showModal();
+    }));
     root.querySelectorAll("img[data-associated-media]").forEach((element) => element.addEventListener("error", () => { element.closest(".card-media")?.remove(); }));
     root.querySelectorAll("[data-learner-review]").forEach((element) => element.addEventListener("submit", (event) => { event.preventDefault(); if (event.currentTarget instanceof HTMLFormElement) void answerReview(event.currentTarget); }));
   }

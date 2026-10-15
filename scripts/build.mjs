@@ -16,16 +16,16 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   }),
   aggregateJavascript: Object.freeze({
     label: "Aggregate JavaScript",
-    // Measured Bright Spark / URL capture allowance approved 2026-10-15.
+    // Measured image controls / Bright Spark allowance approved 2026-10-15.
     // Initial and lazy-chunk limits remain unchanged.
-    rawBytes: 230_099,
-    gzipBytes: 76_027,
+    rawBytes: 231_823,
+    gzipBytes: 76_578,
   }),
   stylesheet: Object.freeze({
     label: "CSS",
-    // Bright Spark: measured owner-approved CSS allowance 2026-10-15.
-    rawBytes: 41_164,
-    gzipBytes: 8_966,
+    // Image controls: measured owner-approved CSS allowance 2026-10-15.
+    rawBytes: 41_942,
+    gzipBytes: 9_136,
   }),
   pdfRenderer: Object.freeze({
     label: "On-demand PDF renderer",

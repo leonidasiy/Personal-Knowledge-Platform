@@ -205,7 +205,15 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .card-subject .subject-mark { width: 32px; height: 32px; flex: 0 0 32px; }
 .card-media { margin: 0 0 32px; overflow: hidden; }
 .card-media img { display: block; width: 100%; max-height: 360px; object-fit: contain; }
-.media-attribution { padding-top: 8px; color: var(--text-muted); font-size: 13px; }
+.image-zoom { position: relative; display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.image-zoom svg { position: absolute; right: 12px; bottom: 12px; width: 44px; height: 44px; padding: 10px; border-radius: 50%; background: var(--surface); fill: none; stroke: var(--action); stroke-width: 2; opacity: 0; }
+.image-zoom:hover svg, .image-zoom:focus-visible svg { opacity: 1; }
+@media (hover: none) { .image-zoom svg { opacity: 1; } }
+.image-viewer { width: 94vw; max-width: 1100px; padding: 16px; border: 1px solid var(--border); border-radius: var(--control-radius); color: var(--text); background: var(--surface); }
+.image-viewer::backdrop { background: var(--overlay-shadow); }
+.image-view { max-height: 75vh; overflow: auto; margin-top: 16px; }
+.image-view img { display: block; max-width: 100%; max-height: 75vh; margin: auto; }
+.is-zoomed .image-view img { width: 200%; max-width: none; max-height: none; }
 .source-details { margin: 16px 0; border-block: 1px solid var(--border); }
 .source-details summary { font-size: 14px; color: var(--text-muted); }
 .card-context { border-block: 1px solid var(--border); padding-block: 12px; margin-bottom: 24px; }
@@ -213,7 +221,8 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .card-context summary { font-size: 15px; }
 .source-details p { font-size: 12px; }
 .preference-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-.preference-controls [data-action="remove-learner-knowledge"] { margin-left: auto; }
+.card-remove { margin-left: auto; }
+.removal-actions { display: grid; gap: 8px; }
 .preference-controls .button { min-height: 52px; padding: 12px 22px; font-size: 16px; }
 .batch-lock-status, .learner-feed-sentinel p { color: var(--text-muted); font-size: 14px; line-height: 1.6; }
 .batch-lock-status { max-width: 180px; margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--control-radius); }

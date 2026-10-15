@@ -66,11 +66,13 @@ Deno.test("Feed renders an associated source image without an unrelated fallback
   const html = controller.renderFeed();
   assert(html.includes("data-associated-media=\"true\""), "Associated source media must render.");
   assert(!html.includes("data-fallback-src"), "Unrelated fallback must never be declared.");
-  assert(html.includes("Source page diagram"), "Media attribution must remain visible.");
+  assert(html.includes('alt="Source page diagram"') && !html.includes("<figcaption"), "Images keep accessible attribution without the removed supportive caption.");
+  assert(html.includes('data-image-zoom') && html.includes('aria-label="Enlarge image"'), "Associated images offer a keyboard accessible larger view.");
+  assert(html.includes('data-remove-target="image"') && html.includes('data-remove-target="knowledge"') && html.includes('<summary class="button quiet"'), "Remove expands into image-only and knowledge-point choices.");
   assert(html.indexOf('card-knowledge') < html.indexOf('card-media') && html.indexOf('card-media') < html.indexOf('card-source'), "Associated media must support the knowledge before its source, not lead the page.");
 });
 
-Deno.test("Feed labels source illustrations without presenting them as evidence", async () => {
+Deno.test("Feed keeps associated image attribution accessible without supportive captions", async () => {
   for (const purpose of [undefined, "evidence", "illustration"]) {
     const media = { assetId: "media-1", kind: "image", url: "/api/learning-media?assetId=media-1&variant=feed", attribution: "Source page image", ...(purpose === undefined ? {} : { purpose }) };
     const card = { knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A text-supported relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media, questionLocked: true };
@@ -78,8 +80,8 @@ Deno.test("Feed labels source illustrations without presenting them as evidence"
     await controller.loadFeed();
     const html = controller.renderFeed();
     assert(html.includes('data-associated-media="true"'), "Approved source images remain visible.");
-    assert(html.includes("Source page image"), "Attribution remains visible.");
-    assert(html.includes("Illustration — facts are supported by the source text") === (purpose === "illustration"), "Only illustration bindings receive the explicit caption.");
+    assert(html.includes('alt="Source page image"') && html.includes('class="card-source"'), "Accessible attribution and the source link remain available.");
+    assert(!html.includes("<figcaption") && !html.includes("Illustration — facts are supported by the source text"), "Supportive captions are removed for all image purposes.");
   }
 });
 
