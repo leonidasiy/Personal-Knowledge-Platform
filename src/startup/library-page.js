@@ -187,10 +187,6 @@ export function createLibraryPage(dependencies) {
     if (
       typeof rawQuery !== "string"
     ) return;
-    const priorQuery = query;
-    const priorSearchScope = searchScope;
-    const priorItems = items;
-    const priorKnowledgeSearchResults = knowledgeSearchResults;
     query = rawQuery.trim();
     const rawScope = data.get("searchScope");
     searchScope = rawScope === "sources" ? "sources" : "knowledge";
@@ -209,11 +205,7 @@ export function createLibraryPage(dependencies) {
         externalProcessingAllowed,
       });
       if (!result.ok) {
-        query = priorQuery;
-        searchScope = priorSearchScope;
-        items = priorItems;
-        knowledgeSearchResults = priorKnowledgeSearchResults;
-        return setFailure(result.error, items.length > 0);
+        return setFailure(result.error);
       }
       if (searchScope === "knowledge") {
         knowledgeSearchResults = result.value.map((hit) => {
@@ -701,7 +693,10 @@ export function createLibraryPage(dependencies) {
     );
     root.querySelector("[data-library-retry]")?.addEventListener(
       "click",
-      () => void load(true),
+      () => {
+        const form = root.querySelector("[data-library-search]");
+        void (query && form instanceof HTMLFormElement ? search(form) : load(true));
+      },
     );
     root.querySelector("[data-library-load-more]")?.addEventListener(
       "click",

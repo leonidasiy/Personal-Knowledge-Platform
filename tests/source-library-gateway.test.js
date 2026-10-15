@@ -492,3 +492,18 @@ Deno.test("source gateway deadline returns even when injected transport never se
   const client=new SourceLibraryGatewayClient({baseUrl:"https://example.test/",timeoutMs:5,fetch:()=>new Promise(()=>{})});
   const result=await client.browse({limit:1});assertEquals(result.ok,false);if(!result.ok)assertEquals(result.error.kind,"SourceGatewayTimedOut");
 });
+
+Deno.test("knowledge search retains citation fragments while rejecting unsafe URLs", async () => {
+  for (const sourceUrl of ["https://publisher.example/article#section=page-13", "https://publisher.example/article#:~:text=decoder", "https://publisher.example/article", "javascript:alert(1)#section", "http://publisher.example/article#section", "https://user:secret@publisher.example/article#section", "#section=page-13", "not a URL"]) {
+    const result = await gateway(() => Promise.resolve(Response.json({ result: [{ knowledge: { knowledgeId: "k", sourceId: "s", sourceTitle: "Source", summary: "The decoder consists of a stack of identical layers.", sourceUrl, evidenceAnchorIds: ["anchor"], questionLocked: true }, score: 14.03, matchedBy: "exact" }] }))).search({ query: "decoder", scope: "knowledge", mode: "keyword", limit: 50 });
+    if (sourceUrl.startsWith("https://publisher.example/")) {
+      assertEquals(result.ok, true);
+      if (!result.ok) throw new Error(result.error.kind);
+      assertEquals(result.value[0].knowledge.sourceUrl, sourceUrl);
+    } else {
+      assertEquals(result.ok, false);
+      if (result.ok) throw new Error("Unsafe citation accepted");
+      assertEquals(result.error.kind, "SourceGatewayResponseInvalid");
+    }
+  }
+});

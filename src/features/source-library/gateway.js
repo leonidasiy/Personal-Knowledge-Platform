@@ -440,6 +440,7 @@ function parseSource(value) {
 }
 
 /** @param {unknown} value @returns {KnowledgeSearchHit | null} */
+// Knowledge citations may include section fragments; canonical source identities may not.
 function parseKnowledgeSearchHit(value) {
   if (!isRecord(value)) return null;
   const knowledge = value.knowledge;
@@ -452,7 +453,8 @@ function parseKnowledgeSearchHit(value) {
     !isNonEmptyText(knowledge.sourceId) ||
     !isNonEmptyText(knowledge.sourceTitle) ||
     !isNonEmptyText(knowledge.summary) ||
-    !isPublicHttpsUrl(knowledge.sourceUrl) ||
+    !isNonEmptyText(knowledge.sourceUrl) ||
+    !isPublicHttpsUrl(knowledge.sourceUrl.split("#")[0]) ||
     !Array.isArray(knowledge.evidenceAnchorIds) ||
     !knowledge.evidenceAnchorIds.every(isNonEmptyText) ||
     typeof knowledge.questionLocked !== "boolean"

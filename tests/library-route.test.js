@@ -424,8 +424,9 @@ Deno.test("Library offers unchecked external AI search consent and explains its 
   const html = renderLibraryRoute(baseModel());
   const checkbox = html.match(/<input[^>]*name="externalProcessingAllowed"[^>]*>/)?.[0];
   assert(checkbox !== undefined && !checkbox.includes("checked"), "AI processing must be an explicit opt-in.");
-  assert(html.includes("to OpenRouter"), "Search must disclose external processing.");
+  assert(html.includes("with OpenRouter"), "Search must disclose external processing.");
   assert(html.includes("20 candidates"), "Search must disclose its bounded candidate scope.");
+  assert(!html.includes("library-search-help") && !html.includes("Searches exact terms by default"), "The consent line must not be repeated in a second explanation.");
 });
 
 Deno.test("Library search has the approved dedicated search composition and shared select styling", async () => {
@@ -850,7 +851,7 @@ Deno.test("Library uses approved descriptive copy and keeps intake on Upload", (
   assert(html.includes('<h1 id="library-title">Library</h1>'), "Library heading must name the panel.");
   assert(html.includes("Browse saved sources, search extracted knowledge, and check processing status."), "Library subtitle must explain its purpose.");
   assert(!html.includes("data-library-upload"), "Intake belongs on Upload.");
-  assert(html.includes("up to 20 candidate titles/descriptions or knowledge summaries to OpenRouter"), "Consent must identify data and recipient.");
+  assert(html.includes("shares your query and text from up to 20 candidates with OpenRouter"), "Consent must identify data and recipient.");
 });
 
 Deno.test("Upload attaches validated source context without depending on Library pagination", async () => {
@@ -1175,4 +1176,30 @@ Deno.test("Completed Library lists only current retained points even after delet
     const active = renderLibraryRoute({ ...model, knowledge, workflowStatuses: [{ ...finished, run: { ...finished.run, state: "extraction-loop" } }] });
     assert((active.match(/Extracted knowledge points/g) ?? []).length === 1 && active.includes("<progress"), "Active sources keep their live progress and one list.");
   }
+});
+
+Deno.test("failed knowledge search keeps its query and retries without displaying stale source cards", async () => {
+  let failure = true;
+  const phrase = "The decoder consists of a stack of identical layers";
+  const citation = "https://publisher.example/learn#section=page-13";
+  const page = createLibraryPage({ fetch: async input => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/source-library")) return Response.json({ result: { items: [source], interestAreas: [], nextCursor: null } });
+    if (url.pathname.endsWith("/library-knowledge")) return Response.json({ result: { items: [] } });
+    if (url.pathname.endsWith("/source-status")) return Response.json({ result: { sourceId: source.id, run: null, reasonCode: null, message: null } });
+    assert(url.searchParams.get("scope") === "knowledge" && url.searchParams.get("q") === phrase, "Retries must preserve the requested scope and phrase.");
+    return failure ? Response.json({ error: "SourceKeywordSearchUnavailable" }, { status: 503 }) : Response.json({ result: [{ knowledge: { knowledgeId: "decoder", sourceId: source.id, sourceTitle: source.title, summary: `${phrase}, each with three sub-components.`, sourceUrl: citation, evidenceAnchorIds: ["page-13"], questionLocked: true }, score: 14.03, matchedBy: "exact" }] });
+  }, gatewayBaseUrl: "https://app.example/", escapeHtml: baseModel().escapeHtml, formatDate: v => v, createId: () => "search", confirmDisable: () => false, createObserver: () => null, schedule: () => 1, cancel: () => {}, onNotice: () => {}, onError: () => {}, rerender: () => {} });
+  try {
+    await page.load();
+    const form = new FormData(); form.set("query", phrase); form.set("searchScope", "knowledge");
+    await page.search(form);
+    const failed = page.render({});
+    assert(failed.includes(`value="${phrase}"`) && failed.includes("Try again"), "A failed search must retain its query and offer retry.");
+    assert(!failed.includes("data-library-source=") && !failed.includes("Previously loaded sources remain below"), "A failed knowledge search cannot masquerade as a returned source result.");
+    failure = false; await page.search(form);
+    const results = page.render({});
+    assert(results.includes('data-library-knowledge="decoder"') && results.includes(`${phrase}, each with three sub-components.`), "Retry returns the individual matching knowledge card.");
+    assert(results.includes(`href="${citation}"`) && !results.includes("data-library-source=") && !results.includes("could not complete"), "Valid section provenance is retained without error or source-card fallback.");
+  } finally { page.dispose(); }
 });
