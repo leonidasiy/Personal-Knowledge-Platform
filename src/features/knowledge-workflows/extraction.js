@@ -78,6 +78,8 @@
  }} PageObservation
  */
 
+/** @typedef {{ readonly url: string, readonly title: string, readonly failureKind: string, readonly attempts: number, readonly failedAt: string }} ExtractionFailedPage */
+
 /** @typedef {{ readonly url: string, readonly title: string, readonly note: string, readonly observedAt: string, readonly linkCount: number, readonly candidateCount: number }} ExtractionPageNote */
 
 /**
@@ -114,6 +116,10 @@
  *   readonly unresolvedGaps: readonly ExtractionGap[],
  *   readonly consecutiveNoveltyZero: number,
  *   readonly pageNotes?: readonly ExtractionPageNote[],
+ *   readonly failedPages?: readonly ExtractionFailedPage[],
+ *   readonly retryingFailedPages?: boolean,
+ *   readonly retryGeneration?: number,
+ *   readonly planCheckpoint?: { readonly plan: ExtractionPlan, readonly batchKey: string | null, readonly orderedUrls: readonly string[] | null, readonly retryGeneration: number | null },
  *   readonly pendingBatch?: { readonly key: string, readonly plan: ExtractionPlan, readonly observations: readonly PageObservation[] },
  *   readonly revision: number
  * }} ExtractionScratchpad
@@ -125,7 +131,7 @@
  *   readonly scratchpad: ExtractionScratchpad,
  *   readonly knowledgePointCount: number,
  *   readonly pagesProcessed: number,
- *   readonly stopReason?: "agent-complete" | "agent-blocked" | "time-limit" | "paused"
+ *   readonly stopReason?: "agent-complete" | "agent-blocked" | "time-limit" | "paused" | "partial-failure"
  * }} ExtractionResult
  */
 
@@ -138,7 +144,8 @@
  * } | {
  *   readonly kind: "ExtractionRobotsNotAllowed"
  * } | {
- *   readonly kind: "ExtractionPlanInvalid"
+ *   readonly kind: "ExtractionPlanInvalid",
+ *   readonly causeKind?: string
  * } | {
  *   readonly kind: "ExtractionPlannerFailed"
  * } | {
@@ -180,7 +187,7 @@
  *   readonly replan: (command: { readonly previous: ExtractionPlan, readonly observation: PageObservation, readonly scratchpad: ExtractionScratchpad }) => Promise<Result<ExtractionPlan, unknown>>
  * }} ExtractionPlanner
  */
-/** @typedef {{ readonly fetchPage: (command: { readonly url: string, readonly rootUrl: string, readonly plan: ExtractionPlan }) => Promise<Result<PageObservation, unknown>> }} PageAcquirer */
+/** @typedef {{ readonly fetchPage: (command: { readonly url: string, readonly rootUrl: string, readonly plan: ExtractionPlan, readonly attempt?: number }) => Promise<Result<PageObservation, unknown>> }} PageAcquirer */
 /** @typedef {{ readonly load: (scope: { readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number }) => Promise<Result<ExtractionScratchpad, unknown>>, readonly save: (scratchpad: ExtractionScratchpad) => Promise<Result<null, unknown>> }} ScratchpadRepository */
 /** @typedef {{ readonly append: (point: KnowledgePoint) => Promise<Result<null, unknown>> }} KnowledgeRepository */
 /** @typedef {{ readonly append: (record: { readonly kind: "durable-fact" | "decision" | "unresolved", readonly retention: "source" | "run", readonly payload: unknown }) => Promise<Result<null, unknown>> }} ExtractionMemory */
@@ -192,11 +199,11 @@
  *   readonly planner: ExtractionPlanner,
  *   readonly acquirer: PageAcquirer,
  *   readonly orderedUrls?: readonly string[],
- *   readonly batchAcquirer?: { readonly key: string, readonly maximumBatchSize?: number, readonly fetchBatch: (command: { readonly urls: readonly string[], readonly rootUrl: string, readonly plan: ExtractionPlan, readonly scratchpad: ExtractionScratchpad }) => Promise<Result<readonly PageObservation[], unknown>> },
+ *   readonly batchAcquirer?: { readonly key: string, readonly maximumBatchSize?: number, readonly fetchBatch: (command: { readonly urls: readonly string[], readonly rootUrl: string, readonly plan: ExtractionPlan, readonly scratchpad: ExtractionScratchpad, readonly attempt?: number }) => Promise<Result<readonly PageObservation[], unknown>> },
  *   readonly checkRobots?: (targetUrl: string) => Promise<Result<unknown, unknown>>,
  *   readonly scratchpad: ScratchpadRepository,
  *   readonly knowledge: KnowledgeRepository,
- *   readonly reviewer?: { readonly review: (point: KnowledgePoint, observation: PageObservation) => Promise<Result<KnowledgePoint | null, { readonly kind: string }>> },
+ *   readonly reviewer?: { readonly review: (point: KnowledgePoint, observation: PageObservation) => Promise<Result<KnowledgePoint | null, { readonly kind: string, readonly status?: number, readonly attempts?: number, readonly technicalAttempts?: number, readonly technicalRetriesExhausted?: boolean, readonly causeKind?: string }>> },
  *   readonly memory?: ExtractionMemory,
  *   readonly now: () => string,
  *   readonly nowMs: () => number,
@@ -254,12 +261,16 @@ function validObservation(value) { return isRecord(value) && publicHttps(value.u
 /** @param {unknown} value @returns {value is ExtractionPageNote} */
 function validPageNote(value) { return isRecord(value) && publicHttps(value.url) && (value.responseUrl===undefined||publicHttps(value.responseUrl)) && text(value.title) && text(value.note) && value.note.length <= 2_000 && timestamp(value.observedAt) && nonNegativeInteger(value.linkCount) && nonNegativeInteger(value.candidateCount); }
 
+/** @param {unknown} value @returns {value is ExtractionFailedPage} */
+function validFailedPage(value) { return isRecord(value) && publicHttps(value.url) && text(value.title) && typeof value.failureKind === "string" && /^[A-Za-z][A-Za-z0-9]*$/u.test(value.failureKind) && positiveInteger(value.attempts) && timestamp(value.failedAt); }
+
 /** @param {unknown} value @returns {value is ExtractionScratchpad} */
 function validScratchpad(value) {
-  return isRecord(value) && text(value.ownerId) && text(value.runId) && text(value.sourceId) && positiveInteger(value.sourceRevision) &&
+  return isRecord(value) && (value.failedPages === undefined || Array.isArray(value.failedPages) && value.failedPages.every(validFailedPage) && new Set(value.failedPages.map(page => page.url)).size === value.failedPages.length) && (value.retryingFailedPages === undefined || typeof value.retryingFailedPages === "boolean") && (value.retryGeneration === undefined || positiveInteger(value.retryGeneration)) && text(value.ownerId) && text(value.runId) && text(value.sourceId) && positiveInteger(value.sourceRevision) &&
     Array.isArray(value.processedUrls) && value.processedUrls.every(publicHttps) && (value.processedResponseUrls===undefined||Array.isArray(value.processedResponseUrls)&&value.processedResponseUrls.every(publicHttps)) && (value.processedContentDigests===undefined||Array.isArray(value.processedContentDigests)&&value.processedContentDigests.every(text)) && (value.frontier === undefined || (Array.isArray(value.frontier) && value.frontier.every(publicHttps))) && (value.discoveredUrls === undefined || (Array.isArray(value.discoveredUrls) && value.discoveredUrls.every(publicHttps))) && Array.isArray(value.acceptedHashes) && value.acceptedHashes.every(text) && (value.reviewedCandidateCount === undefined || nonNegativeInteger(value.reviewedCandidateCount)) &&
     Array.isArray(value.similarityEvidence) && value.similarityEvidence.every((entry) => isRecord(entry) && text(entry.candidateHash) && text(entry.comparedLocalHash) && typeof entry.score === "number" && entry.score >= 0 && entry.score <= 1 && (entry.decision === "distinct" || entry.decision === "merge" || entry.decision === "ambiguous")) &&
     Array.isArray(value.coverage) && value.coverage.every(text) && Array.isArray(value.unresolvedGaps) && value.unresolvedGaps.every(validGap) && nonNegativeInteger(value.consecutiveNoveltyZero) && (value.pageNotes === undefined || (Array.isArray(value.pageNotes) && value.pageNotes.length <= 100 && value.pageNotes.every(validPageNote))) && positiveInteger(value.revision) &&
+    (value.planCheckpoint === undefined || (isRecord(value.planCheckpoint) && validPlan(value.planCheckpoint.plan) && (value.planCheckpoint.batchKey === null || text(value.planCheckpoint.batchKey)) && (value.planCheckpoint.orderedUrls === null || Array.isArray(value.planCheckpoint.orderedUrls) && value.planCheckpoint.orderedUrls.every(publicHttps) && new Set(value.planCheckpoint.orderedUrls).size === value.planCheckpoint.orderedUrls.length) && (value.planCheckpoint.retryGeneration === null || positiveInteger(value.planCheckpoint.retryGeneration)))) &&
     (value.pendingBatch === undefined || (isRecord(value.pendingBatch) && text(value.pendingBatch.key) && validPlan(value.pendingBatch.plan) && Array.isArray(value.pendingBatch.observations) && value.pendingBatch.observations.length > 0 && value.pendingBatch.observations.length <= 5 && value.pendingBatch.observations.every(validObservation) && new Set(value.pendingBatch.observations.map((page) => page.url)).size === value.pendingBatch.observations.length));
 }
 
@@ -270,7 +281,12 @@ function validCommand(command) {
 
 /** @param {ExtractionScratchpad} value @returns {ExtractionScratchpad} */
 function cloneScratchpad(value) {
-  return freeze({ ...value, processedUrls: freeze([...value.processedUrls]), processedResponseUrls:freeze([...(value.processedResponseUrls??[])]), processedContentDigests:freeze([...(value.processedContentDigests??[])]), frontier: freeze([...(Array.isArray(value.frontier) ? value.frontier : [])]), discoveredUrls: freeze([...(Array.isArray(value.discoveredUrls) ? value.discoveredUrls : [])]), acceptedHashes: freeze([...value.acceptedHashes]), similarityEvidence: freeze(value.similarityEvidence.map((entry) => freeze({ ...entry }))), coverage: freeze([...value.coverage]), unresolvedGaps: freeze(value.unresolvedGaps.map((entry) => freeze({ ...entry }))), pageNotes: freeze((Array.isArray(value.pageNotes) ? value.pageNotes : []).map((entry) => freeze({ ...entry }))) });
+  return freeze({ ...value, ...(value.planCheckpoint === undefined ? {} : {planCheckpoint:freeze({...value.planCheckpoint,plan:clonePlan(value.planCheckpoint.plan),orderedUrls:value.planCheckpoint.orderedUrls === null ? null : freeze([...value.planCheckpoint.orderedUrls])})}), failedPages: freeze((value.failedPages ?? []).map(page => freeze({ ...page }))), processedUrls: freeze([...value.processedUrls]), processedResponseUrls:freeze([...(value.processedResponseUrls??[])]), processedContentDigests:freeze([...(value.processedContentDigests??[])]), frontier: freeze([...(Array.isArray(value.frontier) ? value.frontier : [])]), discoveredUrls: freeze([...(Array.isArray(value.discoveredUrls) ? value.discoveredUrls : [])]), acceptedHashes: freeze([...value.acceptedHashes]), similarityEvidence: freeze(value.similarityEvidence.map((entry) => freeze({ ...entry }))), coverage: freeze([...value.coverage]), unresolvedGaps: freeze(value.unresolvedGaps.map((entry) => freeze({ ...entry }))), pageNotes: freeze((Array.isArray(value.pageNotes) ? value.pageNotes : []).map((entry) => freeze({ ...entry }))) });
+}
+
+/** @param {ExtractionPlan} plan @returns {ExtractionPlan} */
+function clonePlan(plan) {
+  return freeze({...plan,frontier:freeze([...plan.frontier]),coverageGoals:freeze(plan.coverageGoals.map(goal=>freeze({...goal}))),unresolvedGaps:freeze(plan.unresolvedGaps.map(gap=>freeze({...gap}))),stopDecision:freeze({...plan.stopDecision,evidenceUrls:freeze([...plan.stopDecision.evidenceUrls]),unresolvedGapIds:freeze([...plan.stopDecision.unresolvedGapIds])})});
 }
 
 /** @param {unknown} value @returns {string} */
@@ -307,7 +323,26 @@ async function remember(memory, kind, retention, payload, dependencies, runId) {
 
 /** @param {ExtractionPlan} plan @param {ExtractionScratchpad} scratchpad @returns {string | null} */
 function pendingFrontierUrl(plan, scratchpad) {
-  return plan.frontier.find((url) => !scratchpad.processedUrls.includes(url) && !scratchpad.processedResponseUrls?.includes(url)) ?? null;
+  return plan.frontier.find((url) => !scratchpad.processedUrls.includes(url) && !scratchpad.processedResponseUrls?.includes(url) && !scratchpad.failedPages?.some(page => page.url === url)) ?? null;
+}
+
+/** @param {string} kind @param {unknown} [error] */
+function retryablePageFailure(kind, error, includeExhausted = false) {
+  if (!includeExhausted && isRecord(error) && error.technicalRetriesExhausted === true) return false;
+  return /^(KnowledgeBrowser(NavigationFailed|TimedOut|LoadTimedOut|CaptureTimedOut|CaptureInterrupted|PageClosed)|KnowledgePageFetchFailed|FirecrawlBrowser(ApiFailed|TimedOut|OperationFailed)|KnowledgeModel(Timeout|Cancelled|Unavailable|ResponseReadFailed|ResponseInvalid|ResponseDuplicateKey)|UploadedImageDecodeFailed|KnowledgeMaterial(BatchInvalid|ImageObservationInvalid|ReviewInvalid)|Webpage(FactsInvalid|FactEvidenceInvalid|GroundingInvalid|ClaimBoundariesInvalid|OwnerExclusionInvalid))$/u.test(kind) || kind === "KnowledgeModelRejected" && isRecord(error) && typeof error.status === "number" && (error.status >= 200 && error.status < 300 || [408, 429, 500, 502, 503, 504].includes(error.status));
+}
+
+/** @param {string} kind @param {unknown} [error] */
+function pageLocalFailure(kind, error) {
+  return retryablePageFailure(kind, error, true) || /^(KnowledgePage(BotAccessDenied|ContentTypeUnsupported)|KnowledgeReview(OutputInvalid|EvidenceUnavailable|ImageUnavailable)|KnowledgeRepairOutputInvalid|WorkflowMaterialImageUnavailable)$/u.test(kind);
+}
+
+/** @param {unknown} error @returns {string | undefined} */
+function interruptedUnitCause(error) {
+  // Skip only this identified unit; the uncertain paid claim remains reserved and must not be replayed.
+  if (isRecord(error) && error.kind === "WorkflowAgentAgentOutputInvalid") return error.kind;
+  if (isRecord(error) && error.kind === "WorkflowStageCallUncertain" && error.causeKind === undefined && error.technicalRetriesExhausted === true && error.technicalAttempts === 4) return error.kind;
+  return isRecord(error) && error.kind === "WorkflowStageCallUncertain" && typeof error.causeKind === "string" && /^(KnowledgeModelTimeout|KnowledgeModelCancelled|KnowledgeModelUnavailable|KnowledgeModelResponseReadFailed)$/u.test(error.causeKind) ? error.causeKind : undefined;
 }
 
 /** @param {ExtractionPlan} plan @param {ExtractionScratchpad} scratchpad @returns {boolean} */
@@ -340,48 +375,102 @@ export function createExtractionRunner(dependencies) {
       try { loaded = await dependencies.scratchpad.load({ ownerId: command.ownerId, runId: command.runId, sourceId: command.sourceId, sourceRevision: command.sourceRevision }); } catch (error) { return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
       if (!loaded.ok || !validScratchpad(loaded.value) || loaded.value.ownerId !== command.ownerId || loaded.value.runId !== command.runId || loaded.value.sourceId !== command.sourceId || loaded.value.sourceRevision !== command.sourceRevision) return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId);
       const persistedFrontier = Array.isArray(loaded.value.frontier) ? loaded.value.frontier : [];
+      const retryCheckpoint = loaded.value.planCheckpoint;
+      const approvedInventory = retryCheckpoint?.batchKey === (dependencies.batchAcquirer?.key ?? null) && retryCheckpoint.retryGeneration === (loaded.value.retryGeneration ?? null) && retryCheckpoint.orderedUrls !== null ? retryCheckpoint.orderedUrls : persistedFrontier;
+      const orderedUrls = loaded.value.retryingFailedPages === true ? approvedInventory : dependencies.orderedUrls;
       let scratchpad = cloneScratchpad({
         ...loaded.value,
-        discoveredUrls: (dependencies.orderedUrls ?? [...new Set([
+        discoveredUrls: (orderedUrls ?? [...new Set([
           ...(Array.isArray(loaded.value.discoveredUrls) ? loaded.value.discoveredUrls : []),
           ...(Array.isArray(loaded.value.frontier) ? loaded.value.frontier : []),
         ])]),
       });
       let plan;
       if (scratchpad.pendingBatch !== undefined && scratchpad.pendingBatch.key !== dependencies.batchAcquirer?.key) return fail({ kind: "ExtractionObservationInvalid", field: "pendingBatch.key" }, dependencies, command.runId);
-      try { plan = scratchpad.pendingBatch === undefined ? await dependencies.planner.plan({ rootUrl: root.href, scratchpad }) : { ok: true, value: scratchpad.pendingBatch.plan }; } catch (error) { return fail({ kind: "ExtractionPlannerFailed" }, dependencies, command.runId); }
-      if (!plan.ok || !validPlan(plan.value) || plan.value.frontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionPlanInvalid" }, dependencies, command.runId);
-      let currentPlan = freeze({ ...plan.value, frontier: freeze(dependencies.orderedUrls ?? [...new Set([...persistedFrontier, ...plan.value.frontier])]) });
+      const binding = {batchKey:dependencies.batchAcquirer?.key ?? null,orderedUrls:orderedUrls ?? null,retryGeneration:scratchpad.retryGeneration ?? null};
+      const savedPlan = scratchpad.planCheckpoint;
+      const reusable = savedPlan !== undefined && savedPlan.batchKey === binding.batchKey && savedPlan.retryGeneration === binding.retryGeneration && JSON.stringify(savedPlan.orderedUrls) === JSON.stringify(binding.orderedUrls);
+      try { plan = scratchpad.pendingBatch !== undefined ? {ok:true,value:scratchpad.pendingBatch.plan} : reusable ? {ok:true,value:/** @type {NonNullable<ExtractionScratchpad["planCheckpoint"]>} */(savedPlan).plan} : await dependencies.planner.plan({ rootUrl: root.href, scratchpad }); } catch (error) { return fail({ kind: "ExtractionPlannerFailed" }, dependencies, command.runId); }
+      if (!plan.ok) return fail({ kind: "ExtractionPlanInvalid", ...(isRecord(plan.error) && text(plan.error.kind) ? { causeKind: plan.error.kind } : {}) }, dependencies, command.runId);
+      if (!validPlan(plan.value) || plan.value.frontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionPlanInvalid" }, dependencies, command.runId);
+      let currentPlan = freeze({ ...plan.value, frontier: freeze(orderedUrls ?? [...new Set([...persistedFrontier, ...plan.value.frontier])]) });
       scratchpad = cloneScratchpad({ ...scratchpad, discoveredUrls: [...new Set([...(scratchpad.discoveredUrls ?? []), ...currentPlan.frontier])] });
       const initialDiscoveredUrls = scratchpad.discoveredUrls ?? [];
       if (initialDiscoveredUrls.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
-      const planned = await remember(dependencies.memory, "decision", "source", { phase: "plan", revision: currentPlan.revision, decision: currentPlan.stopDecision.decision, rationale: currentPlan.stopDecision.rationale, frontier: currentPlan.frontier.slice(0, 50), discoveredUrls: initialDiscoveredUrls.slice(0, 50), unresolvedGaps: currentPlan.unresolvedGaps.slice(0, 50).map((gap) => ({ id: gap.id, priority: gap.priority, description: gap.description })) }, dependencies, command.runId);
-      if (!planned.ok) return planned;
-      const previouslyProcessedPages = scratchpad.processedUrls.length;
-      let pagesProcessed = previouslyProcessedPages;
+      /** @returns {Promise<Result<null, ExtractionFailure>>} */
+      async function saveCurrentPlan() {
+        const discoveredUrls = [...new Set([...(scratchpad.discoveredUrls ?? []), ...currentPlan.frontier])];
+        if (discoveredUrls.length > dependencies.policy.maximumFrontier) return fail({kind:"ExtractionLimitExceeded",limit:"frontier"},dependencies,command.runId);
+        scratchpad = cloneScratchpad({...scratchpad,planCheckpoint:{...binding,plan:currentPlan},frontier:currentPlan.frontier,discoveredUrls,unresolvedGaps:currentPlan.unresolvedGaps,revision:scratchpad.revision+1});
+        try {const saved=await dependencies.scratchpad.save(scratchpad);if(!saved.ok)return fail({kind:"ScratchpadPersistenceFailed"},dependencies,command.runId);}catch(error){return fail({kind:"ScratchpadPersistenceFailed"},dependencies,command.runId);}
+        return {ok:true,value:null};
+      }
+      if (!reusable) {
+        const saved = await saveCurrentPlan();
+        if (!saved.ok) return saved;
+        const planned = await remember(dependencies.memory, "decision", "source", { phase: "plan", revision: currentPlan.revision, decision: currentPlan.stopDecision.decision, rationale: currentPlan.stopDecision.rationale, frontier: currentPlan.frontier.slice(0, 50), discoveredUrls: initialDiscoveredUrls.slice(0, 50), unresolvedGaps: currentPlan.unresolvedGaps.slice(0, 50).map((gap) => ({ id: gap.id, priority: gap.priority, description: gap.description })) }, dependencies, command.runId);
+        if (!planned.ok) return planned;
+      }
+      let pagesProcessed = scratchpad.processedUrls.length;
+      let attemptedPages = pagesProcessed + (scratchpad.failedPages?.length ?? 0);
+      const previouslyAttemptedPages = attemptedPages;
+      /** @type {Map<string, number>} */ const singleBatchRetries = new Map();
+      /** @param {string} url @param {string} failureKind @param {number} attempts @param {PageObservation} [observation] @param {string} [causeKind] @returns {Promise<Result<null, ExtractionFailure>>} */
+      async function recordFailedPage(url, failureKind, attempts, observation, causeKind) {
+        const failedAt = dependencies.now();
+        const failure = freeze({ url, title: observation?.title ?? url, failureKind, attempts, failedAt });
+        const noted = await remember(dependencies.memory, "unresolved", "source", { phase: "page-failed", ...failure, ...(causeKind === undefined ? {} : { causeKind }) }, dependencies, command.runId);
+        if (!noted.ok) return noted;
+        const pending = scratchpad.pendingBatch;
+        const { pendingBatch, ...progress } = scratchpad;
+        const remaining = pending?.observations.filter(page => page.url !== url) ?? [];
+        const links = observation?.links.filter(link => new URL(link).origin === root.origin && withinPath(root, new URL(link)) && (orderedUrls === undefined || orderedUrls.includes(link))) ?? [];
+        const discoveredUrls = [...new Set([...(scratchpad.discoveredUrls ?? []), ...links])];
+        if (discoveredUrls.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
+        scratchpad = cloneScratchpad({ ...progress, failedPages: [...(scratchpad.failedPages ?? []), failure], discoveredUrls, frontier: [...new Set([...currentPlan.frontier, ...links])], pageNotes: [...(scratchpad.pageNotes ?? []), { url, title: failure.title, note: `Processing failed after ${attempts} attempt(s): ${failureKind}${causeKind === undefined ? "" : ` (${causeKind}; uncertain call was not replayed)`}.`, observedAt: failedAt, linkCount: links.length, candidateCount: observation?.candidates.length ?? 0 }].slice(-100), ...(pending !== undefined && remaining.length > 0 ? { pendingBatch: { ...pending, observations: remaining } } : {}), revision: scratchpad.revision + 1 });
+        currentPlan = freeze({ ...currentPlan, frontier: scratchpad.frontier ?? [] });
+        scratchpad = cloneScratchpad({...scratchpad,planCheckpoint:{...binding,plan:currentPlan}});
+        try { const saved = await dependencies.scratchpad.save(scratchpad); if (!saved.ok) return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
+        catch (error) { return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
+        attemptedPages++;
+        dependencies.logger({ event: "knowledge-extraction-page-failed", runId: command.runId, failureKind });
+        return { ok: true, value: null };
+      }
+      /** @param {NonNullable<ExtractionResult["stopReason"]>} stopReason @returns {Promise<Result<ExtractionResult, ExtractionFailure>>} */
+      async function completeExtraction(stopReason) {
+        if (scratchpad.retryingFailedPages === true) {
+          scratchpad = cloneScratchpad({ ...scratchpad, retryingFailedPages: false, revision: scratchpad.revision + 1 });
+          try { const saved = await dependencies.scratchpad.save(scratchpad); if (!saved.ok) return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
+          catch (error) { return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
+        }
+        return { ok: true, value: freeze({ state: "completed", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason }) };
+      }
       while (true) {
         const observedMs = dependencies.nowMs();
         if (!Number.isFinite(observedMs) || observedMs < command.startedAtMs) throw new TypeError("Extraction clock returned an invalid instant.");
         if (observedMs >= command.deadlineAtMs) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "time-limit" }) };
         const nextUrl = scratchpad.pendingBatch?.observations[0]?.url ?? pendingFrontierUrl(currentPlan, scratchpad);
         if (nextUrl === null) {
+          if ((scratchpad.failedPages?.length ?? 0) > 0) return completeExtraction("partial-failure");
           if (scratchpad.acceptedHashes.length === 0 && !((scratchpad.reviewedCandidateCount??0) > 0)) return fail({ kind: "KnowledgeSetEmpty" }, dependencies, command.runId);
           if (planIsComplete(currentPlan, scratchpad) || scratchpad.acceptedHashes.length === 0 && (scratchpad.reviewedCandidateCount ?? 0) > 0) {
             dependencies.logger({ event: "knowledge-extraction-success", runId: command.runId });
-            return { ok: true, value: freeze({ state: "completed", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "agent-complete" }) };
+            return completeExtraction("agent-complete");
           }
           if (currentPlan.stopDecision.decision === "blocked") {
             dependencies.logger({ event: "knowledge-extraction-agent-blocked", runId: command.runId });
-            return { ok: true, value: freeze({ state: "completed", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "agent-blocked" }) };
+            return completeExtraction("agent-blocked");
           }
           return fail({ kind: "ExtractionCoverageIncomplete" }, dependencies, command.runId);
         }
-        if (pagesProcessed >= dependencies.policy.maximumPages) return fail({ kind: "ExtractionLimitExceeded", limit: "pages" }, dependencies, command.runId);
+        if (dependencies.policy.maximumPagesPerExecution !== undefined && attemptedPages - previouslyAttemptedPages >= dependencies.policy.maximumPagesPerExecution) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad, knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "paused" }) };
+        if (dependencies.stopRequested?.() === true && attemptedPages > previouslyAttemptedPages) return { ok: true, value: freeze({ state: "paused", scratchpad, knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "paused" }) };
+        if (attemptedPages >= dependencies.policy.maximumPages) return fail({ kind: "ExtractionLimitExceeded", limit: "pages" }, dependencies, command.runId);
         if (currentPlan.stopDecision.decision === "complete") return fail({ kind: "ExtractionCoverageIncomplete" }, dependencies, command.runId);
         if (currentPlan.stopDecision.decision === "blocked") {
           if (scratchpad.acceptedHashes.length === 0) return fail({ kind: "ExtractionStopped" }, dependencies, command.runId);
           dependencies.logger({ event: "knowledge-extraction-agent-blocked", runId: command.runId });
-          return { ok: true, value: freeze({ state: "completed", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "agent-blocked" }) };
+          return completeExtraction("agent-blocked");
         }
         const destination = new URL(nextUrl);
         if (destination.origin !== root.origin || !withinPath(root, destination)) return fail({ kind: "UnsafeDestination" }, dependencies, command.runId);
@@ -391,7 +480,7 @@ export function createExtractionRunner(dependencies) {
           if (!checked.ok) return fail(acquisitionFailure(checked.error), dependencies, command.runId);
         }
         if (dependencies.batchAcquirer !== undefined && scratchpad.pendingBatch === undefined) {
-          const urls = currentPlan.frontier.filter((url) => !scratchpad.processedUrls.includes(url)).slice(0, Math.min(dependencies.batchAcquirer.maximumBatchSize ?? 5, dependencies.policy.maximumPages - pagesProcessed));
+          const urls = currentPlan.frontier.filter((url) => !scratchpad.processedUrls.includes(url) && !scratchpad.processedResponseUrls?.includes(url) && !scratchpad.failedPages?.some(page => page.url === url)).slice(0, Math.min(singleBatchRetries.has(nextUrl) ? 1 : dependencies.batchAcquirer.maximumBatchSize ?? 5, dependencies.policy.maximumPages - attemptedPages));
           for (const url of urls) {
             if (new URL(url).origin !== root.origin || !withinPath(root, new URL(url))) return fail({ kind: "UnsafeDestination" }, dependencies, command.runId);
             if (dependencies.checkRobots !== undefined && url !== destination.href) {
@@ -401,8 +490,25 @@ export function createExtractionRunner(dependencies) {
             }
           }
           let batch;
-          try { batch = await dependencies.batchAcquirer.fetchBatch({ urls, rootUrl: root.href, plan: currentPlan, scratchpad }); } catch (error) { return fail({ kind: "ExtractionAcquisitionFailed" }, dependencies, command.runId); }
-          if (!batch.ok) return fail(acquisitionFailure(batch.error), dependencies, command.runId);
+          let attempt = singleBatchRetries.get(nextUrl) ?? 1;
+          do {
+            try { batch = await dependencies.batchAcquirer.fetchBatch({ urls, rootUrl: root.href, plan: currentPlan, scratchpad, attempt }); } catch (error) { return fail({ kind: "ExtractionAcquisitionFailed" }, dependencies, command.runId); }
+            if (batch.ok || !retryablePageFailure(acquisitionFailureKind(batch.error), batch.error) || attempt === 4 || urls.length > 1) break;
+            if (dependencies.nowMs() >= command.deadlineAtMs) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad, knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "time-limit" }) };
+            attempt++;
+          } while (true);
+          if (!batch.ok) {
+            const failureKind = acquisitionFailureKind(batch.error);
+            const interruption = urls.length === 1 ? interruptedUnitCause(batch.error) : undefined;
+            if (interruption === undefined && !pageLocalFailure(failureKind, batch.error)) return fail(acquisitionFailure(batch.error), dependencies, command.runId);
+            if (urls.length > 1) {
+              if (isRecord(batch.error) && batch.error.technicalRetriesExhausted === true) return fail(acquisitionFailure(batch.error), dependencies, command.runId);
+              for (const url of urls) singleBatchRetries.set(url, 2); continue;
+            }
+            const recorded = await recordFailedPage(nextUrl, interruption === undefined ? failureKind : "WorkflowProcessingInterrupted", isRecord(batch.error) && positiveInteger(batch.error.technicalAttempts) ? batch.error.technicalAttempts : isRecord(batch.error) && positiveInteger(batch.error.attempts) ? batch.error.attempts : attempt, undefined, interruption);
+            if (!recorded.ok) return recorded;
+            continue;
+          }
           if (!Array.isArray(batch.value) || batch.value.length !== urls.length || batch.value.some((page, index) => !validObservation(page) || page.url !== urls[index] || page.candidates.some((candidate) => candidate.evidenceAnchors.some((anchor) => anchor.url !== page.url) || candidate.coverageGoalIds.some((id) => !currentPlan.coverageGoals.some((goal) => goal.id === id))))) return fail({ kind: "ExtractionObservationInvalid", field: "batch" }, dependencies, command.runId);
           if (batch.value.some((page) => page.byteCount > dependencies.policy.maximumPageBytes)) return fail({ kind: "ExtractionLimitExceeded", limit: "page-bytes" }, dependencies, command.runId);
           if (batch.value.some((page) => page.redirects > dependencies.policy.maximumRedirects)) return fail({ kind: "ExtractionLimitExceeded", limit: "redirects" }, dependencies, command.runId);
@@ -413,8 +519,21 @@ export function createExtractionRunner(dependencies) {
           dependencies.logger({ event: "knowledge-extraction-batch-checkpoint", runId: command.runId });
         }
         let acquired;
-        try { acquired = scratchpad.pendingBatch === undefined ? await dependencies.acquirer.fetchPage({ url: destination.href, rootUrl: root.href, plan: currentPlan }) : { ok: true, value: scratchpad.pendingBatch.observations[0] }; } catch (error) { return fail({ kind: "ExtractionAcquisitionFailed" }, dependencies, command.runId); }
-        if (!acquired.ok) return fail(acquisitionFailure(acquired.error), dependencies, command.runId);
+        let attempt = 1;
+        do {
+          try { acquired = scratchpad.pendingBatch === undefined ? await dependencies.acquirer.fetchPage({ url: destination.href, rootUrl: root.href, plan: currentPlan, attempt }) : { ok: true, value: scratchpad.pendingBatch.observations[0] }; } catch (error) { return fail({ kind: "ExtractionAcquisitionFailed" }, dependencies, command.runId); }
+          if (acquired.ok || !retryablePageFailure(acquisitionFailureKind(acquired.error), acquired.error) || attempt === 4) break;
+          if (dependencies.nowMs() >= command.deadlineAtMs) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad, knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "time-limit" }) };
+          attempt++;
+        } while (true);
+        if (!acquired.ok) {
+          const failureKind = acquisitionFailureKind(acquired.error);
+          const interruption = interruptedUnitCause(acquired.error);
+          if (interruption === undefined && !pageLocalFailure(failureKind, acquired.error)) return fail(acquisitionFailure(acquired.error), dependencies, command.runId);
+          const recorded = await recordFailedPage(nextUrl, interruption === undefined ? failureKind : "WorkflowProcessingInterrupted", isRecord(acquired.error) && positiveInteger(acquired.error.technicalAttempts) ? acquired.error.technicalAttempts : isRecord(acquired.error) && positiveInteger(acquired.error.attempts) ? acquired.error.attempts : attempt, undefined, interruption);
+          if (!recorded.ok) return recorded;
+          continue;
+        }
         const observation = acquired.value;
         if (!validObservation(observation)) return fail({ kind: "ExtractionObservationInvalid", field: "observation" }, dependencies, command.runId);
         if (observation.url !== destination.href || new URL(observation.url).origin !== root.origin || !withinPath(root, new URL(observation.url))) return fail({ kind: "UnsafeDestination" }, dependencies, command.runId);
@@ -429,6 +548,7 @@ export function createExtractionRunner(dependencies) {
         const pageMemory = await remember(dependencies.memory, "durable-fact", "source", { phase: "page-observed", url: observation.url, title: observation.title, note: pageNote.note, observedAt: observation.observedAt, byteCount: observation.byteCount, redirects: observation.redirects, links: observation.links.slice(0, 50), candidateCount: observation.candidates.length }, dependencies, command.runId);
         if (!pageMemory.ok) return pageMemory;
         let novel = 0;
+        let reviewFailure;
         for (const candidate of scratchpad.processedContentDigests?.includes(observation.contentDigest??'') ? [] : observation.candidates) {
           if (scratchpad.acceptedHashes.includes(candidate.normalizedHash)) continue;
           if (dependencies.reviewer === undefined && candidate.similarity?.decision === "ambiguous") return fail({ kind: "KnowledgeDuplicateAmbiguous" }, dependencies, command.runId);
@@ -438,7 +558,11 @@ export function createExtractionRunner(dependencies) {
           if (dependencies.reviewer !== undefined) {
             let reviewed;
             try { reviewed = await dependencies.reviewer.review(point, observation); } catch (error) { return fail({ kind: "KnowledgePersistenceFailed", causeKind: "KnowledgeReviewFailed" }, dependencies, command.runId); }
-            if (!reviewed.ok) return fail({kind:"KnowledgePersistenceFailed",causeKind:reviewed.error.kind},dependencies,command.runId);
+            if (!reviewed.ok) {
+              if (interruptedUnitCause(reviewed.error) === undefined && !pageLocalFailure(reviewed.error.kind, reviewed.error)) return fail({kind:"KnowledgePersistenceFailed",causeKind:reviewed.error.kind},dependencies,command.runId);
+              reviewFailure = reviewed.error;
+              break;
+            }
             scratchpad = cloneScratchpad({...scratchpad,reviewedCandidateCount:(scratchpad.reviewedCandidateCount??0)+1});
             if (reviewed.value === null) continue;
             point = reviewed.value;
@@ -454,10 +578,16 @@ export function createExtractionRunner(dependencies) {
           catch (error) { return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
           novel += 1;
         }
+        if (reviewFailure !== undefined) {
+          const interruption = interruptedUnitCause(reviewFailure);
+          const recorded = await recordFailedPage(observation.url, interruption === undefined ? reviewFailure.kind : "WorkflowProcessingInterrupted", positiveInteger(reviewFailure.technicalAttempts) ? reviewFailure.technicalAttempts : positiveInteger(reviewFailure.attempts) ? reviewFailure.attempts : reviewFailure.kind === "KnowledgeReviewOutputInvalid" ? 2 : 1, observation, interruption);
+          if (!recorded.ok) return recorded;
+          continue;
+        }
         const nextZero = novel === 0 ? scratchpad.consecutiveNoveltyZero + 1 : 0;
         const scopedLinks = observation.links.filter((link) => {
           const candidate = new URL(link);
-          return candidate.origin === root.origin && withinPath(root, candidate) && (dependencies.orderedUrls === undefined || dependencies.orderedUrls.includes(link));
+          return candidate.origin === root.origin && withinPath(root, candidate) && (orderedUrls === undefined || orderedUrls.includes(link));
         });
         const discoveredUrls = [...new Set([...(scratchpad.discoveredUrls ?? []), ...currentPlan.frontier, ...scopedLinks])];
         if (discoveredUrls.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
@@ -471,18 +601,20 @@ export function createExtractionRunner(dependencies) {
         try { saved = await dependencies.scratchpad.save(scratchpad); } catch (error) { return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
         if (!saved.ok) return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId);
         pagesProcessed += 1;
+        attemptedPages += 1;
         if (dependencies.stopRequested?.() === true) return { ok: true, value: freeze({ state: "paused", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "paused" }) };
         if (scratchpad.pendingBatch !== undefined) {
-          if (dependencies.policy.maximumPagesPerExecution !== undefined && pagesProcessed - previouslyProcessedPages >= dependencies.policy.maximumPagesPerExecution) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad, knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "paused" }) };
+          if (dependencies.policy.maximumPagesPerExecution !== undefined && attemptedPages - previouslyAttemptedPages >= dependencies.policy.maximumPagesPerExecution) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad, knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "paused" }) };
           continue;
         }
         let replanned;
         try { replanned = await dependencies.planner.replan({ previous: currentPlan, observation, scratchpad }); } catch (error) { return fail({ kind: "ExtractionPlannerFailed" }, dependencies, command.runId); }
-        if (!replanned.ok || !validPlan(replanned.value) || replanned.value.frontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionPlanInvalid" }, dependencies, command.runId);
+        if (!replanned.ok) return fail({ kind: "ExtractionPlanInvalid", ...(isRecord(replanned.error) && text(replanned.error.kind) ? { causeKind: replanned.error.kind } : {}) }, dependencies, command.runId);
+        if (!validPlan(replanned.value) || replanned.value.frontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionPlanInvalid" }, dependencies, command.runId);
         const proposedPlan = replanned.value;
         const coverageGoals = new Map(currentPlan.coverageGoals.map((goal) => [goal.id, goal]));
         for (const goal of proposedPlan.coverageGoals) coverageGoals.set(goal.id, goal);
-        const preservedFrontier = (dependencies.orderedUrls ?? [...new Set([...proposedPlan.frontier, ...(scratchpad.discoveredUrls ?? [])])]).filter((url) => !scratchpad.processedUrls.includes(url));
+        const preservedFrontier = (orderedUrls ?? [...new Set([...proposedPlan.frontier, ...(scratchpad.discoveredUrls ?? [])])]).filter((url) => !scratchpad.processedUrls.includes(url) && !scratchpad.failedPages?.some(page => page.url === url));
         if (preservedFrontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
         currentPlan = freeze({ ...proposedPlan, coverageGoals: freeze([...coverageGoals.values()]), frontier: freeze(preservedFrontier) });
         const prematureComplete = currentPlan.stopDecision.decision === "complete" && pendingFrontierUrl(currentPlan, scratchpad) !== null;
@@ -490,6 +622,8 @@ export function createExtractionRunner(dependencies) {
           dependencies.logger({ event: "knowledge-extraction-premature-complete-rejected", runId: command.runId, failureKind: "ExtractionCoverageIncomplete" });
           currentPlan = freeze({ ...currentPlan, stopDecision: freeze({ ...currentPlan.stopDecision, decision: "continue", rationale: "Deterministic verification found relevant discovered pages that have not been observed." }) });
         }
+        const replannedSaved = await saveCurrentPlan();
+        if (!replannedSaved.ok) return replannedSaved;
         const replannedMemory = await remember(dependencies.memory, "decision", "source", { phase: "replan", revision: currentPlan.revision, afterUrl: observation.url, proposedDecision: proposedPlan.stopDecision.decision, decision: currentPlan.stopDecision.decision, rationale: currentPlan.stopDecision.rationale, frontier: currentPlan.frontier.slice(0, 50), discoveredUrls: scratchpad.discoveredUrls?.slice(0, 50) ?? [], unresolvedGaps: currentPlan.unresolvedGaps.slice(0, 50).map((gap) => ({ id: gap.id, priority: gap.priority, description: gap.description })) }, dependencies, command.runId);
         if (!replannedMemory.ok) return replannedMemory;
         for (const gap of currentPlan.unresolvedGaps.slice(0, 50)) {
@@ -497,22 +631,19 @@ export function createExtractionRunner(dependencies) {
           if (!unresolvedMemory.ok) return unresolvedMemory;
         }
         if (currentPlan.stopDecision.decision === "complete") {
+          if (pendingFrontierUrl(currentPlan, scratchpad) === null && (scratchpad.failedPages?.length ?? 0) > 0) return completeExtraction("partial-failure");
           if (pendingFrontierUrl(currentPlan, scratchpad) !== null || (!(scratchpad.acceptedHashes.length === 0 && (scratchpad.reviewedCandidateCount??0) > 0) && (!coverageComplete(currentPlan, scratchpad) || currentPlan.unresolvedGaps.some((gap) => gap.priority === "high")))) return fail({ kind: "ExtractionCoverageIncomplete" }, dependencies, command.runId);
           if (scratchpad.acceptedHashes.length === 0 && !((scratchpad.reviewedCandidateCount??0) > 0)) return fail({ kind: "KnowledgeSetEmpty" }, dependencies, command.runId);
           dependencies.logger({ event: "knowledge-extraction-success", runId: command.runId });
-          return { ok: true, value: freeze({ state: "completed", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "agent-complete" }) };
+          return completeExtraction("agent-complete");
         }
         if (currentPlan.stopDecision.decision === "blocked") {
           if (scratchpad.acceptedHashes.length === 0) return fail({ kind: "ExtractionStopped" }, dependencies, command.runId);
           dependencies.logger({ event: "knowledge-extraction-agent-blocked", runId: command.runId });
-          return { ok: true, value: freeze({ state: "completed", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "agent-blocked" }) };
+          return completeExtraction("agent-blocked");
         }
         if (dependencies.policy.maximumPagesPerExecution !== undefined) {
-          scratchpad = cloneScratchpad({ ...scratchpad, frontier: currentPlan.frontier, discoveredUrls: [...new Set([...(scratchpad.discoveredUrls ?? []), ...currentPlan.frontier])], unresolvedGaps: currentPlan.unresolvedGaps, revision: scratchpad.revision + 1 });
-          let replannedSaved;
-          try { replannedSaved = await dependencies.scratchpad.save(scratchpad); } catch (error) { return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
-          if (!replannedSaved.ok) return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId);
-          if (pagesProcessed - previouslyProcessedPages >= dependencies.policy.maximumPagesPerExecution) {
+          if (attemptedPages - previouslyAttemptedPages >= dependencies.policy.maximumPagesPerExecution) {
             dependencies.logger({ event: "knowledge-extraction-chunk-yield", runId: command.runId });
             return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad: cloneScratchpad(scratchpad), knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "paused" }) };
           }

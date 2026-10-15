@@ -21,13 +21,11 @@ const freeze = Object.freeze;
 const revealedCards = new Set();
 /** @type {IntersectionObserver|null} */ let cardObserver = null;
 let revealView = "";
-const {
+import {
   installNotificationController,
   renderNotification,
   synchronizeNotification,
-} = await import(
-  "./features/notifications/controller.js"
-);
+} from "./features/notifications/controller.js";
 
 /** @import { CatalogCandidate, QuizVersion } from "./features/catalog/contracts.js" */
 /** @import { FeedPage, FeedPolicy, RankedFeedItem } from "./features/feed/contracts.js" */
@@ -54,7 +52,7 @@ const PRESETS =
 const VISUAL_THEMES = PRESETS.visualThemes;
 const LAYOUTS = PRESETS.layouts;
 const APP_COPY =
-  /** @type {{readonly cancelProcessing:string,readonly dailyTargetsCreate:string,readonly savedTargetsHidden:string,readonly savedSetHidden:string,readonly starterUnavailable:string,readonly discoveryUnavailable:string,readonly reviewRouteUnavailable:string,readonly libraryRouteUnavailable:string,readonly recallRuntimeUnavailable:string,readonly preferenceNotSaved:string,readonly preferenceSaveFailed:string,readonly studySaved:string,readonly answerSavedReload:string,readonly promptOutsideRecall:string,readonly exported:string,readonly exportFailed:string,readonly eraseFailed:string,readonly targetsSaved:string,readonly finishRecall:string,readonly soundsUnavailable:string,readonly feedExpired:string,readonly feedUnavailable:string,readonly pageSizeUnsupported:string,readonly cursorInvalid:string,readonly feedOwnerMismatch:string,readonly pageMismatch:string,readonly lessonUnavailable:string,readonly feedOpenFailed:string,readonly storageUnavailable:string,readonly learningDataUnavailable:string,readonly offlineMiss:string,readonly offlineUpgrade:string,readonly offlineFailed:string,readonly settingsRead:string,readonly settingsWrite:string,readonly settingsReset:string,readonly settingsInvalid:string,readonly openingApp:string,readonly discoverFailed:string,readonly reviewOpening:string,readonly libraryOpening:string,readonly discoverMarkup:import("./routes/discover.js").DiscoverMarkup}} */
+  /** @type {{readonly cancelProcessing:string,readonly dailyTargetsCreate:string,readonly savedTargetsHidden:string,readonly savedSetHidden:string,readonly starterUnavailable:string,readonly discoveryUnavailable:string,readonly reviewRouteUnavailable:string,readonly libraryRouteUnavailable:string,readonly recallRuntimeUnavailable:string,readonly preferenceNotSaved:string,readonly preferenceSaveFailed:string,readonly studySaved:string,readonly answerSavedReload:string,readonly promptOutsideRecall:string,readonly exported:string,readonly exportFailed:string,readonly eraseFailed:string,readonly targetsSaved:string,readonly finishRecall:string,readonly soundsUnavailable:string,readonly feedExpired:string,readonly feedUnavailable:string,readonly pageSizeUnsupported:string,readonly cursorInvalid:string,readonly feedOwnerMismatch:string,readonly pageMismatch:string,readonly lessonUnavailable:string,readonly feedOpenFailed:string,readonly storageUnavailable:string,readonly learningDataUnavailable:string,readonly offlineMiss:string,readonly offlineUpgrade:string,readonly offlineFailed:string,readonly settingsRead:string,readonly settingsWrite:string,readonly settingsReset:string,readonly settingsInvalid:string,readonly openingApp:string,readonly retryFailedItems:string,readonly retryFailedQuizzes:string,readonly panelLoading:string,readonly panelFailed:string,readonly discoverMarkup:import("./routes/discover.js").DiscoverMarkup}} */
   (readEmbeddedJson("app-copy"));
 const DEFAULT_SETTINGS = freeze({
   schemaVersion: /** @type {const} */ (2),
@@ -242,10 +240,8 @@ let learnerController = null;
 let progressPage = null;
 /** @type {ReturnType<import("./features/reminders/page.js").createSettingsPage>|null} */
 let settingsPage = null;
-/** @type {string|null} */
-let settingsRouteIssue = null;
-/** @type {"ProgressRouteUnavailable"|null} */
-let progressRouteIssue = null;
+/** @type {Set<string>} */
+const routeLoads = new Set(), routeFailures = new Set();
 /** @type {RankedFeedItem[]} */
 let visibleItems = [];
 let revealedStudyItems = 1;
@@ -300,7 +296,8 @@ const pendingWrites = new Set();
 loadExperienceSettings();
 applyExperiencePresentation();
 renderLoading();
-await initialize();
+registerOfflineSupport();
+await initialize().catch(() => { routeFailures.add(activeView); render(); });
 
 async function initialize() {
   const restored = await restoreLocalState({
@@ -316,7 +313,6 @@ async function initialize() {
   if (!restored.ok) {
     startupRestoreIssue = restoreRecoveryFor(restored.error);
     render();
-    registerOfflineSupport();
     return;
   }
   dailySettings = restored.value.dailySettings;
@@ -337,7 +333,6 @@ async function initialize() {
   }
   await loadActiveRoute();
   render();
-  registerOfflineSupport();
   void syncReminderTimeZone();
 }
 
@@ -581,99 +576,108 @@ function createRecallPrompt(id, contentId, knowledgeUnitId, promptText) {
 
 async function loadActiveRoute() {
   if (startupRestoreIssue !== null) return;
-  const libraryAlreadyLoaded = libraryPageController !== null;
-  await loadLibraryRoute();
-  if (learnerController !== null && activeView === "feed") {
-    await learnerController.loadFeed();
-  }
-  if (activeView === "review") {
-    await learnerController?.loadReview();
-  }
-  if (activeView === "library") {
-    if (libraryAlreadyLoaded) await libraryPageController?.load();
-  }
-  if (activeView === "upload") {
+  const view = activeView, hash = location.hash;
+  if (routeLoads.has(view)) return;
+  routeLoads.add(view);
+  routeFailures.delete(view);
+  render();
+  try {
+    const libraryAlreadyLoaded = libraryPageController !== null;
     await loadLibraryRoute();
-    if (libraryPageController !== null) {
-      if (uploadPage === null) {
-        const { createUploadPage } = await import("./features/uploads/page.js");
-        const library = libraryPageController;
-        uploadPage = createUploadPage({ fetch, baseUrl:new URL("./",location.href).href,createId:()=>crypto.randomUUID(),onChange:()=>render(),onRenamed:(id,title)=>library.renamed(id,title),onExtracted:()=>{location.hash="library";},upload:async(id,form,context)=>{await library.uploadMaterial(id,form,context);return library.uploadResult();} });
-      }
-      const prefill = uploadPrefill;
-      uploadPrefill = null;
-      await uploadPage.load(location.hash, prefill);
+    if (learnerController !== null && view === "feed") {
+      await learnerController.loadFeed();
     }
-  }
-  if (activeView === "progress") {
-    try {
+    if (view === "review") {
+      await learnerController?.loadReview();
+    }
+    if (view === "library") {
+      if (libraryAlreadyLoaded) await libraryPageController?.load();
+    }
+    if (view === "upload") {
+      if (libraryPageController === null) throw new Error("LibraryUnavailable");
+      if (libraryPageController !== null) {
+        if (uploadPage === null) {
+          const { createUploadPage } = await import("./features/uploads/page.js");
+          const library = libraryPageController;
+          uploadPage = createUploadPage({ fetch, baseUrl:new URL("./",location.href).href,createId:()=>crypto.randomUUID(),onChange:()=>render(),onRenamed:(id,title)=>library.renamed(id,title),onExtracted:()=>{location.hash="library";},upload:async(id,form,context)=>{await library.uploadMaterial(id,form,context);return library.uploadResult();} });
+        }
+        const prefill = uploadPrefill;
+        uploadPrefill = null;
+        await uploadPage.load(hash, prefill);
+      }
+    }
+    if (view === "progress") {
       if (progressPage === null) {
         const module = await import("./features/progress/page.js");
         progressPage = module.createProgressPage({ fetch, baseUrl: new URL("./", location.href).href, escapeHtml, onChange: () => render() });
       }
-      progressRouteIssue = null;
       await progressPage.load();
-    } catch (error) { if (!(error instanceof Error)) throw error; progressRouteIssue = "ProgressRouteUnavailable"; }
-  }
-  if (activeView === "settings") {
-    if (settingsPage === null) {
-      try {
+    }
+    if (view === "settings") {
+      if (settingsPage === null) {
         const [{ createSettingsPage }, { createReminderClient }] = await Promise.all([
           import("./features/reminders/page.js"), import("./features/reminders/client.js"),
         ]);
         settingsPage = createSettingsPage({ client: createReminderClient({ ownerId: LOCAL_OWNER_ID, fetch, storage: localStorage, navigator }), renderPreferences: renderSettingsPreferences, onChange: () => render() });
-        await settingsPage.load(); settingsRouteIssue = null;
-      } catch (error) { if (!(error instanceof Error)) throw error; settingsRouteIssue = "Reminders are unavailable right now."; }
-    }
-  }
-  if (activeView === "discover") {
-    if (discoveryPage === null) {
-      /** @type {unknown} */ let starterInventory = null;
-      try {
-        const response = await fetch("./assets/discovery-starters.json");
-        if (response.ok) starterInventory = await response.json();
-      } catch (error) {
-        if (!(error instanceof Error)) throw error;
+        await settingsPage.load();
       }
-      const module = await import("./startup/discovery-page.js");
-      discoveryPage = module.createDiscoveryPage({
-        ownerId: LOCAL_OWNER_ID,
-        persistence,
-        fetch,
-        gatewayBaseUrl: new URL("./", location.href).href,
-        policyStorage: globalThis.localStorage,
-        starterInventory,
-        markup: APP_COPY.discoverMarkup,
-        createId: () => crypto.randomUUID(),
-        now: () => new Date().toISOString(),
-        escapeHtml,
-        onNotice: (message) => {
-          notice = message;
-          errorMessage = null;
-        },
-        onError: (message) => {
-          errorMessage = message;
-          notice = null;
-        },
-        navigateToUpload: (prefill) => {
-          uploadPrefill = prefill;
-          location.hash = "upload";
-        },
-        navigateToLibrary: (sourceId) => {
-          void libraryPageController?.revealSource(sourceId).catch(() => {
-            libraryRouteIssue = APP_COPY.libraryRouteUnavailable;
-            render();
-          });
-          activeView = "library";
-          location.hash = "library";
-        },
-        rerender: () => render(),
-      });
     }
-    const loaded = await discoveryPage.load();
-    if (!loaded.ok) {
-      errorMessage = APP_COPY.discoveryUnavailable;
+    if (view === "discover") {
+      if (discoveryPage === null) {
+        /** @type {unknown} */ let starterInventory = null;
+        try {
+          const response = await fetch("./assets/discovery-starters.json");
+          if (response.ok) starterInventory = await response.json();
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+        }
+        const module = await import("./startup/discovery-page.js");
+        discoveryPage = module.createDiscoveryPage({
+          ownerId: LOCAL_OWNER_ID,
+          persistence,
+          fetch,
+          gatewayBaseUrl: new URL("./", location.href).href,
+          policyStorage: globalThis.localStorage,
+          starterInventory,
+          markup: APP_COPY.discoverMarkup,
+          createId: () => crypto.randomUUID(),
+          now: () => new Date().toISOString(),
+          escapeHtml,
+          onNotice: (message) => {
+            notice = message;
+            errorMessage = null;
+          },
+          onError: (message) => {
+            errorMessage = message;
+            notice = null;
+          },
+          confirmUpload,
+          navigateToUpload: (prefill) => {
+            uploadPrefill = prefill;
+            location.hash = "upload";
+          },
+          navigateToLibrary: (sourceId) => {
+            void libraryPageController?.revealSource(sourceId).catch(() => {
+              libraryRouteIssue = APP_COPY.libraryRouteUnavailable;
+              render();
+            });
+            activeView = "library";
+            location.hash = "library";
+          },
+          rerender: () => render(),
+        });
+      }
+      const loaded = await discoveryPage.load();
+      if (!loaded.ok) {
+        errorMessage = APP_COPY.discoveryUnavailable;
+      }
     }
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    routeFailures.add(view);
+  } finally {
+    routeLoads.delete(view);
+    render();
   }
 }
 
@@ -718,7 +722,10 @@ async function loadLibraryRoute() {
             confirm(
             `Remove "${source.title}" and all paired knowledge, questions, media, and schedules? Activity history will be preserved.`,
             ),
+        confirmRetryFailed: (count,quizzes) => confirm((quizzes?APP_COPY.retryFailedQuizzes:APP_COPY.retryFailedItems).replace("{}",String(count))),
         confirmCancel: (source) => confirm(APP_COPY.cancelProcessing.replace("{}",()=>source.title)),
+        confirmUpload,
+        navigateToUpload: (hash, prefill) => { uploadPrefill=prefill??null;location.hash = hash; },
         createObserver: (load) => {
           if (!("IntersectionObserver" in globalThis)) return null;
           const observer = new IntersectionObserver((entries) => {
@@ -986,9 +993,11 @@ function render(preferredFocusKey = null, fallbackHeadingId = null) {
     `<div class="app-shell">${renderHeader()}<div class="app-layout">${renderNavigation()}<main class="workspace" id="main-content" tabindex="-1">${
       startupRestoreIssue !== null
         ? renderStartupRecovery()
+        : routeLoads.has(activeView) ? renderPanelState(APP_COPY.panelLoading)
+        : routeFailures.has(activeView) ? renderPanelState(APP_COPY.panelFailed)
         : `${activeView === "feed" ? renderFeed() : ""}${
           activeView === "review" ? renderReviewView() : ""
-        }${activeView === "library" ? renderLibraryView() : ""}${activeView === "upload" ? uploadPage?.render() ?? '<section class="wide-view state-panel"><h1>Upload unavailable</h1><p>Upload could not open. Try again from Library.</p><a href="#library">Back to Library</a></section>' : ""}${
+        }${activeView === "library" ? renderLibraryView() : ""}${activeView === "upload" ? uploadPage?.render() ?? renderPanelState(APP_COPY.panelLoading) : ""}${
           activeView === "discover" ? renderDiscoverView() : ""}${activeView === "progress" ? renderProgressView() : ""}${activeView === "settings" ? renderSettingsView() : ""
         }`
     }<footer class="app-footer"><span>Made for a curious mind.<br>A place for what stays.</span><span>Learn. Connect. Return.</span></footer></main></div><div class="toast-region" aria-atomic="true">${
@@ -1028,18 +1037,22 @@ function renderNavigation() {
   }<span class="nav-caption">A little curiosity,<br>every day.</span></nav>`;
 }
 
+/** @param {string} markup */
+function renderPanelState(markup) {
+  return markup.replaceAll("{}", activeView[0].toUpperCase() + activeView.slice(1));
+}
+
 function renderSettingsView() {
-  return settingsPage?.render() ?? `<section class="wide-view settings-page" aria-labelledby="settings-title"><div class="section-heading"><h1 id="settings-title">Settings</h1></div><section class="settings-preferences" aria-label="Workspace preferences">${renderSettingsPreferences()}</section><section class="settings-reminders" role="alert"><h2>Daily reminder</h2><p>${escapeHtml(settingsRouteIssue ?? "Loading reminders…")}</p></section></section>`;
+  return settingsPage?.render() ?? renderPanelState(APP_COPY.panelLoading);
 }
 
 function renderProgressView() {
-  if (progressRouteIssue !== null) return '<section class="wide-view state-panel" role="alert"><h1>Progress could not open</h1><p>Reload the page to try again. Your learning records have not changed.</p></section>';
-  return progressPage?.render() ?? '<section class="wide-view state-panel" role="status"><h1>Opening progress</h1></section>';
+  return progressPage?.render() ?? renderPanelState(APP_COPY.panelLoading);
 }
 
 function renderDiscoverView() {
   if (discoveryPage === null) {
-    return APP_COPY.discoverFailed;
+    return renderPanelState(APP_COPY.panelLoading);
   }
   return discoveryPage.render({
     selectedItemId: discoveryItemId,
@@ -1075,12 +1088,12 @@ function themeOption(mode, label) {
 
 function renderFeed() {
   if (learnerController !== null) return learnerController.renderFeed();
-  return `<section class="wide-view state-panel" role="alert" aria-labelledby="feed-title"><h1 id="feed-title">Feed is unavailable</h1><p>The paired knowledge workflow has not loaded.</p></section>`;
+  return renderPanelState(APP_COPY.panelLoading);
 }
 
 function renderReviewView() {
   if (learnerController !== null) return learnerController.renderReview();
-  return `<section class="wide-view state-panel" role="alert" aria-labelledby="review-title"><h1 id="review-title">Review is unavailable</h1><p>The paired-question workflow has not loaded.</p></section>`;
+  return renderPanelState(APP_COPY.panelLoading);
 }
 
 function renderLibraryView() {
@@ -1088,7 +1101,7 @@ function renderLibraryView() {
     return renderRouteFailure("library", "Library", libraryRouteIssue);
   }
   if (libraryPageController === null) {
-    return APP_COPY.libraryOpening;
+    return renderPanelState(APP_COPY.panelLoading);
   }
   return libraryPageController.render({});
 }
@@ -1108,8 +1121,6 @@ function bindInteractions() {
         view === "feed" || view === "discover" || view === "review" ||
         view === "library" || view === "progress" || view === "settings" || view === "upload"
       ) {
-        activeView = view;
-        discoveryItemId = null;
         location.hash = view;
       }
     });
@@ -1452,9 +1463,9 @@ function restoreFocus(focusKey, headingId) {
   const escapedKey = focusKey === null ? null : CSS.escape(focusKey);
   const preferred = escapedKey === null
     ? null
-    : root.querySelector(`[data-focus-key="${escapedKey}"]`);
+    : root.querySelector(`[data-focus-key="${escapedKey}"]`) ?? (focusKey === "discovery-more" ? root.querySelector(".discover-result:last-child > a") : null);
   if (preferred instanceof HTMLElement) {
-    preferred.focus();
+    preferred.focus({preventScroll: focusKey === "discovery-more"});
     if (document.activeElement === preferred) return;
   }
   const heading = headingId === null
@@ -1494,8 +1505,17 @@ function registerOfflineSupport() {
   });
   addEventListener("hashchange", () => {
     const route = parseRoute(location.hash);
+    const preserveResults = activeView === "discover" && route.view === "discover" && matchMedia("(min-width: 801px)").matches;
     activeView = route.view;
     discoveryItemId = route.discoveryItemId;
+    if (preserveResults) {
+      const top = scrollY;
+      render();
+      const selected = root.querySelector('.discover-result a[aria-current="true"]');
+      if (selected instanceof HTMLElement) selected.focus({ preventScroll: true });
+      scrollTo(0, top);
+      return;
+    }
     void loadActiveRoute().then(() =>
       renderWithTransition(
         `nav-${route.view}`,
@@ -1533,8 +1553,8 @@ async function syncReminderTimeZone() {
     const { createReminderClient } = await import("./features/reminders/client.js");
     const client = createReminderClient({ ownerId: LOCAL_OWNER_ID, fetch, storage: localStorage, navigator });
     const result = await client.syncTimeZone();
-    if (result.message) settingsRouteIssue = result.message;
-  } catch (error) { if (!(error instanceof Error)) throw error; settingsRouteIssue = "Reminder settings could not refresh. Open Settings to retry."; }
+    if (result.message) errorMessage = result.message;
+  } catch (error) { if (!(error instanceof Error)) throw error; errorMessage = "Reminder settings could not refresh. Open Settings to retry."; }
 }
 
 /** @param {ServiceWorkerRegistration} registration */
@@ -1933,4 +1953,12 @@ function resolveAudioContextFactory() {
   return () => /** @type {AudioContextPort} */ (
     /** @type {unknown} */ (new AudioContext())
   );
+}
+
+/** @param {string} message @param {string} [sourceUrl] */
+function confirmUpload(message, sourceUrl) {
+  errorMessage = notice = null;
+  if (!confirm(message)) return false;
+  if (sourceUrl) open(sourceUrl, "_blank", "noopener,noreferrer");
+  return true;
 }

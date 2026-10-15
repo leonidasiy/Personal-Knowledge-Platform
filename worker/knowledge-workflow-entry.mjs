@@ -9,9 +9,9 @@ import { KNOWLEDGE_WORKFLOW_CONFIG_SOURCES } from "./knowledge-workflow-config-s
 import { D1KnowledgeMediaRepository } from "./knowledge-workflow-media-d1.js";
 import { createMediaPipeline, createMediaPublicEgress, createUserAttestedLocalManifest } from "../src/features/knowledge-workflows/media.js";
 import { resolvePublicAddresses } from "./knowledge-workflow-network.js";
-import { createCloudflareImageDerivative, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
+import { createCloudflareImageDerivative, createCloudflareImageDecoder, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
 import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
-import { executeAuthoritativeWorkflowStep } from "./knowledge-workflow-step.js";
+import { executeRetryingWorkflowStep, isTransientBrowserFailure } from "./knowledge-workflow-step.js";
 import { createAcquisitionClient, createAcquisitionWorkflowBrowser } from "./acquisition-client.js";
 import { ACQUISITION_POLICY } from "./acquisition-policy.js";
 import { createFirecrawlWorkflowBrowser } from "./firecrawl-browser.js";
@@ -97,7 +97,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       policy: ACQUISITION_POLICY,
       createId: () => crypto.randomUUID(),
     });
-    const browserLogger=(entry)=>logger({event:entry.event,ownerId,runId,stage:'browser',failureKind:entry.failureKind});
+    const browserLogger=(entry)=>logger({event:entry.event,ownerId,runId,stage:'browser',failureKind:entry.failureKind,diagnosticToken:entry.diagnosticToken,field:entry.operationStage??entry.stage,httpStatus:entry.httpStatus});
     // The owner's navigation test authorizes at most 100 provider credits; reservations persist across workflow steps.
     const browserBudget=createHybridBrowserBudget({database,ownerId,runId,maximumCredits:100,now,createId:()=>crypto.randomUUID(),logger:browserLogger});
     const createBrowser = () => {
@@ -110,8 +110,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     const publicEgress = createMediaPublicEgress(acquisition.mediaCapability);
     const fallbackManifest = createUserAttestedLocalManifest(fallbackMediaEntries);
     if (!fallbackManifest.ok) throw new Error(fallbackManifest.error.kind);
-    const transformImage=createCloudflareImageDerivative(this.env.IMAGES);
-    const decodeImage=async(bytes,mediaType)=>{const decoded=await transformImage({assetId:"upload-decode",variant:"feed",bytes,mediaType});return decoded.ok?{ok:true,value:null}:{ok:false,error:{kind:"UploadedImageDecodeFailed"}};};
+    const decodeImage=createCloudflareImageDecoder(this.env.IMAGES,{logger:entry=>logger({...entry,ownerId,runId,stage:"media"})});
     const media = createMediaPipeline({
       publicEgress,
       digest: async (bytes) => {
@@ -210,45 +209,53 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     }
     /** @param {string} stepName @returns {Promise<import("../src/features/knowledge-workflows/workflow.js").Result<unknown, { readonly kind: string, readonly detailKind?: string, readonly detailDiagnosticToken?: string }>>} */
     async function executeOrAwaitMaterial(stepName) {
-      runtime = createRuntime();
       let executed;
       try {
-      executed = await executeAuthoritativeWorkflowStep({
+      executed = await executeRetryingWorkflowStep({
         step,
         name: stepName,
+        now: Date.now,
         load: () => service.status({ ownerId, runId }),
-        execute: (authoritativeRun) => /** @type {ReturnType<typeof createKnowledgeWorkflowRuntime>} */ (runtime).execute(authoritativeRun),
+        execute: (authoritativeRun) => { runtime=createRuntime();return runtime.execute(authoritativeRun); },
       });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        executed = {ok:false,error:{kind:"WorkflowExecutionStopped"}};
+        executed = {ok:false,error:{kind:error.message === "Worker exceeded CPU time limit." ? "WorkflowCpuTimeLimitExceeded" : "WorkflowExecutionStopped"}};
       }
       if (executed.ok) return executed;
-      if (executed.error.kind !== "WorkflowRobotsFailed" && executed.error.kind !== "WorkflowUploadRequired") {
-        const latest = await step.do(`${stepName}: reload before marking retryable workflow failure`, async () => service.status({ ownerId, runId }));
-        if (!latest.ok) throw new Error(latest.error.kind);
-        if (!isWorkflowRetryStage(latest.value.state)) throw new Error(executed.error.kind);
-        const failureKind = typeof executed.error.detailKind === "string" && executed.error.detailKind.trim() !== "" ? executed.error.detailKind : executed.error.kind;
-        const diagnosticToken = typeof executed.error.detailDiagnosticToken === "string" && /^[a-z0-9-]+$/u.test(executed.error.detailDiagnosticToken) ? executed.error.detailDiagnosticToken : undefined;
-        logger({ event: "knowledge-workflow-execution-failure", ownerId, runId, stage: "executor", failureKind, ...(diagnosticToken === undefined ? {} : { diagnosticToken }) });
-        const persistedFailureKind = diagnosticToken === undefined ? failureKind : `${failureKind}:${diagnosticToken}`;
-        const retryable = await step.do(`persist retryable workflow failure ${latest.value.revision}`, async () => service.advance({ ownerId, runId, expectedRevision: latest.value.revision, nextState: "retryable-failure", failureKind: persistedFailureKind }));
-        if (!retryable.ok) throw new Error(retryable.error.kind);
-        return { ok: true, value: { state: retryable.value.state, run: retryable.value } };
-      }
-      const latest = await step.do(`${stepName}: reload before marking upload-required`, async () => service.status({ ownerId, runId }));
+      const latest = await step.do(`${stepName}: reload after failure`, () => service.status({ ownerId, runId }));
       if (!latest.ok) throw new Error(latest.error.kind);
-      const failureKind = typeof executed.error.detailKind === "string" && executed.error.detailKind.trim() !== "" ? executed.error.detailKind : executed.error.kind;
+      const failureKind = executed.error.detailKind?.trim() || executed.error.kind;
       const diagnosticToken = typeof executed.error.detailDiagnosticToken === "string" && /^[a-z0-9-]+$/u.test(executed.error.detailDiagnosticToken) ? executed.error.detailDiagnosticToken : undefined;
       logger({ event: "knowledge-workflow-execution-failure", ownerId, runId, stage: "executor", failureKind, ...(diagnosticToken === undefined ? {} : { diagnosticToken }) });
       const persistedFailureKind = diagnosticToken === undefined ? failureKind : `${failureKind}:${diagnosticToken}`;
-      const awaitingUpload = await step.do(`mark blocked workflow awaiting upload ${latest.value.revision}`, async () => service.advance({ ownerId, runId, expectedRevision: latest.value.revision, nextState: "awaiting-upload", failureKind: persistedFailureKind }));
-      if (!awaitingUpload.ok) throw new Error(awaitingUpload.error.kind);
-      return { ok: true, value: { state: awaitingUpload.value.state, run: awaitingUpload.value } };
+      const retryable = isTransientBrowserFailure(executed.error) || executed.error.kind !== "WorkflowRobotsFailed" && executed.error.kind !== "WorkflowUploadRequired" || latest.value.userAuthorization != null && latest.value.materialId == null && latest.value.counts.knowledgePoints === 0;
+      if (retryable && !isWorkflowRetryStage(latest.value.state)) throw new Error(executed.error.kind);
+      const offerUpload = retryable && latest.value.materialId == null && latest.value.counts.knowledgePoints === 0;
+      const changed = await step.do(`persist workflow failure ${latest.value.revision}`, () => service.advance({ ownerId, runId, expectedRevision: latest.value.revision, nextState: retryable && !offerUpload ? "retryable-failure" : "awaiting-upload", failureKind: offerUpload ? `WorkflowExtractionFailed:${persistedFailureKind}` : persistedFailureKind }));
+      if (!changed.ok) throw new Error(changed.error.kind);
+      return { ok: true, value: { state: changed.value.state, run: changed.value } };
     }
     let executed = await executeOrAwaitMaterial("execute knowledge extraction and quiz stages");
     let result = executed.value;
-    while (result && typeof result === "object" && !Array.isArray(result) && (result.state === "paused" || result.state === "awaiting-time-limit-decision" || result.state === "awaiting-upload" || result.state === "retryable-failure")) {
+    while (result && typeof result === "object" && !Array.isArray(result)) {
+      // A replayed step result can predate later committed chunks. This control read
+      // must be live: caching it would restore the same expired-deadline branch.
+      current = await service.status({ ownerId, runId });
+      if (!current.ok) throw new Error(current.error.kind);
+      if (result.state !== current.value.state || result.run?.revision !== current.value.revision) result = { ...result, state: current.value.state, run: current.value };
+      if (result.state === "per-point-quiz-loop") {
+        await step.sleepUntil(`yield bounded quiz chunk ${result.run.revision}`, new Date(Date.now() + 1_000));
+        executed = await executeOrAwaitMaterial(`execute bounded quiz chunk ${result.run.revision}`);
+        result = executed.value;
+        continue;
+      }
+      if (isWorkflowRetryStage(result.state)) {
+        executed = await executeOrAwaitMaterial(`resume knowledge workflow ${current.value.revision}`);
+        result = executed.value;
+        continue;
+      }
+      if (!["paused", "awaiting-time-limit-decision", "awaiting-upload", "retryable-failure"].includes(result.state)) break;
       if (isAutomaticExtractionContinuation(result, now())) {
         const chunkRun = /** @type {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} */ (result.run);
         const continued = await step.do(`continue bounded extraction chunk ${chunkRun.revision}`, async () => service.advance({ ownerId, runId, expectedRevision: chunkRun.revision, nextState: "extraction-loop" }));

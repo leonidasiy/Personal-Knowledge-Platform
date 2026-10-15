@@ -1,4 +1,8 @@
 // @ts-check
+const shell = Deno.readTextFileSync(new URL("../index.html", import.meta.url));
+Object.defineProperty(globalThis, "document", { configurable: true, value: {
+  getElementById: (/** @type {string} */ id) => ({ textContent: shell.match(new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`))?.[1] ?? "" }),
+} });
 import { createSettingsPage } from "../src/features/reminders/page.js";
 import { createReminderClient } from "../src/features/reminders/client.js";
 import { createProgressPage } from "../src/features/progress/page.js";

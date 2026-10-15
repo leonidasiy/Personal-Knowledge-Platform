@@ -106,3 +106,17 @@ test('public progress rejects duplicate IDs and unsafe URLs',()=>{
  const valid={currentUrl:null,pageTitle:null,sectionTitle:null,stage:null,updatedAt:null,knowledgePoints:[],generatedQuizQuestions:0};
  assert.ok(parseWorkflowProgress(valid));assert.equal(parseWorkflowProgress({...valid,currentUrl:'file:///private'}),null);assert.equal(parseWorkflowProgress({...valid,currentUrl:'https://secret:password@example.test'}),null);assert.equal(parseWorkflowProgress({...valid,knowledgePoints:[{knowledgeId:'id',summary:'One'},{knowledgeId:'id',summary:'Two'}]}),null);
 });
+
+test('failed units survive durable progress projection and reject invalid public fields',async()=>{
+ const f=await fixture();try{
+  const scratchpad=unwrap(await f.content.loadScratchpad(f.run));
+  const failedPages=[{url:'https://example.test/source#section=page-2',title:'Page 2',failureKind:'KnowledgeReviewOutputInvalid',attempts:2,failedAt:f.now()}];
+  unwrap(await f.content.saveScratchpad({...scratchpad,failedPages,revision:scratchpad.revision+1},f.now()));
+  const progress=unwrap(await f.progress.read(f.run));
+  assert.deepEqual(progress.failedItems,failedPages.map(({failedAt,...item})=>item));
+  assert.equal(progress.processedPageCount,0);
+  assert.equal(parseWorkflowProgress({...progress,failedItems:[{...progress.failedItems[0],attempts:0}]}),null);
+  assert.equal(parseWorkflowProgress({...progress,failedItems:[{...progress.failedItems[0],url:'https://user:password@example.test/source'}]}),null);
+  assert.equal(parseWorkflowProgress({...progress,failedItems:[...progress.failedItems,...progress.failedItems]}),null);
+ }finally{f.close();}
+});

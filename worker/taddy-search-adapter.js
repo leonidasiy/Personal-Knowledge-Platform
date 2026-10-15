@@ -1,9 +1,9 @@
 // @ts-check
 
-/** @template T @template E @typedef {{readonly ok:true,readonly value:T}|{readonly ok:false,readonly error:E}} Result */
+/** @template T @template E @typedef {{readonly ok:true,readonly value:T,readonly nextCursor?:string}|{readonly ok:false,readonly error:E}} Result */
 /** @typedef {{readonly id:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean}} SearchProviderDescriptor */
 /** @typedef {{readonly kind:"SearchProviderCredentialMissing"}|{readonly kind:"SearchProviderCredentialRejected"}|{readonly kind:"SearchProviderQuotaExceeded"}|{readonly kind:"SearchProviderTimedOut"}|{readonly kind:"SearchProviderNetworkFailed"}|{readonly kind:"SearchProviderUpstreamRejected",readonly status:number}|{readonly kind:"SearchProviderQueryInvalid",readonly reason:"argument"|"complexity"|"field"|"input"|"syntax"|"variable"|"unspecified",readonly diagnosticTokens:readonly string[]}|{readonly kind:"SearchProviderInputInvalid"}|{readonly kind:"SearchProviderQueryTooComplex"}|{readonly kind:"SearchProviderGraphqlRejected",readonly code:string}|{readonly kind:"SearchProviderUnavailable"}|{readonly kind:"SearchProviderResponseInvalid"}|{readonly kind:"SearchProviderFeedBlocked",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedPrivate",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedDuplicate",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedInvalid",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedMissing",readonly seriesUuid:string}} SearchProviderFailure */
-/** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number}} SearchProviderCommand */
+/** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number,readonly cursor?:string}} SearchProviderCommand */
 /** @typedef {{readonly providerId:string,readonly resultKind:string,readonly sourceLevel:"feed",readonly title:string,readonly description:string|null,readonly canonicalUrl:string,readonly publisherLabel:string|null,readonly publishedAt:null,readonly identityEvidence:readonly {readonly attribute:string,readonly value:string,readonly provenanceUrl:string}[]}} TaddyCandidate */
 /** @typedef {{readonly providerId:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean,readonly maximumResults:number,readonly timeoutMs:number}} TaddySearchConfiguration */
 /** @typedef {{readonly userId:string,readonly apiKey:string}} TaddyCredentials */
@@ -12,7 +12,7 @@
 
 const ENDPOINT = "https://api.taddy.org";
 const SEARCH_SELECTION =
-  `{searchForTerm(term:__TERM__,filterForTypes:PODCASTSERIES,limitPerPage:__LIMIT__,includeSearchOperator:OR,isSafeMode:true){searchId podcastSeries{uuid name description authorName websiteUrl rssUrl}rankingDetails{id uuid rankingScore}}}`;
+  `{searchForTerm(term:__TERM__,filterForTypes:PODCASTSERIES,limitPerPage:__LIMIT__,page:__PAGE__,includeSearchOperator:OR,isSafeMode:true){searchId podcastSeries{uuid name description authorName websiteUrl rssUrl}rankingDetails{id uuid rankingScore}}}`;
 const DETAILS_SELECTION =
   `{getMultiplePodcastSeries(uuids:__UUIDS__){
       uuid
@@ -54,6 +54,10 @@ export function createTaddySearchProvider(configuration, dependencies) {
       if (!commandValid(command, descriptor.id)) {
         throw new TypeError("Invalid Taddy search command.");
       }
+      const parts = command.cursor?.split(":");
+      const page = parts === undefined ? 1 : Number(parts[0]);
+      const count = parts === undefined ? Math.min(command.limit, configuration.maximumResults) : Number(parts[1]);
+      if (parts !== undefined && parts.length !== 2 || !Number.isInteger(page) || page < 1 || page > 20 || !Number.isInteger(count) || count < 1 || count > Math.min(command.limit,configuration.maximumResults)) return {ok:false,error:{kind:"SearchProviderInputInvalid"}};
       const credential = dependencies.credentials();
       if (!credential.ok) return credential;
       if (
@@ -77,7 +81,7 @@ export function createTaddySearchProvider(configuration, dependencies) {
         signal,
         credential.value,
         {
-          query: searchQuery(command.query, Math.min(command.limit, configuration.maximumResults)),
+          query: searchQuery(command.query, count, page),
         },
         "search",
       );
@@ -97,7 +101,8 @@ export function createTaddySearchProvider(configuration, dependencies) {
       if (!detailsResponse.ok) return detailsResponse;
       const detailsDocument = await readDocument(detailsResponse.value);
       if (!detailsDocument.ok) return detailsDocument;
-      return parseDetailsDocument(detailsDocument.value, descriptor, searchResult.value);
+      const parsed = parseDetailsDocument(detailsDocument.value, descriptor, searchResult.value);
+      return parsed.ok && searchResult.value.uuids.length === count && page < 20 ? {...parsed,nextCursor:`${page + 1}:${count}`} : parsed;
     },
   });
 }
@@ -152,9 +157,9 @@ async function request(fetchDependency, signal, credential, body, stage) {
   return { ok: true, value: response };
 }
 
-/** @param {string} term @param {number} limit */
-function searchQuery(term, limit) {
-  return SEARCH_SELECTION.replace("__TERM__", JSON.stringify(term)).replace("__LIMIT__", String(limit));
+/** @param {string} term @param {number} limit @param {number} page */
+function searchQuery(term, limit, page) {
+  return SEARCH_SELECTION.replace("__TERM__", JSON.stringify(term)).replace("__LIMIT__", String(limit)).replace("__PAGE__", String(page));
 }
 
 /** @param {readonly string[]} uuids */
@@ -380,7 +385,7 @@ function configurationValid(value) {
 }
 /** @param {unknown} value @param {string} providerId */
 function commandValid(value, providerId) {
-  return record(value) && Object.keys(value).length === 3 &&
+  return record(value) && Object.keys(value).every(key => ["providerId","query","limit","cursor"].includes(key)) && (value.cursor === undefined || text(value.cursor)) &&
     value.providerId === providerId && text(value.query) &&
     positive(value.limit);
 }

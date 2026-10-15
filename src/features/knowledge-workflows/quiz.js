@@ -78,12 +78,14 @@ import { validateAssembledQuizPair } from "./quiz-pair.js";
  *   readonly kind: "QuizPurgeBeforeRestrictionExpired"
  * } | {
  *   readonly kind: "QuizPersistenceFailed"
- * }} QuizFailure
+ * } | QuizTechnicalFailure} QuizFailure
  */
 
-/** @typedef {{ readonly generate: (command: { readonly knowledge: KnowledgePoint, readonly attempt: number, readonly feedback: string | null }) => Promise<Result<unknown, unknown>> }} QuestionGenerator */
+/** @typedef {{readonly kind:"KnowledgeModelTimeout"|"KnowledgeModelCancelled"|"KnowledgeModelUnavailable"|"KnowledgeModelResponseReadFailed"|"KnowledgeModelResponseInvalid"|"KnowledgeModelResponseDuplicateKey"|"KnowledgeModelRejected"|"WorkflowAgentAgentOutputInvalid"|"WorkflowStageCallUncertain"|"QuizDraftSchemaInvalid"|"QuizEvaluatorOutputInvalid"|"QuizGeneratorFailed"|"QuizEvaluatorFailed",readonly causeKind?:string,readonly status?:number,readonly technicalRetriesExhausted?:true,readonly technicalAttempts?:number}} QuizTechnicalFailure */
+
+/** @typedef {{ readonly generate: (command: { readonly knowledge: KnowledgePoint, readonly attempt: number, readonly technicalAttempt?: number, readonly feedback: string | null }) => Promise<Result<unknown, unknown>> }} QuestionGenerator */
 // Production reviewer only. External benchmark evaluators are never dependencies of this actor.
-/** @typedef {{ readonly evaluate: (command: { readonly draft: QuestionDraft, readonly knowledge: { readonly id: string, readonly summary: string, readonly evidenceAnchors: readonly { readonly url: string, readonly selector: string }[] }, readonly deterministicValidation: { readonly ok: true }, readonly attempt: number, readonly rubric: string }) => Promise<Result<unknown, unknown>> }} QuestionReviewer */
+/** @typedef {{ readonly evaluate: (command: { readonly draft: QuestionDraft, readonly knowledge: { readonly id: string, readonly summary: string, readonly evidenceAnchors: readonly { readonly url: string, readonly selector: string }[] }, readonly deterministicValidation: { readonly ok: true }, readonly attempt: number, readonly technicalAttempt?: number, readonly rubric: string }) => Promise<Result<unknown, unknown>> }} QuestionReviewer */
 /**
  * @typedef {{
  *   readonly findPublished: (scope: {readonly ownerId:string,readonly runId:string,readonly knowledgeId:string}) => Promise<Result<{readonly status:"published"|"pending-review",readonly attempt:number}|null,unknown>>,
@@ -94,7 +96,7 @@ import { validateAssembledQuizPair } from "./quiz-pair.js";
  *   readonly purge: (command: { readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly before: string }) => Promise<Result<null, unknown>>
  * }} QuizRepository
  */
-/** @typedef {{ readonly generator: QuestionGenerator, readonly reviewer: QuestionReviewer, readonly repository: QuizRepository, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly knowledgeId?: string, readonly failureKind?: string }) => void, readonly maxAttempts: number, readonly beforeGenerate?: (knowledge: KnowledgePoint) => Promise<Result<boolean, {readonly kind:string}>>, readonly publicationPolicy?: { readonly samplingVersion: string, readonly factualSamplingRatePercent: number } }} QuizDependencies */
+/** @typedef {{ readonly generator: QuestionGenerator, readonly reviewer: QuestionReviewer, readonly repository: QuizRepository, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly knowledgeId?: string, readonly failureKind?: string }) => void, readonly maxAttempts: number, readonly technicalRetries?:boolean, readonly beforeGenerate?: (knowledge: KnowledgePoint) => Promise<Result<boolean, {readonly kind:string}>>, readonly publicationPolicy?: { readonly samplingVersion: string, readonly factualSamplingRatePercent: number } }} QuizDependencies */
 
 const freeze = Object.freeze;
 // Initial generation plus three corrective retries.
@@ -180,6 +182,40 @@ function publicationStatus(_ownerId, _knowledge, _draft, _policy) {
 /** @param {QuizFailure} failure @param {QuizDependencies} dependencies @param {string} runId @param {string | undefined} knowledgeId @returns {Result<never, QuizFailure>} */
 function fail(failure, dependencies, runId, knowledgeId) { dependencies.logger({ event: "quiz-actor-critic-failure", runId, knowledgeId, failureKind: failure.kind }); return { ok: false, error: failure }; }
 
+const draftRepairFeedback = "Regenerate a schema-valid draft using only the knowledge point's cited support. For a paired quiz, canonicalAnswers, correctOptionKeys, correctOptionAnswers and fillBlank.blanks must have equal counts and corresponding order: one unique correct key per answer and blank, with exactly the same answer text in canonicalAnswers, correctOptionAnswers.canonicalAnswer, fillBlank.blanks.canonicalAnswer and acceptedAnswers[0]. Each blank must ask for that actual answer, not a subset or combined phrase. Within each acceptedAnswers list, the exact canonical answer alone is sufficient. Synonyms are optional; include the exact canonical answer first and only distinct legitimate synonyms, never cosmetic glyph or Unicode variants that normalize to an existing entry. All entries must be unique after Unicode NFKC normalization, trimming, case folding and collapsing whitespace. Capitalization, compatibility-character and whitespace variants are duplicates, not extra aliases.";
+
+/** @param {unknown} error @returns {error is QuizTechnicalFailure} */
+function retryableTechnicalFailure(error) {
+  if (!record(error) || !text(error.kind)) return false;
+  if (text(error.causeKind) && /Persistence|Ledger|Accounting|Authorization|Credential|Budget|Permission|Usage|Billing|Cost/u.test(error.causeKind)) return false;
+  if (error.kind === "KnowledgeModelRejected") return typeof error.status==="number"&&(error.status>=200&&error.status<300||[408,429,500,502,503,504].includes(error.status));
+  return /^(KnowledgeModel(Timeout|Cancelled|Unavailable|ResponseReadFailed|ResponseInvalid|ResponseDuplicateKey)|WorkflowAgentAgentOutputInvalid|WorkflowStageCallUncertain|QuizDraftSchemaInvalid|QuizEvaluatorOutputInvalid|QuizGeneratorFailed|QuizEvaluatorFailed)$/u.test(error.kind);
+}
+
+/** @template T
+ * @param {(technicalAttempt:number)=>Promise<Result<unknown,unknown>>} work
+ * @param {(value:unknown)=>Result<T,QuizFailure>} parse
+ * @param {"QuizGeneratorFailed"|"QuizEvaluatorFailed"} fallback
+ * @param {(failure:unknown)=>void} [repair]
+ * @param {boolean} [retry]
+ * @returns {Promise<Result<T,QuizFailure>>}
+ */
+async function technicalCall(work,parse,fallback,repair,retry=true) {
+  for (let technicalAttempt=1;technicalAttempt<=(retry?4:1);technicalAttempt++) {
+    /** @type {Result<T,unknown>} */ let result;
+    try { const raw=await work(technicalAttempt); result=raw.ok?parse(raw.value):raw; }
+    catch (error) { if(error instanceof AgentExecutionBoundaryFailure)throw error; result={ok:false,error:{kind:fallback}}; }
+    if(result.ok)return result;
+    const failure=result.error;
+    if(record(failure)&&(failure.kind==="QuizDuplicate"||failure.kind==="QuizDraftUngrounded"))return {ok:false,error:{kind:failure.kind}};
+    if(!retryableTechnicalFailure(failure))return {ok:false,error:{kind:fallback,...(record(failure)&&text(failure.kind)?{causeKind:text(failure.causeKind)?failure.causeKind:failure.kind}:{}),...(record(failure)&&failure.technicalRetriesExhausted===true?{technicalRetriesExhausted:true,technicalAttempts:4}:{})}};
+    if(!retry)return {ok:false,error:failure};
+    if(failure.technicalRetriesExhausted || technicalAttempt===4)return {ok:false,error:{...failure,technicalRetriesExhausted:true,technicalAttempts:failure.technicalAttempts??technicalAttempt}};
+    repair?.(failure);
+  }
+  throw new Error("Quiz technical attempt limit violated");
+}
+
 /** @param {QuizDependencies} dependencies */
 export function createQuizActorCritic(dependencies) {
   const policy = dependencies?.publicationPolicy ?? { samplingVersion: "factual-sampling-v1", factualSamplingRatePercent: 30 };
@@ -191,7 +227,6 @@ export function createQuizActorCritic(dependencies) {
       dependencies.logger({ event: "quiz-actor-critic-entry", runId: command.runId });
       /** @type {QuizDisposition[]} */
       const dispositions = [];
-      let schemaExhaustedPoints = 0;
       for (const knowledge of command.points) {
         let existing;
         try { existing = await dependencies.repository.findPublished({ownerId:command.ownerId,runId:command.runId,knowledgeId:knowledge.id}); }
@@ -213,42 +248,31 @@ export function createQuizActorCritic(dependencies) {
             continue;
           }
         }
-        let feedback = null;
+        /** @type {string|null} */ let feedback = null;
         let lastFailure = /** @type {QuizFailure["kind"] | null} */ (null);
         let attempts = 0;
-        let schemaFailures = 0;
         let accepted = false;
         /** @type {"published" | "pending-review" | null} */
         let acceptedPublicationStatus = null;
         for (let attempt = 1; attempt <= dependencies.maxAttempts; attempt += 1) {
           attempts = attempt;
-          let generated;
-          try { generated = await dependencies.generator.generate({ knowledge, attempt, feedback }); } catch (error) {
-            if(error instanceof AgentExecutionBoundaryFailure)throw error;
-            if(dependencies.maxAttempts!==3)return fail({kind:"QuizGeneratorFailed"},dependencies,command.runId,knowledge.id);
-            lastFailure = "QuizGeneratorFailed";
-            const saved = await persistAttempt(dependencies.repository, { ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, attempt, draftId: null, score: null, feedback: null, failureKind: lastFailure, createdAt: dependencies.now() }, dependencies, command.runId, knowledge.id);
-            if (!saved.ok) return saved;
-            feedback = "Regenerate a schema-valid draft using only the knowledge point's cited support. For a paired quiz, canonicalAnswers, correctOptionKeys, correctOptionAnswers and fillBlank.blanks must have equal counts and corresponding order: one unique correct key per answer and blank, with exactly the same answer text in canonicalAnswers, correctOptionAnswers.canonicalAnswer, fillBlank.blanks.canonicalAnswer and acceptedAnswers[0]. Each blank must ask for that actual answer, not a subset or combined phrase. Within each acceptedAnswers list, the exact canonical answer alone is sufficient. Synonyms are optional; include the exact canonical answer first and only distinct legitimate synonyms, never cosmetic glyph or Unicode variants that normalize to an existing entry. All entries must be unique after Unicode NFKC normalization, trimming, case folding and collapsing whitespace. Capitalization, compatibility-character and whitespace variants are duplicates, not extra aliases.";
-            continue;
-          }
+          /** @type {string|null} */ let technicalFeedback=feedback;
+          /** @type {Result<QuestionDraft,QuizFailure>} */ const generated=await technicalCall(technicalAttempt=>dependencies.generator.generate({knowledge,attempt,technicalAttempt,feedback:technicalFeedback}),value=>{
+            if(!validDraft(value))return {ok:false,error:{kind:"QuizDraftSchemaInvalid"}};
+            const invalid=validateGrounding(value,knowledge);
+            return invalid?.kind==="QuizDraftSchemaInvalid"?{ok:false,error:invalid}:{ok:true,value};
+          },"QuizGeneratorFailed",failure=>{
+            if(record(failure)&&failure.kind==="QuizDraftSchemaInvalid") {
+              technicalFeedback=feedback===null?draftRepairFeedback:feedback+"\n"+draftRepairFeedback;
+              if(Array.isArray(failure.validationIssues)&&failure.validationIssues.length&&failure.validationIssues.every(text))technicalFeedback+="\nPaired-quiz validation issues from the previous draft; fix every listed issue:\n"+failure.validationIssues.join("\n");
+            }
+          },dependencies.technicalRetries!==false);
           if (!generated.ok) {
-            if (record(generated.error) && generated.error.kind === "QuizDraftSchemaInvalid") schemaFailures += 1;
-            if(dependencies.maxAttempts!==3 && !(record(generated.error)&&["QuizDuplicate","QuizDraftSchemaInvalid","QuizDraftUngrounded"].includes(String(generated.error.kind))))return fail({kind:"QuizGeneratorFailed",...(record(generated.error)&&text(generated.error.kind)?{causeKind:text(generated.error.causeKind)?generated.error.causeKind:generated.error.kind}:{})},dependencies,command.runId,knowledge.id);
-            lastFailure = record(generated.error) && generated.error.kind === "QuizDuplicate" ? "QuizDuplicate" : "QuizGeneratorFailed";
-
-            const saved = await persistAttempt(dependencies.repository, { ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, attempt, draftId: null, score: null, feedback: null, failureKind: lastFailure, createdAt: dependencies.now() }, dependencies, command.runId, knowledge.id);
-            if (!saved.ok) return saved;
-            feedback = lastFailure === "QuizDuplicate" ? "This draft repeats a quiz already generated for this source. Test a distinct meaningful relationship, not a reworded duplicate." : "Regenerate a schema-valid draft using only the knowledge point's cited support. For a paired quiz, canonicalAnswers, correctOptionKeys, correctOptionAnswers and fillBlank.blanks must have equal counts and corresponding order: one unique correct key per answer and blank, with exactly the same answer text in canonicalAnswers, correctOptionAnswers.canonicalAnswer, fillBlank.blanks.canonicalAnswer and acceptedAnswers[0]. Each blank must ask for that actual answer, not a subset or combined phrase. Within each acceptedAnswers list, the exact canonical answer alone is sufficient. Synonyms are optional; include the exact canonical answer first and only distinct legitimate synonyms, never cosmetic glyph or Unicode variants that normalize to an existing entry. All entries must be unique after Unicode NFKC normalization, trimming, case folding and collapsing whitespace. Capitalization, compatibility-character and whitespace variants are duplicates, not extra aliases.";
-            if (record(generated.error) && generated.error.kind === "QuizDraftSchemaInvalid" && Array.isArray(generated.error.validationIssues) && generated.error.validationIssues.length > 0 && generated.error.validationIssues.every(text)) feedback += "\nPaired-quiz validation issues from the previous draft; fix every listed issue:\n" + generated.error.validationIssues.join("\n");
-            continue;
-          }
-          if (!validDraft(generated.value)) {
-            schemaFailures += 1;
-            lastFailure = "QuizDraftSchemaInvalid";
-            const saved = await persistAttempt(dependencies.repository, { ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, attempt, draftId: null, score: null, feedback: null, failureKind: lastFailure, createdAt: dependencies.now() }, dependencies, command.runId, knowledge.id);
-            if (!saved.ok) return saved;
-            feedback = "Regenerate a schema-valid draft using only the knowledge point's cited support. For a paired quiz, canonicalAnswers, correctOptionKeys, correctOptionAnswers and fillBlank.blanks must have equal counts and corresponding order: one unique correct key per answer and blank, with exactly the same answer text in canonicalAnswers, correctOptionAnswers.canonicalAnswer, fillBlank.blanks.canonicalAnswer and acceptedAnswers[0]. Each blank must ask for that actual answer, not a subset or combined phrase. Within each acceptedAnswers list, the exact canonical answer alone is sufficient. Synonyms are optional; include the exact canonical answer first and only distinct legitimate synonyms, never cosmetic glyph or Unicode variants that normalize to an existing entry. All entries must be unique after Unicode NFKC normalization, trimming, case folding and collapsing whitespace. Capitalization, compatibility-character and whitespace variants are duplicates, not extra aliases.";
+            if(generated.error.kind!=="QuizDuplicate"&&generated.error.kind!=="QuizDraftUngrounded")return fail(generated.error,dependencies,command.runId,knowledge.id);
+            lastFailure=generated.error.kind;
+            const saved=await persistAttempt(dependencies.repository,{ownerId:command.ownerId,runId:command.runId,knowledgeId:knowledge.id,attempt,draftId:null,score:null,feedback:null,failureKind:lastFailure,createdAt:dependencies.now()},dependencies,command.runId,knowledge.id);
+            if(!saved.ok)return saved;
+            feedback=lastFailure==="QuizDuplicate"?"This draft repeats a quiz already generated for this source. Test a distinct meaningful relationship, not a reworded duplicate.":"Use only the knowledge point's cited evidence.";
             continue;
           }
           const draft = /** @type {QuestionDraft} */ (generated.value);
@@ -260,25 +284,11 @@ export function createQuizActorCritic(dependencies) {
             feedback = "Use only the knowledge point's cited evidence.";
             continue;
           }
-          let evaluated;
-          try { evaluated = await dependencies.reviewer.evaluate({ draft, knowledge: { id: knowledge.id, summary: knowledge.summary, evidenceAnchors: knowledge.evidenceAnchors }, deterministicValidation: { ok: true }, attempt, rubric: "10 means the draft tests the key concept precisely; 1 means irrelevant or too general." }); } catch (error) {
-            if(error instanceof AgentExecutionBoundaryFailure)throw error;
-            if(dependencies.maxAttempts!==3)return fail({kind:"QuizEvaluatorFailed"},dependencies,command.runId,knowledge.id);
-            lastFailure = "QuizEvaluatorFailed";
-            const saved = await persistAttempt(dependencies.repository, { ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, attempt, draftId: draft.id, score: null, feedback: null, failureKind: lastFailure, createdAt: dependencies.now() }, dependencies, command.runId, knowledge.id);
-            if (!saved.ok) return saved;
-            feedback = "Regenerate the question after evaluator failure.";
-            continue;
-          }
-          if (!evaluated.ok && dependencies.maxAttempts!==3)return fail({kind:"QuizEvaluatorFailed",...(record(evaluated.error)&&text(evaluated.error.kind)?{causeKind:text(evaluated.error.causeKind)?evaluated.error.causeKind:evaluated.error.kind}:{})},dependencies,command.runId,knowledge.id);
-          if (evaluated.ok && dependencies.maxAttempts!==3 && !validEvaluation(evaluated.value))return fail({kind:"QuizEvaluatorOutputInvalid"},dependencies,command.runId,knowledge.id);
-          if (!evaluated.ok || !validEvaluation(evaluated.value)) {
-            lastFailure = "QuizEvaluatorOutputInvalid";
-            const saved = await persistAttempt(dependencies.repository, { ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, attempt, draftId: draft.id, score: null, feedback: null, failureKind: lastFailure, createdAt: dependencies.now() }, dependencies, command.runId, knowledge.id);
-            if (!saved.ok) return saved;
-            feedback = "Return a score, reasons, actionable feedback, and grounding problems.";
-            continue;
-          }
+          let evaluationRubric="10 means the draft tests the key concept precisely; 1 means irrelevant or too general.";
+          const evaluated=await technicalCall(technicalAttempt=>dependencies.reviewer.evaluate({draft,knowledge:{id:knowledge.id,summary:knowledge.summary,evidenceAnchors:knowledge.evidenceAnchors},deterministicValidation:{ok:true},attempt,technicalAttempt,rubric:evaluationRubric}),value=>validEvaluation(value)?{ok:true,value}:{ok:false,error:{kind:"QuizEvaluatorOutputInvalid"}},"QuizEvaluatorFailed",failure=>{
+            if(record(failure)&&["QuizEvaluatorOutputInvalid","KnowledgeModelResponseInvalid","KnowledgeModelResponseDuplicateKey"].includes(String(failure.kind)))evaluationRubric="10 means the draft tests the key concept precisely; 1 means irrelevant or too general. Previous response failed format validation. Return the required JSON schema exactly: score is an integer from 1 to 10; reasons is a nonempty string array; feedback is a string; groundingProblems is a string array; knowledgeGroundingProblems is an array of typed claim/kind/reason objects citing an exact current summary claim, or [] when there is no point-level fault. Re-evaluate this unchanged draft using the same quality standards.";
+          },dependencies.technicalRetries!==false);
+          if(!evaluated.ok)return fail(evaluated.error,dependencies,command.runId,knowledge.id);
           const evaluation = evaluated.value;
           lastFailure = evaluation.knowledgeGroundingProblems?.length ? "QuizKnowledgeUngrounded" : evaluation.score >= 8 && evaluation.groundingProblems.length === 0 ? null : evaluation.score >= 8 ? "QuizDraftUngrounded" : "QuizScoreBelowThreshold";
           const saved = await persistAttempt(dependencies.repository, { ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, attempt, draftId: draft.id, score: evaluation.score, feedback: evaluation.feedback, failureKind: lastFailure, createdAt: dependencies.now() }, dependencies, command.runId, knowledge.id);
@@ -316,9 +326,7 @@ export function createQuizActorCritic(dependencies) {
           if (!discarded.ok) return fail({ kind: "QuizPurgeFailed" }, dependencies, command.runId, knowledge.id);
         } catch (error) { return fail({ kind: "QuizPurgeFailed" }, dependencies, command.runId, knowledge.id); }
         dispositions.push(freeze({ knowledgeId: knowledge.id, status: "abandoned", publicationStatus: null, attempts, failureKind: lastFailure, restrictedUntil: null }));
-        if (attempts === dependencies.maxAttempts && schemaFailures === attempts) schemaExhaustedPoints += 1;
       }
-      if (dependencies.maxAttempts === 2 && dispositions.length > 0 && schemaExhaustedPoints === dispositions.length) return fail({ kind: "QuizGeneratorFailed", causeKind: "QuizDraftSchemaInvalid" }, dependencies, command.runId, undefined);
       const attemptedPoints=dispositions.filter(item=>item.attempts>0).length;
       const retriedPoints=dispositions.filter(item=>item.attempts>1).length;
       const quizDroppedPoints=dispositions.filter(item=>item.status==="abandoned"&&item.failureKind!=="QuizSeeLessOften").length;

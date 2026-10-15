@@ -464,7 +464,7 @@ for (const malformed of [false, true]) {
           runId: run.runId,
           points: [point],
         });
-      if(malformed){assert(result.ok);assert.equal(result.value.dispositions[0].status,"abandoned");assert.equal(result.value.dispositions[0].attempts,4);assert.equal(result.value.statistics.exhaustedDropPoints,1);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_quizzes").get().n,0);}
+      if(malformed){assert.equal(result.ok,false);assert.equal(result.error.kind,"QuizDraftSchemaInvalid");assert.equal(result.error.technicalRetriesExhausted,true);assert.equal(result.error.technicalAttempts,4);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_quizzes").get().n,0);assert.equal(db.prepare("SELECT count(*) AS n FROM extraction_knowledge_points").get().n,1);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_quiz_attempts").get().n,0);}
       else {assert(result.ok,JSON.stringify({result,wireFailure}));assert.equal(result.value.dispositions[0].status,"accepted");}
       assert.deepEqual([drafts, critics], malformed ? [4, 0] : [1, 1]);
       const rows = db.prepare(

@@ -93,7 +93,7 @@ Deno.test("source gateway invokes injected fetch without rebinding its receiver"
       const request = new Request(input, init);
       if (request.method === "POST") {
         return Promise.resolve(Response.json({
-          result: { source, reused: false },
+          result: { source, reused: false }, workflow: {runId:"run-a",reused:false},
         }));
       }
       return Promise.resolve(Response.json({
@@ -121,7 +121,7 @@ Deno.test("source gateway invokes injected fetch without rebinding its receiver"
   if (!browse.ok) throw new Error(browse.error.kind);
   assertEquals(browse.value.interestAreas[0].title, "Music");
 
-  const approved = await client.approve({
+  const approved = await client.extract({
     submittedUrl: source.submittedUrl,
     canonicalUrl: source.canonicalUrl,
     title: source.title,
@@ -136,14 +136,14 @@ Deno.test("source gateway invokes injected fetch without rebinding its receiver"
   assertEquals(requests, 2);
 });
 
-Deno.test("source gateway returns the workflow run from approval and uploads pasted material as JSON", async () => {
+Deno.test("source gateway returns the workflow run from extraction and uploads pasted material as JSON", async () => {
   /** @type {Request | null} */ let received = null;
   const client = gateway(async (request) => {
     received = request;
-    if (request.url.endsWith("/approve")) return Response.json({ result: { source, reused: false }, workflow: { runId: "run-a", reused: false } });
+    if (request.url.endsWith("/extract")) return Response.json({ result: { source, reused: false }, workflow: { runId: "run-a", reused: false } });
     return Response.json({ result: { status: "attached", materialId: "material-a", runId: "run-a", reused: false } });
   });
-  const approved = await client.approve({ submittedUrl: source.submittedUrl, canonicalUrl: source.canonicalUrl, title: source.title, description: source.description, adapter: source.adapter, interestAreaIds: source.interestAreaIds, identityEvidence: source.identityEvidence, identityStatus: "resolved", idempotencyKey: "approve-workflow" });
+  const approved = await client.extract({ submittedUrl: source.submittedUrl, canonicalUrl: source.canonicalUrl, title: source.title, description: source.description, adapter: source.adapter, interestAreaIds: source.interestAreaIds, identityEvidence: source.identityEvidence, identityStatus: "resolved", idempotencyKey: "approve-workflow" });
   assertEquals(approved.ok, true);
   if (!approved.ok) throw new Error(approved.error.kind);
   assertEquals(approved.value.workflow?.runId, "run-a");
@@ -255,6 +255,12 @@ Deno.test("source gateway posts an owner-free workflow retry command and validat
   const body = /** @type {Record<string, unknown>} */ (await request.json());
   assertEquals(body.action, "resume");
   assertEquals(body.ownerId, undefined);
+  await client.retryWorkflow({runId:"run-a",expectedRevision:3,idempotencyKey:"quiz-retry-a",quizzes:true});
+  const quizRequest=/** @type {Request} */(/** @type {unknown} */(received));
+  const quizBody=await quizRequest.json();
+  assertEquals(quizBody.action,"retry-quizzes");
+  assertEquals(quizBody.ownerId,undefined);
+  assertEquals(quizBody.quizzes,undefined);
 });
 
 Deno.test("source gateway uses multipart for a PDF or slide-deck material file", async () => {

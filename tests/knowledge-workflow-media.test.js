@@ -1,7 +1,7 @@
 // @ts-check
 
 import * as mediaModule from "../src/features/knowledge-workflows/media.js";
-import { createCloudflareImageDerivative } from "../worker/knowledge-workflow-media-transform.js";
+import { createCloudflareImageDerivative, createCloudflareImageDecoder } from "../worker/knowledge-workflow-media-transform.js";
 
 const { createMediaPipeline, selectFallbackAsset, validateFallbackPack } = mediaModule;
 
@@ -198,19 +198,44 @@ Deno.test("explicitly trusted same-origin and local fixture reads bypass public 
 
 Deno.test("Cloudflare Images derivative re-encodes to bounded WebP output", async () => {
   let outputOptions = /** @type {Record<string, unknown> | null} */ (null);
+  let inputBytes = Promise.resolve(new ArrayBuffer(0));
   const derivative = createCloudflareImageDerivative({
-    input: () => ({
+    input: (stream) => { inputBytes = new Response(stream).arrayBuffer(); return ({
       transform: () => ({
-        output: (options) => { outputOptions = options; return { response: async () => new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/webp" } }) }; },
+        output: async (options) => { outputOptions = options; return { response: async () => new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/webp" } }) }; },
       }),
       output: () => { throw new Error("raw input output is not allowed"); },
-    }),
+    }); },
   });
   const result = await derivative({ assetId: "media-a", variant: "feed", bytes: png, mediaType: "image/png" });
   assertEquals(result.ok, true);
+  assertEquals([...new Uint8Array(await inputBytes)].join(","), [...png].join(","));
   assertEquals(outputOptions?.format, "image/webp");
   assertEquals(outputOptions?.anim, false);
   if (result.ok) assertEquals(result.value.mediaType, "image/webp");
+});
+
+Deno.test("Cloudflare decoder reuses successful pixels, rechecks changed bytes and retries failures", async () => {
+  let calls=0;
+  let failing=false;
+  const entries=/** @type {import('../worker/knowledge-workflow-logging.js').KnowledgeWorkflowLogEntry[]} */([]);
+  const decode=createCloudflareImageDecoder({input:()=>({transform:()=>({output:async()=>{
+    calls++;
+    if(failing)throw new Error("Too many subrequests: private provider details");
+    return {response:()=>new Response(new Uint8Array([1]),{headers:{"content-type":"image/webp"}})};
+  }})})},{logger:entry=>entries.push(entry)});
+  const bytes=png.slice();
+  assertEquals((await decode(bytes,"image/png")).ok,true);
+  assertEquals((await decode(bytes.slice(),"image/png")).ok,true);
+  assertEquals(calls,1);
+  bytes[bytes.length-1]^=1;
+  failing=true;
+  assertEquals((await decode(bytes,"image/png")).ok,false);
+  assertEquals(entries[0].field,"subrequest-limit");
+  assertEquals(JSON.stringify(entries).includes("private provider details"),false);
+  failing=false;
+  assertEquals((await decode(bytes,"image/png")).ok,true);
+  assertEquals(calls,3);
 });
 
 Deno.test("production composes exactly one atomic media public egress without raw fetch or separate DNS", async () => {

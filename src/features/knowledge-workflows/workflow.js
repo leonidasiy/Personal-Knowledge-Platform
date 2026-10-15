@@ -54,6 +54,7 @@ import { validateSourceRightsProfile } from "../source-library/rights-profile.js
  *   readonly counts: WorkflowCounts,
  *   readonly failureKind: string | null,
  *   readonly retryState?: WorkflowRetryStage,
+ *   readonly quizRetryGeneration?: number,
  *   readonly reused: boolean,
  *   readonly createdAt: string,
  *   readonly updatedAt: string
@@ -75,7 +76,7 @@ import { validateSourceRightsProfile } from "../source-library/rights-profile.js
  *   readonly ownerId: string,
  *   readonly runId: string,
  *   readonly expectedRevision: number,
- *   readonly action: "stop" | "resume" | "generate" | "abandon",
+ *   readonly action: "stop" | "resume" | "generate" | "abandon" | "retry-quizzes",
  *   readonly idempotencyKey: string
  * }} WorkflowControlCommand
  */
@@ -191,6 +192,7 @@ function isRun(value) {
     (value.decisionRequired === null || value.decisionRequired === "rights-review" || value.decisionRequired === "upload-material" || value.decisionRequired === "generate-or-abandon") &&
     isCounts(value.counts) && (value.failureKind === null || isNonEmptyText(value.failureKind)) &&
     (value.retryState === undefined || isWorkflowRetryStage(value.retryState)) &&
+    (value.quizRetryGeneration === undefined || isPositiveInteger(value.quizRetryGeneration) && value.quizRetryGeneration <= value.revision) &&
     typeof value.reused === "boolean" && isNonEmptyText(value.createdAt) && isNonEmptyText(value.updatedAt);
 }
 
@@ -201,7 +203,7 @@ export const isWorkflowRobotsEvidence = isRobotsEvidence;
 function isControlCommand(value) {
   return isRecord(value) && isNonEmptyText(value.ownerId) && isNonEmptyText(value.runId) &&
     isPositiveInteger(value.expectedRevision) &&
-    (value.action === "stop" || value.action === "resume" || value.action === "generate" || value.action === "abandon") &&
+    (value.action === "stop" || value.action === "resume" || value.action === "generate" || value.action === "abandon" || value.action === "retry-quizzes") &&
     isNonEmptyText(value.idempotencyKey);
 }
 
@@ -222,15 +224,16 @@ function cloneRun(run) {
 
 /** @param {KnowledgeWorkflowRun} run @param {WorkflowControlCommand["action"]} action @param {boolean} deadlineReached @returns {boolean} */
 function isAllowedControl(run, action, deadlineReached) {
+  if (action === "retry-quizzes") return run.state === "completed" && run.failureKind === "WorkflowQuizItemsFailed";
   if (action === "stop") return run.state === "extraction-loop" && !deadlineReached;
-  if (action === "resume") return run.state === "paused" || run.state === "retryable-failure" || (run.state === "extraction-loop" && deadlineReached);
+  if (action === "resume") return run.state === "paused" || run.state === "retryable-failure" || run.state === "awaiting-time-limit-decision" || (run.state === "completed" && ["WorkflowPagesFailed","WorkflowQuizItemsFailed"].includes(run.failureKind??"")) || (run.state === "extraction-loop" && deadlineReached);
   if (action === "generate") return run.state === "paused" || run.state === "awaiting-time-limit-decision" || (run.state === "extraction-loop" && deadlineReached);
   return run.state !== "completed" && run.state !== "abandoned";
 }
 
 /** @param {KnowledgeWorkflowRun} run @param {WorkflowControlCommand["action"]} action @param {string} now @param {boolean} deadlineReached @param {number} envelopeMs @returns {KnowledgeWorkflowRun} */
 function nextForControl(run, action, now, deadlineReached, envelopeMs) {
-  const state = action === "stop"
+  const state = action === "retry-quizzes" ? "per-point-quiz-loop" : action === "stop"
     ? "paused"
     : action === "resume"
     ? run.state === "retryable-failure" ? run.retryState ?? "extraction-loop" : "extraction-loop"
@@ -245,13 +248,13 @@ function nextForControl(run, action, now, deadlineReached, envelopeMs) {
     extractionStartedAt: action === "resume" && state === "extraction-loop" && deadlineReached ? now : run.extractionStartedAt,
     extractionDeadlineAt: action === "resume" && state === "extraction-loop" && deadlineReached ? new Date(Date.parse(now) + envelopeMs).toISOString() : run.extractionDeadlineAt,
     updatedAt: now,
-    ...(action === "abandon" ? { failureKind: "WorkflowAbandoned" } : action === "resume" ? { failureKind: null } : {}),
+    ...(action === "retry-quizzes" ? {quizRetryGeneration:run.revision+1,failureKind:"WorkflowRetryFailedQuizzes"} : action === "abandon" ? { failureKind: "WorkflowAbandoned" } : action === "resume" ? { failureKind: run.state === "completed" ? "WorkflowRetryFailedPages" : run.failureKind === "WorkflowRetryFailedPages" ? run.failureKind : null } : {}),
   });
 }
 
 /** @param {WorkflowState} current @param {WorkflowState} next @returns {boolean} */
 function isAllowedTransition(current, next) {
-  if (current === next) return false;
+  if (current === next) return current === "per-point-quiz-loop";
   if (next === "retryable-failure") return isWorkflowRetryStage(current);
   const allowed = {
     "source-added": new Set(["rights-assessment", "awaiting-rights-review", "abandoned"]),
@@ -274,7 +277,7 @@ function isAllowedTransition(current, next) {
 /** @param {KnowledgeWorkflowRun} run @param {WorkflowRepository} repository @returns {Promise<Result<KnowledgeWorkflowRun, WorkflowFailure>>} */
 async function persistReuse(run, repository) {
   // Personal processing grants are owner-scoped, not permission for global reuse.
-  if (run.state !== "completed" || run.materialId != null || run.userAuthorization != null || typeof repository.markReuse !== "function") return { ok: true, value: run };
+  if (run.state !== "completed" || ["WorkflowPagesFailed","WorkflowQuizItemsFailed"].includes(run.failureKind ?? "") || run.materialId != null || run.userAuthorization != null || typeof repository.markReuse !== "function") return { ok: true, value: run };
   const marked = await repository.markReuse({ canonicalSourceIdentity: run.canonicalSourceIdentity, sourceRevision: run.sourceRevision, contentSignature: run.contentSignature, configDigests: run.configDigests, counts: run.counts, createdAt: run.createdAt, updatedAt: run.updatedAt });
   return marked.ok ? { ok: true, value: run } : marked;
 }
@@ -299,7 +302,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         !isConfigDigests(command.configDigests)) {
         return { ok: false, error: { kind: "WorkflowCommandInvalid", field: "command" } };
       }
-      if (command.sourceOrigin !== undefined && command.sourceOrigin !== "private-document") {
+      if (command.sourceOrigin !== undefined && command.sourceOrigin !== "private-document" && command.sourceOrigin !== "url-material") {
         return { ok: false, error: { kind: "WorkflowCommandInvalid", field: "sourceOrigin" } };
       }
       if (command.userAuthorization !== undefined && command.userAuthorization !== null && !validLinkAuthorization(command.userAuthorization, command)) return {ok:false,error:{kind:"WorkflowCommandInvalid",field:"userAuthorization"}};
@@ -337,7 +340,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         rightsProfile: normalizedRightsProfile,
         userAuthorization: /** @type {UserLinkAuthorization|null} */(command.userAuthorization ?? null),
         materialId: null,
-        state: command.sourceOrigin === "private-document" ? "awaiting-upload" : "source-added",
+        state: command.sourceOrigin === "private-document" || command.sourceOrigin === "url-material" ? "awaiting-upload" : "source-added",
         revision: 1,
         idempotencyKey: attemptKey,
         configDigests: command.configDigests,
@@ -427,8 +430,9 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
       if (run.state !== "awaiting-upload") return { ok: false, error: { kind: "WorkflowMaterialStateInvalid" } };
       const now = dependencies.now();
       if (!validTimestamp(now)) throw new TypeError("Knowledge workflow clock returned an invalid timestamp.");
-      const startedAt = run.extractionStartedAt ?? now;
-      const deadline = run.extractionDeadlineAt ?? new Date(Date.parse(startedAt) + envelopeMs).toISOString();
+      const uploadFallback = run.failureKind?.startsWith("WorkflowExtractionFailed:") && run.counts.knowledgePoints === 0;
+      const startedAt = uploadFallback ? now : run.extractionStartedAt ?? now;
+      const deadline = !uploadFallback && run.extractionDeadlineAt !== null ? run.extractionDeadlineAt : new Date(Date.parse(startedAt) + envelopeMs).toISOString();
       const next = cloneRun({ ...run, materialId: command.materialId.trim(), state: "extraction-loop", revision: run.revision + 1, decisionRequired: null, failureKind: null, extractionStartedAt: startedAt, extractionDeadlineAt: deadline, updatedAt: now });
       const updated = await repository.update({ ownerId: run.ownerId, runId: run.runId, expectedRevision: run.revision, next });
       if (!updated.ok) return updated;
@@ -488,7 +492,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
       const run = loaded.value;
       if (run.revision !== command.expectedRevision) return { ok: false, error: { kind: "WorkflowControlStale" } };
       const nextState = /** @type {WorkflowState} */ (command.nextState);
-      if (!isAllowedTransition(run.state, nextState)) return { ok: false, error: { kind: "WorkflowTransitionInvalid" } };
+      if (!isAllowedTransition(run.state, nextState) || (run.state === nextState && command.counts === undefined)) return { ok: false, error: { kind: "WorkflowTransitionInvalid" } };
       if (!validTimestamp(dependencies.now())) throw new TypeError("Knowledge workflow clock returned an invalid timestamp.");
       const started = nextState === "extraction-loop" && run.extractionStartedAt === null;
       const now = dependencies.now();

@@ -1,6 +1,6 @@
 // @ts-check
 
-/** @import { Result, WorkerFailure } from "./contracts.js" */
+/** @import { WorkerFailure } from "./contracts.js" */
 
 /**
  * @typedef {{
@@ -16,6 +16,8 @@
  *   readonly refreshBy: string
  * }} YouTubeCandidate
  */
+
+/** @template T,E @typedef {{readonly ok:true,readonly value:T,readonly nextCursor?:string}|{readonly ok:false,readonly error:E}} Result */
 
 export class YouTubeDiscoveryAdapter {
   /** @type {{ readonly maximumResults: number, readonly quotaTimeZone: string }} */
@@ -91,6 +93,9 @@ export class YouTubeDiscoveryAdapter {
         error: { kind: "DiscoveryCommandInvalid", field: "query" },
       };
     }
+    const pageToken = /** @type {Record<string,unknown>} */ (input).pageToken;
+    const requestedLimit = /** @type {Record<string,unknown>} */ (input).limit;
+    if (pageToken !== undefined && (typeof pageToken !== "string" || !pageToken.trim()) || requestedLimit !== undefined && (typeof requestedLimit !== "number" || !Number.isInteger(requestedLimit) || requestedLimit < 1)) return {ok:false,error:{kind:"YouTubeResponseInvalid"}};
     const query = /** @type {{ query: string }} */ (input).query;
     const now = this.#dependencies.now();
     if (!Number.isFinite(now.getTime())) {
@@ -112,10 +117,11 @@ export class YouTubeDiscoveryAdapter {
       key: credential.value,
       part: "snippet",
       type: "video",
-      maxResults: String(this.#configuration.maximumResults),
+      maxResults: String(Math.min(this.#configuration.maximumResults, typeof requestedLimit === "number" ? requestedLimit : this.#configuration.maximumResults)),
       safeSearch: "strict",
       q: query,
     }).toString();
+    if (typeof pageToken === "string") searchUrl.searchParams.set("pageToken", pageToken);
     const searched = await fetchYouTube(
       this.#dependencies.fetch,
       searchUrl,
@@ -124,10 +130,13 @@ export class YouTubeDiscoveryAdapter {
     if (!searched.ok) return searched;
     const searchDocument = await readJson(searched.value);
     if (!searchDocument.ok) return searchDocument;
+    const nextCursor = typeof searchDocument.value === "object" && searchDocument.value !== null ? /** @type {Record<string,unknown>} */ (searchDocument.value).nextPageToken : undefined;
+    if (nextCursor !== undefined && (typeof nextCursor !== "string" || !nextCursor.trim())) return {ok:false,error:{kind:"YouTubeResponseInvalid"}};
+    const continuation = typeof nextCursor === "string" ? {nextCursor} : {};
     const summaries = parseSearchItems(searchDocument.value);
     if (!summaries.ok) return summaries;
     if (summaries.value.length === 0) {
-      return { ok: true, value: Object.freeze([]) };
+      return { ok: true, value: Object.freeze([]), ...continuation };
     }
     if (signal?.aborted) return {ok:false,error:{kind:"YouTubeUpstreamUnavailable"}};
     const generalReservation = await this.#dependencies.reserveGeneralRead({
@@ -176,7 +185,7 @@ export class YouTubeDiscoveryAdapter {
         refreshBy,
       }));
     }
-    return { ok: true, value: Object.freeze(candidates) };
+    return { ok: true, value: Object.freeze(candidates), ...continuation };
   }
 }
 
@@ -285,9 +294,7 @@ function parseSearchItems(value) {
     const description = typeof item.snippet.description === "string" ? item.snippet.description : null;
     const channelId = typeof item.snippet.channelId === "string" ? item.snippet.channelId : null;
     if (
-      ![videoId, title, publisherLabel, publishedAt].every((entry) =>
-        typeof entry === "string" && entry.trim() !== ""
-      )
+      typeof videoId !== "string" || !videoId.trim() || typeof title !== "string" || !title.trim() || typeof publisherLabel !== "string" || !publisherLabel.trim() || typeof publishedAt !== "string" || !publishedAt.trim()
     ) {
       return { ok: false, error: { kind: "YouTubeResponseInvalid" } };
     }

@@ -30,7 +30,7 @@ async function fixture(variant){
  const makeRuntime=()=>createKnowledgeWorkflowRuntime({database,imagePolicy:WEBPAGE_IMAGE_POLICY,configSnapshots:configs,now,nowMs:Date.now,logger:entry=>logs.push(entry),apiKey:'synthetic-not-a-secret',endpoint:'https://unexecuted.invalid/',resolveAddresses:async()=>({ok:true,value:['93.184.216.34']}),
   fetch:async(_url,init)=>{
    const message=JSON.parse(init.body).messages[1].content,body=Array.isArray(message)?message[0].text:message;
-   const input=JSON.parse(body.slice(body.indexOf('\n')+1,body.lastIndexOf('\n'))),task=input.task.task??input.task;requests.push({...input,task});let output;
+   const input=JSON.parse(body.slice(body.indexOf('\n')+1,body.lastIndexOf('\n'))),task=input.task?.task??input.task??input;requests.push({...input,task});let output;
    if(['plan','replan'].includes(task.operation))output={revision:1,frontier:urls.filter(u=>!task.scratchpad.processedUrls.includes(u)),coverageGoals:[],unresolvedGaps:[],stopDecision:{decision:task.scratchpad.processedUrls.length===urls.length?'complete':'continue',rationale:'Observe remaining source text.',evidenceUrls:[],unresolvedGapIds:[]}};
    else if(task.operation==='extract-webpage-facts')output={notes:'Independent source text retained.',candidates:task.sourceBlocks.map((b,i)=>({summary:b.text,normalizedHash:task.url+':'+i,evidenceAnchors:[{reference:task.citationSources.find(s=>s.sourceId===b.id).reference,clause:b.text}],coverageGoalIds:[],mediaCandidates:[]}))};
    else if(task.operation==='normalize-webpage-claim-boundaries')output={notes:task.notes,additionalCandidates:[],reviews:task.candidates.map(c=>({sourceNormalizedHash:c.normalizedHash,relationshipUnits:syntheticRelationshipUnits([c]),candidates:[c]}))};
@@ -60,12 +60,23 @@ async function fixture(variant){
 }
 for(const variant of ['absent','no-support','unavailable','mixed'])test('missing-image policy actual checkpoint replay '+variant,async()=>{
  const f=await fixture(variant);try{
-  const first=unwrap(await f.makeRuntime().execute(f.run));assert.equal(first.state,'awaiting-time-limit-decision');
+  let current=f.run;
+  for(let page=0;page<5;page++){
+   const chunk=unwrap(await f.makeRuntime().execute(current));assert.equal(chunk.state,'awaiting-time-limit-decision');
+   if(page<4)current=unwrap(await f.service.advance({ownerId:current.ownerId,runId:current.runId,expectedRevision:chunk.run.revision,nextState:'extraction-loop'}));
+  }
   const checkpoint=f.context();assert.equal(checkpoint.scratchpad.processedUrls.length,5);
   const readsAtCheckpoint=f.reads.length,requestBoundary=f.requests.length;
   const paused=unwrap(await f.service.status({ownerId:f.run.ownerId,runId:f.run.runId}));
   const resumed=unwrap(await f.service.advance({ownerId:paused.ownerId,runId:paused.runId,expectedRevision:paused.revision,nextState:'extraction-loop'}));
-  assert.equal(unwrap(await f.makeRuntime().execute(resumed)).state,'completed');
+  current=resumed;let finished;
+  for(let chunk=0;chunk<20;chunk++){
+   finished=unwrap(await f.makeRuntime().execute(current));
+   if(finished.state==='completed')break;
+   assert(['awaiting-time-limit-decision','per-point-quiz-loop'].includes(finished.state));
+   current=finished.state==='awaiting-time-limit-decision'?unwrap(await f.service.advance({ownerId:current.ownerId,runId:current.runId,expectedRevision:finished.run.revision,nextState:'extraction-loop'})):finished.run;
+  }
+  assert.equal(finished.state,'completed');
   const continued=f.context(),points=f.db.prepare('SELECT point_json FROM extraction_knowledge_points').all().map(r=>JSON.parse(r.point_json));
   const warnings=f.db.prepare('SELECT warnings_json FROM knowledge_workflow_page_image_warnings').all().map(r=>JSON.parse(r.warnings_json));
   const forbidden=/Image warning:|no-support|MediaPublicEgressUnavailable|optional-image|failed-image|later-image|pixels\.invalid|imageDigest|pendingImage|missingImage/;

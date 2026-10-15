@@ -4,6 +4,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { notifyKnowledgeWorkflowOutcome } from "../worker/knowledge-workflow-notifications.js";
 import { isWorkflowRetryStage } from "../src/features/knowledge-workflows/workflow.js";
+import { executeRetryingWorkflowStep } from "../worker/knowledge-workflow-step.js";
 
 const at = "2026-10-02T12:00:00.000Z";
 const run = {
@@ -208,9 +209,16 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       "awaiting-rights-review",
       "retryable-failure",
       "extraction-loop",
+      "empty-exhausted",
+      "cpu-exceeded",
+      "stale-time-window",
+      "stale-completed",
+      "cached-quiz-cpu",
     ]
   ) {
-    let current = { ...run, state, updatedAt: new Date().toISOString() };
+    const replayedController = state === "stale-time-window" || state === "stale-completed" || state === "cached-quiz-cpu";
+    let current = { ...run, state:replayedController?"per-point-quiz-loop":state==="empty-exhausted"?"robots-check":state==="cpu-exceeded"?"extraction-loop":state, revision:replayedController?59:run.revision, updatedAt: new Date().toISOString(), ...(replayedController?{counts:{pages:23,knowledgePoints:37,acceptedQuizzes:5,pendingQuizzes:0}}:state==="empty-exhausted"?{counts:{pages:0,knowledgePoints:0,acceptedQuizzes:0,pendingQuizzes:0}}:{}) };
+    let modelCalls = 0;
     const actions = [];
     const noOp = () => ({});
     const bindings = {
@@ -222,11 +230,14 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       D1KnowledgeMediaRepository: class {},
       createKnowledgeWorkflowService: () => ({
         status: async () => ({ ok: true, value: current }),
-        advance: async(command)=>{current={...current,state:command.nextState,revision:current.revision+1};return {ok:true,value:current};},
+        advance: async(command)=>{if(replayedController)assert.equal(command.expectedRevision,current.revision);current={...current,...command,state:command.nextState,revision:current.revision+1};return {ok:true,value:current};},
       }),
       isWorkflowRetryStage,
       createKnowledgeWorkflowLogger: () => noOp,
       createKnowledgeWorkflowBrowser: noOp,
+      createFirecrawlWorkflowBrowser:noOp,
+      createHybridBrowserBudget:noOp,
+      isTransientBrowserFailure:error=>error.detailKind==="KnowledgeBrowserNavigationFailed",
       createAcquisitionClient: () => ({mediaCapability:{}}),
       createAcquisitionWorkflowBrowser: noOp,
       ACQUISITION_POLICY: {},
@@ -237,6 +248,7 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       fallbackMediaEntries: [],
       isCloudflareImageBinding: () => true,
       createCloudflareImageDerivative: noOp,
+      createCloudflareImageDecoder: noOp,
       KNOWLEDGE_WORKFLOW_CONFIG_SOURCES: Object.fromEntries(
         [
           "rights-assessor",
@@ -250,8 +262,19 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       }),
       createKnowledgeWorkflowRuntime: () => ({
         purgeExpired: async () => ({ ok: true, value: null }),
+        execute: async authoritative => {
+          assert.equal(state === "stale-time-window" || state === "stale-completed", true);
+          assert.equal(authoritative.state, "per-point-quiz-loop");
+          assert.equal(authoritative.revision, 59);
+          modelCalls++;
+          current = {...current,state:"completed",revision:60,counts:{...current.counts,acceptedQuizzes:6}};
+          return {ok:true,value:{state:"completed",run:current}};
+        },
       }),
-      executeAuthoritativeWorkflowStep: async () => {
+      executeRetryingWorkflowStep: async dependencies => {
+        if(replayedController)return executeRetryingWorkflowStep(dependencies);
+        if (state === "cpu-exceeded") throw new Error("Worker exceeded CPU time limit.");
+        if(state==="empty-exhausted")return {ok:false,error:{kind:"WorkflowRobotsFailed",detailKind:"KnowledgeBrowserNavigationFailed"}};
         if (state === "extraction-loop") {
           throw new Error("ProviderRetriesExhausted");
         }
@@ -294,7 +317,17 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       IMAGES: {},
     };
     const step = {
-      do: async (name, fn) => fn(),
+      do: async (name, configOrCallback, callback) => {
+        if(replayedController && (name === "load knowledge workflow run" || name === "execute knowledge extraction and quiz stages: attempt 1")) {
+          const oldRun = {...current,state:state === "stale-completed"?"completed":"awaiting-time-limit-decision",revision:45,extractionDeadlineAt:at};
+          return {ok:true,value:name === "load knowledge workflow run"?oldRun:{state:oldRun.state,run:oldRun}};
+        }
+        if(replayedController && name.startsWith("execute bounded quiz chunk") && /: attempt [1-4]$/.test(name)) {
+          assert.match(name,/^execute bounded quiz chunk 59: attempt [1-4]$/);
+          if(state === "cached-quiz-cpu")throw new Error("Worker exceeded CPU time limit.");
+        }
+        return (callback ?? configOrCallback)();
+      },
       waitForEvent: async () => {
         actions.push("wait");
         throw new Error("TestWaitTimeout");
@@ -303,7 +336,26 @@ test("actual workflow entry sends before retention/waits and preserves extractio
         actions.push("retention");
       },
     };
-    if (state === "completed") {
+    if(state==="stale-time-window" || state==="stale-completed") {
+      assert.equal((await entry.run({payload:{ownerId:"owner",runId:"run"}},step)).state,"completed");
+      assert.equal(modelCalls,1);
+      assert.equal(current.counts.acceptedQuizzes,6);
+      assert.deepEqual(actions,["retention","source-ready"]);
+    }else if(state==="cached-quiz-cpu") {
+      await assert.rejects(entry.run({payload:{ownerId:"owner",runId:"run"}},step),/WorkflowControlTimeout/);
+      assert.equal(modelCalls,0);
+      assert.equal(current.state,"retryable-failure");
+      assert.equal(current.revision,60);
+      assert.equal(current.failureKind,"WorkflowCpuTimeLimitExceeded");
+      assert.equal(current.counts.knowledgePoints,37);
+      assert.equal(current.counts.acceptedQuizzes,5);
+      assert.deepEqual(actions,["retention","retention","retention","retention","source-attention","wait"]);
+    }else if(state==="empty-exhausted"){
+      await assert.rejects(entry.run({payload:{ownerId:"owner",runId:"run"}},step), /WorkflowMaterialTimeout/);
+      assert.equal(current.state,"awaiting-upload");
+      assert.deepEqual(actions,["source-attention","wait"]);
+      assert.equal(current.failureKind,"WorkflowExtractionFailed:KnowledgeBrowserNavigationFailed");
+    }else if (state === "completed") {
       assert.equal(
         (await entry.run({ payload: { ownerId: "owner", runId: "run" } }, step))
           .state,
@@ -316,6 +368,20 @@ test("actual workflow entry sends before retention/waits and preserves extractio
         /Workflow(Material|RightsApproval|Control)Timeout/,
       );
       assert.equal(actions[0], "source-attention", state);
+      if (state === "cpu-exceeded") assert.equal(current.failureKind, "WorkflowCpuTimeLimitExceeded");
     }
   }
+});
+
+test("failed empty sources still notify after automatic Library removal",async()=>{
+ const current={...run,state:"abandoned",counts:{pages:0,knowledgePoints:0,acceptedQuizzes:0,pendingQuizzes:0},failureKind:"WorkflowExtractionFailed:KnowledgeBrowserNavigationFailed"};const calls=[];
+ const result=await notifyKnowledgeWorkflowOutcome({run:current,now:()=>at,load:async()=>({ok:true,value:current}),notify:async command=>{calls.push(command.kind);return {ok:true,value:{sent:1}};}});assert.deepEqual(result,{ok:true,value:{sent:1}});assert.deepEqual(calls,["source-attention"]);
+});
+
+test('completed partial sources notify for approval even when every quiz is deferred',async()=>{
+ for(const failureKind of ['WorkflowPagesFailed','WorkflowQuizItemsFailed']){
+  const current={...run,failureKind,counts:{...run.counts,acceptedQuizzes:0}},calls=[];
+  const result=await notifyKnowledgeWorkflowOutcome({run:current,now:()=>at,load:async()=>({ok:true,value:current}),notify:async(command,isCurrent)=>{assert.deepEqual(await isCurrent(),{ok:true,value:true});calls.push(command.kind);return {ok:true,value:{sent:1}};}});
+  assert.deepEqual(result,{ok:true,value:{sent:1}});assert.deepEqual(calls,['source-attention']);
+ }
 });

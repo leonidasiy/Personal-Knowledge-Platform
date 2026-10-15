@@ -298,7 +298,7 @@ export function validateApprovalCommand(command) {
   if (!adapter.ok) return adapter;
   if (adapter.value.id === "private-document") return invalid("adapter.id");
   const areas = uniqueText(command.interestAreaIds);
-  if (areas === null || areas.length === 0) return invalid("interestAreaIds");
+  if (areas === null) return invalid("interestAreaIds");
   const evidence = validateIdentityEvidence(command.identityEvidence);
   if (!evidence.ok) return evidence;
   const initialItem = validateInitialItem(command.initialItem);

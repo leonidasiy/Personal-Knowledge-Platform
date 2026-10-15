@@ -40,6 +40,7 @@ class Database {
   nextAcquisitionAt = "1970-01-01T00:00:00.000Z";
   reservations = new Map();
   fail = false;
+  reconciliationChanges = 1;
   /** @param {string} query */
   prepare(query) { return new Statement(this, query); }
   /** @param {readonly { readonly bind: (...values: readonly (string | number | null)[]) => unknown, readonly run: () => Promise<{ readonly success: boolean, readonly meta?: { readonly changes?: number } }>, readonly first: () => Promise<unknown | null> }[]} statements */
@@ -61,7 +62,7 @@ class Database {
     const record = this.reservations.get(String(id));
     if (!record || record.state !== "active" || record.scope !== scope || record.owner !== owner || record.job !== job) return { success: true, meta: { changes: 0 } };
     this.reserved -= Number(record.amount) - Number(charged); this.active -= 1; record.state = state;
-    return { success: true, meta: { changes: 1 } };
+    return { success: true, meta: { changes: this.reconciliationChanges } };
   }
 }
 
@@ -72,6 +73,7 @@ function ledger(database, now, createId = () => crypto.randomUUID()) {
 
 Deno.test("Browser Run capacity reserves and reconciles measured use", async () => {
   const database = new Database();
+  database.reconciliationChanges = 2;
   const subject = ledger(database, () => "2026-07-22T12:00:00.000Z", () => "reservation-a");
   const reserved = await subject.reserve({ ownerId: "owner-a", jobId: "job-a" });
   if (!reserved.ok) throw new Error(reserved.error.kind);

@@ -30,6 +30,9 @@ const WORKFLOW_STATUS_REFRESH_MS = 60_000;
  *   readonly formatDate: (value: string) => string,
  *   readonly createId: () => string,
  *   readonly confirmDisable: (source: LibrarySource) => boolean,
+ *   readonly confirmUpload?: (message:string,sourceUrl?:string)=>boolean,
+ *   readonly navigateToUpload?: (hash:string,prefill?:import("../features/uploads/page.js").UploadPrefill)=>void,
+ *   readonly confirmRetryFailed?: (count:number,quizzes?:boolean) => boolean,
  *   readonly confirmCancel?: (source: LibrarySource) => boolean,
  *   readonly createObserver: (load: () => void) => PageObserver | null,
  *   readonly schedule: (callback: () => void, delayMs: number) => number,
@@ -81,13 +84,13 @@ export function createLibraryPage(dependencies) {
   /** @type {"loading" | "success" | "empty" | "error" | "offline"} */ let state =
     "loading";
   /** @type {LibrarySource[]} */ let items = [];
-  /** @type {SourceInterestArea[]} */ let interestAreas = [];
   /** @type {string | null} */ let nextCursor = null;
   /** @type {string} */ let query = "";
   /** @type {string|null} */ let subject = null;
+  let automaticSubject = true;
   try {
     const stored = dependencies.storage?.getItem("resonance-library-subject");
-    if (stored === "unclassified" || isSubjectId(stored)) subject = stored;
+    if (stored === "unclassified" || isSubjectId(stored)) {subject = stored;automaticSubject=false;}
     else if (stored !== null && stored !== undefined) onError(libraryCopy(0));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -101,7 +104,7 @@ export function createLibraryPage(dependencies) {
   /** @type {WorkflowSourceStatus[]} */ let workflowStatuses = [];
   /** @type {Set<string>} */const cancelledKnowledgeIds=new Set();
   /** @type {Map<string,Parameters<SourceLibraryGatewayClient["cancelWorkflow"]>[0]>} */ const cancellationRetries=new Map();
-  const trackedSourceIds = new Set();
+  const trackedSourceIds = new Set(), promptedFailures = new Set();
   let uploading = false;
   let statusDiscoveryPending = false;
   let statusUnavailable = false;
@@ -123,14 +126,12 @@ export function createLibraryPage(dependencies) {
     freeze({
       state,
       items: freeze([...items]),
-      interestAreas: freeze([...interestAreas]),
       nextCursor,
       query,
       subject,
       searchScope,
       pendingSourceId,
       message,
-      knowledge: freeze([...knowledge]),
     });
 
   async function load(reset = true) {
@@ -163,7 +164,6 @@ export function createLibraryPage(dependencies) {
       items = reset
         ? [...result.value.items]
         : merge(items, result.value.items);
-      interestAreas = [...result.value.interestAreas];
       nextCursor = result.value.nextCursor;
       if (reset) { statusDiscoveryCursor = nextCursor; statusDiscoveryPending = false; }
       for (const source of result.value.items) trackedSourceIds.add(source.id);
@@ -270,7 +270,7 @@ export function createLibraryPage(dependencies) {
         sourceTopic: card.sourceClassification?.topic ?? null,
       }));
       const newest = [...items].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt) || b.id.localeCompare(a.id))[0];
-      if (subject === null && newest) subject = librarySourceSubjects(newest.id, knowledge)[0];
+      if (automaticSubject && newest) subject = librarySourceSubjects(newest.id, knowledge)[0];
     })().finally(() => {
       knowledgeRead = null;
       rerender();
@@ -309,12 +309,34 @@ export function createLibraryPage(dependencies) {
       const results = await Promise.all(sourceIds.map(sourceId => gateway.workflowStatus(sourceId)));
       if (generation !== workflowStatusGeneration) return;
       const known = new Map(workflowStatuses.map(status => [status.sourceId,status]));
+      /** @type {WorkflowSourceStatus[]} */ const failedCompletions=[];
+      const completed=results.some(result=>result.ok&&result.value.run?.state==="completed"&&known.get(result.value.sourceId)?.run?.state!=="completed"&&known.has(result.value.sourceId));
       for (const result of results) {
-        if (result.ok) known.set(result.value.sourceId,result.value);
+        if (result.ok) {
+          const status=result.value;
+          if(status.reasonCode==="failed" && known.get(status.sourceId)?.reasonCode!=="failed"){
+            const message=status.message??libraryCopy(24);
+            if(status.run?.state==="awaiting-upload" && dependencies.confirmUpload){
+              if(dependencies.confirmUpload(message,items.find(source=>source.id===status.sourceId)?.canonicalUrl))dependencies.navigateToUpload?.(`#upload?${new URLSearchParams({sourceId:status.sourceId,runId:status.run.runId})}`);
+            }else onError(message);
+          }
+          if(status.reasonCode==="partial-failure"&&known.has(status.sourceId)&&known.get(status.sourceId)?.run?.state!=="completed")failedCompletions.push(status);
+          known.set(status.sourceId,status);
+        }
         else { recordStatusFailure(result.error); failed = true; }
       }
       workflowStatuses = statusRetryAllowed ? [...known.values()] : [];
       statusUnavailable = failed;
+      if(completed)await loadKnowledge(true);
+      rerender();
+      for(const status of failedCompletions){
+        const run=status.run;if(run===null)continue;
+        const key=`${run.runId}:${run.revision}`;
+        if(promptedFailures.has(key))continue;
+        promptedFailures.add(key);
+        const quizzes=!!run.progress?.failedQuizItems?.length;
+        if(dependencies.confirmRetryFailed?.((quizzes?run.progress?.failedQuizItems:run.progress?.failedItems)?.length??0,quizzes))void retryWorkflow(run.runId,run.revision,false,true,quizzes);
+      }
       if (failed) onError("Status unavailable.");
       if (statusRetryAllowed && (failed || countProcessingWorkflowStatuses(workflowStatuses) > 0)) scheduleWorkflowStatusRefresh(generation);
       else cancelWorkflowStatusRefresh();
@@ -386,22 +408,23 @@ export function createLibraryPage(dependencies) {
     if (!result.ok) {
       onError(friendly(result.error));
     } else {
-      items = items.filter((candidate) => candidate.id !== source.id);
-      knowledge = knowledge.filter((card) => card.sourceId !== source.id);
-      knowledgeSearchResults = knowledgeSearchResults.filter((card) =>
-        card.sourceId !== source.id
-      );
-      workflowStatuses = workflowStatuses.filter((status) =>
-        status.sourceId !== source.id
-      );
-      trackedSourceIds.delete(source.id);
-      state = items.length === 0 ? "empty" : "success";
+      removeSource(source.id);
       onNotice(
         libraryCopy(3),
       );
     }
     await loadWorkflowStatuses(true);
     rerender();
+  }
+
+  /** @param {string} sourceId */
+  function removeSource(sourceId){
+    items=items.filter(source=>source.id!==sourceId);
+    knowledge=knowledge.filter(point=>point.sourceId!==sourceId);
+    knowledgeSearchResults=knowledgeSearchResults.filter(point=>point.sourceId!==sourceId);
+    workflowStatuses=workflowStatuses.filter(status=>status.sourceId!==sourceId);
+    trackedSourceIds.delete(sourceId);
+    state=items.length?"success":"empty";
   }
 
   /** @param {HTMLButtonElement} button */
@@ -434,14 +457,8 @@ export function createLibraryPage(dependencies) {
     rerender();
   }
 
-  /** @param {HTMLButtonElement} button */
-  async function retryWorkflow(button) {
-    const cancel=button.hasAttribute("data-library-workflow-cancel");
-    const attribute=cancel?"data-library-workflow-cancel":"data-library-workflow-retry";
-    const runId = button.getAttribute(attribute);
-    const expectedRevision = Number(
-      button.getAttribute(`${attribute}-revision`),
-    );
+  /** @param {string|null} runId @param {number} expectedRevision @param {boolean} [cancel] @param {boolean} [approved] @param {boolean} [quizzes] */
+  async function retryWorkflow(runId, expectedRevision, cancel=false, approved=false, quizzes=false) {
     if (
       runId === null || runId.trim() === "" ||
       !Number.isSafeInteger(expectedRevision) || expectedRevision < 1
@@ -449,12 +466,13 @@ export function createLibraryPage(dependencies) {
     const status = workflowStatuses.find((candidate) =>
       candidate.run?.runId === runId
     );
-    if (status?.run == null || pendingSourceId !== null || (cancel ? !cancellationRetries.has(runId) && ["completed","abandoned"].includes(status.run.state) : status.run.state !== "retryable-failure")) return;
+    if (status?.run == null || pendingSourceId !== null || (cancel ? !cancellationRetries.has(runId) && ["completed","abandoned"].includes(status.run.state) : status.run.state !== "retryable-failure" && status.reasonCode!=="partial-failure")) return;
+    if(!cancel&&status.reasonCode==="partial-failure"&&!approved&&!dependencies.confirmRetryFailed?.((quizzes?status.run.progress?.failedQuizItems:status.run.progress?.failedItems)?.length??0,quizzes))return;
     const source=items.find(source=>source.id===status.sourceId);
     if(cancel&&(source===undefined||!dependencies.confirmCancel?.(source)))return;
     pendingSourceId=status.sourceId;rerender();
     stopWorkflowStatusPolling();
-    const command=cancellationRetries.get(runId) ?? {runId,expectedRevision,idempotencyKey:`workflow-${cancel?"cancel":"retry"}:${createId()}`};
+    const command=cancellationRetries.get(runId) ?? {runId,expectedRevision,idempotencyKey:`workflow-${cancel?"cancel":"retry"}:${createId()}`,quizzes};
     if(cancel)cancellationRetries.set(runId,command);
     const result = await gateway[cancel?"cancelWorkflow":"retryWorkflow"](command);
     pendingSourceId=null;
@@ -591,7 +609,7 @@ export function createLibraryPage(dependencies) {
             await crypto.subtle.digest(
               "SHA-256",
               new TextEncoder().encode(
-                JSON.stringify([sourceId, title, fileName, mode, pageRange, contentHash]),
+                JSON.stringify([sourceId, title, fileName, mode, pageRange, contentHash, form.get("url")]),
               ),
             ),
           ),
@@ -604,15 +622,14 @@ export function createLibraryPage(dependencies) {
       }
       let runId = run?.runId;
       if (sourceId === "") {
-        const created = await gateway.createPrivateDocument({
-          title,
-          fileName,
-          idempotencyKey: `private-document:${id}`,
-        });
+        const url=form.get("url");
+        const created = typeof url==="string" ? await gateway.extract({
+          title,url,idempotencyKey:`url-material:${id}`,
+        },true) : await gateway.createPrivateDocument({title,fileName,idempotencyKey:`private-document:${id}`});
         if (!created.ok) return uploadFailure(friendly(created.error));
         source = created.value.source;
         trackedSourceIds.add(source.id);
-        runId = created.value.runId;
+        runId = "workflow" in created.value ? created.value.workflow.runId : created.value.runId;
         if (!items.some((item) => item.id === source?.id)) items.push(source);
       }
       if (source === undefined || runId === undefined) {
@@ -663,6 +680,7 @@ export function createLibraryPage(dependencies) {
       const select = event.currentTarget;
       if (!(select instanceof HTMLSelectElement) || !(select.value === "unclassified" || isSubjectId(select.value))) return;
       subject = select.value;
+      automaticSubject=false;
       try { dependencies.storage?.setItem("resonance-library-subject", subject); }
       catch (error) { if (!(error instanceof Error)) throw error; onError(libraryCopy(12)); }
       rerender();
@@ -704,10 +722,16 @@ export function createLibraryPage(dependencies) {
         }
       })
     );
+    root.querySelectorAll("[data-library-manual-source]").forEach(element=>element.addEventListener("click",()=>{
+      const source=items.find(source=>source.id===element.getAttribute("data-library-manual-source"));
+      if(source)dependencies.navigateToUpload?.("#upload",{title:source.title,url:source.canonicalUrl,manual:true,reason:libraryCopy(25)});
+    }));
     root.querySelectorAll("[data-library-workflow-retry], [data-library-workflow-cancel]").forEach((element) =>
       element.addEventListener("click", () => {
         if (typeof element.getAttribute === "function") {
-          void retryWorkflow(/** @type {HTMLButtonElement} */ (element));
+          const cancel=element.hasAttribute("data-library-workflow-cancel");
+          const attribute=cancel?"data-library-workflow-cancel":"data-library-workflow-retry";
+          void retryWorkflow(element.getAttribute(attribute),Number(element.getAttribute(`${attribute}-revision`)),cancel,false,element.hasAttribute("data-library-workflow-quiz"));
         }
       })
     );

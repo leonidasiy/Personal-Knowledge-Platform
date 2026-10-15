@@ -8,7 +8,7 @@ import {
   toDiscoverRouteModel,
 } from "./discovery-runtime.js";
 import { SourceLibraryGatewayClient } from "../features/source-library/gateway.js";
-import { DiscoverySearchGatewayClient } from "../features/discovery/gateway.js";
+import { DiscoverySearchGatewayClient, validCentralSearchCommand } from "../features/discovery/gateway.js";
 import {
   createYouTubeConnectionController,
   friendlyDiscoveryFailure,
@@ -19,7 +19,7 @@ import {
 /** @typedef {{appendBatch(records:readonly PersistenceEnvelope[]):Promise<Result<readonly PersistenceEnvelope[],PersistenceFailure>>,list(ownerId:string,kind:RecordKind):Promise<Result<readonly PersistenceEnvelope[],PersistenceFailure>>}} DiscoveryPersistence */
 
 /**
- * @param {{readonly ownerId:string,readonly persistence:DiscoveryPersistence,readonly fetch:typeof fetch,readonly gatewayBaseUrl:string,readonly policyStorage:{readonly getItem:(key:string)=>string|null,readonly setItem:(key:string,value:string)=>void},readonly starterInventory:unknown,readonly markup:import("../routes/discover.js").DiscoverMarkup,readonly escapeHtml:(value:string)=>string,readonly createId:()=>string,readonly now:()=>string,readonly onNotice:(message:string)=>void,readonly onError:(message:string)=>void,readonly navigateToLibrary:(sourceId:string)=>void,readonly navigateToUpload:(prefill:import("../features/uploads/page.js").UploadPrefill)=>void,readonly rerender:()=>void}} dependencies
+ * @param {{readonly ownerId:string,readonly persistence:DiscoveryPersistence,readonly fetch:typeof fetch,readonly gatewayBaseUrl:string,readonly policyStorage:{readonly getItem:(key:string)=>string|null,readonly setItem:(key:string,value:string)=>void},readonly starterInventory:unknown,readonly markup:import("../routes/discover.js").DiscoverMarkup,readonly escapeHtml:(value:string)=>string,readonly createId:()=>string,readonly now:()=>string,readonly onNotice:(message:string)=>void,readonly onError:(message:string)=>void,readonly navigateToLibrary:(sourceId:string)=>void,readonly confirmUpload?:(message:string,sourceUrl?:string)=>boolean,readonly navigateToUpload:(prefill:import("../features/uploads/page.js").UploadPrefill)=>void,readonly rerender:()=>void}} dependencies
  */
 export function createDiscoveryPage(dependencies) {
   if (
@@ -110,6 +110,9 @@ export function createDiscoveryPage(dependencies) {
   let searchPending = false;
   let searchInitialized = false;
   let searchGeneration = 0;
+  let morePending = false;
+  /** @type {string|null} */ let moreFailure = null;
+  /** @type {{query:string,limit:number,cursors:Readonly<Record<string,string>>}|null} */ let continuation = null;
   /** @type {import("../features/discovery/gateway.js").GatewaySearchCapability[]} */ let searchCapabilities = [];
   /** @type {import("../routes/discover.js").DiscoverRouteItem[]|null} */ let centralRouteItems = null;
   /** @type {string|null} */ let searchFailure = null;
@@ -117,8 +120,6 @@ export function createDiscoveryPage(dependencies) {
   let searchLimit = 10;
   /** @type {string[]} */ let selectedProviderIds = [];
   /** @type {string | null} */ let pendingDecisionItemId = null;
-  /** @type {import("../features/source-library/contracts.js").SourceInterestArea[]} */ let interestAreas =
-    [];
   /** @type {Map<string, import("../routes/discover.js").DiscoverRouteItem>} */ const routeItems =
     new Map();
   /** @type {Set<string>} */ const suppressed = new Set();
@@ -152,7 +153,6 @@ export function createDiscoveryPage(dependencies) {
         );
       }
       if (areas.ok) {
-        interestAreas = [...areas.value.interestAreas];
         sourceActionsAvailable = true;
       }
       if (loaded.ok && sourceActionsAvailable) await syncSuppressions();
@@ -228,6 +228,7 @@ export function createDiscoveryPage(dependencies) {
         selectedProviderIds = values.getAll("provider").map(String);
         searchLimit = Number(values.get("limit"));
       });
+      root.querySelector("[data-discovery-more]")?.addEventListener("click", () => { void loadMore(); });
       root.querySelectorAll("[data-discovery-approve]").forEach((element) =>
         element.addEventListener("submit", (event) => {
           event.preventDefault();
@@ -235,16 +236,9 @@ export function createDiscoveryPage(dependencies) {
           const itemId = event.currentTarget.getAttribute(
             "data-discovery-approve",
           );
-          const areaId = new FormData(event.currentTarget).get("interest-area");
-          if (itemId !== null && typeof areaId === "string") {
-            void approve(itemId, areaId);
+          if (itemId !== null) {
+            void approve(itemId);
           }
-        })
-      );
-      root.querySelectorAll("[data-discovery-reject]").forEach((element) =>
-        element.addEventListener("click", () => {
-          const itemId = element.getAttribute("data-discovery-reject");
-          if (itemId !== null) void reject(itemId);
         })
       );
       root.querySelectorAll("[data-discovery-open-upload]").forEach((element) =>
@@ -255,9 +249,9 @@ export function createDiscoveryPage(dependencies) {
       );
     },
     search,
+    loadMore,
     openUpload,
     approve,
-    reject,
   });
 
   /**
@@ -287,6 +281,8 @@ export function createDiscoveryPage(dependencies) {
           ? /** @type {const} */ ("detail")
           : /** @type {const} */ ("list"),
         items: freeze(items),
+        maxVisibleItems: Math.max(projectedModel.maxVisibleItems, items.length),
+        loadMore: {available: route.online && continuation !== null, pending: morePending, error: moreFailure},
         state: route.online
           ? searchFailure === null
             ? items.length === 0
@@ -302,11 +298,6 @@ export function createDiscoveryPage(dependencies) {
           ? searchFailure
           : projectedModel.stateMessage,
         selectedItemId: route.selectedItemId,
-        areas: freeze(
-          interestAreas.map((area) =>
-            freeze({ id: area.id, title: area.title })
-          ),
-        ),
         pendingId: pendingDecisionItemId,
         canAct: sourceActionsAvailable && route.online,
         search: searchModel(route.online),
@@ -317,8 +308,10 @@ export function createDiscoveryPage(dependencies) {
 
   /** @param {unknown} command */
   async function search(command) {
-    const stagedCommand = searchCommand(command);
+    const stagedCommand = validCentralSearchCommand(command) ? {...command,providerIds:[...command.providerIds]} : null;
     const generation = ++searchGeneration;
+    morePending = false;
+    moreFailure = null;
     if (
       stagedCommand !== null && stagedCommand.providerIds.includes("youtube") &&
       !youtubeConnection.isAccepted()
@@ -363,9 +356,8 @@ export function createDiscoveryPage(dependencies) {
     centralRouteItems = result.value.items.map((item) =>
       centralRouteItem(item, result.value.policyVersion)
     );
-    searchFailure = result.value.providerFailures.length === 0
-      ? null
-      : result.value.providerFailures.map(({providerId,failure})=>`${providerId}: ${failure.kind}.`).join(" ") + " Available results are shown.";
+    searchFailure = null;
+    continuation = result.value.nextCursors === undefined ? null : {query:result.value.submittedQuery,limit:searchLimit,cursors:result.value.nextCursors};
     if (sourceActionsAvailable) {
       await syncIdentities(centralRouteItems.map((item) =>
         item.candidate.canonicalIdentity
@@ -381,20 +373,42 @@ export function createDiscoveryPage(dependencies) {
     return result;
   }
 
-  /** @param {string} itemId @param {string} areaId */
-  async function approve(itemId, areaId) {
+  async function loadMore() {
+    if (searchPending || morePending || continuation === null) return;
+    const generation = searchGeneration;
+    const command = continuation;
+    morePending = true;
+    moreFailure = null;
+    rerender();
+    const result = await centralGateway.search({...command,providerIds:Object.keys(command.cursors)});
+    if (generation !== searchGeneration) return;
+    morePending = false;
+    if (!result.ok) {
+      moreFailure = friendlyDiscoveryFailure(result.error, markup);
+      rerender();
+      return result;
+    }
+    const items = centralRouteItems ?? [];
+    const known = new Set(items.map(item => item.candidate.canonicalUrl));
+    const added = result.value.items.filter(item => {
+      if (known.has(item.canonicalUrl)) return false;
+      known.add(item.canonicalUrl);
+      return true;
+    }).map(item => centralRouteItem(item, result.value.policyVersion));
+    centralRouteItems = [...items, ...added];
+    continuation = result.value.nextCursors === undefined || Object.keys(result.value.nextCursors).length === 0 ? null : {...command,cursors:result.value.nextCursors};
+    if (sourceActionsAvailable) await syncIdentities(added.map(item => item.candidate.canonicalIdentity), generation);
+    if (generation === searchGeneration) rerender();
+    return result;
+  }
+
+  /** @param {string} itemId */
+  async function approve(itemId) {
     if (pendingDecisionItemId !== null) return;
     const item = routeItems.get(itemId);
-    if (
-      item === undefined ||
-      !interestAreas.some((area) => area.id === areaId)
-    ) {
-      onError(markup.sourceAreaRequired);
-      rerender();
-      return;
-    }
+    if (item === undefined) { onError(markup.sourceUnavailable); return; }
     if (["video", "feed", "episode", "unknown"].includes(item.candidate.adapter.granularity)) {
-      onError("Extraction is unavailable for this format. Explore the source or provide permitted learning material.");
+      onError(markup.failureMessages.SourceFormatUnsupported ?? markup.sourceUnavailable);
       return;
     }
     pendingDecisionItemId = item.id;
@@ -402,12 +416,15 @@ export function createDiscoveryPage(dependencies) {
     const result = await sourceLibrary.extract({
       ...item.candidate,
       identityStatus: "resolved",
-      interestAreaIds: [areaId],
+      interestAreaIds: [],
       idempotencyKey: `approve:${createId()}`,
     });
     pendingDecisionItemId = null;
     if (!result.ok) {
-      onError(friendlySource(result.error, markup));
+      const message = friendlySource(result.error, markup);
+      if (result.error.kind === "SourceGatewayRejected" && dependencies.confirmUpload) {
+        if (dependencies.confirmUpload(`${message}\n\n${markup.manualUploadGuidance}`, item.candidate.canonicalUrl)) openUpload(item.id);
+      } else onError(message);
     } else {
       onNotice(
         result.value.reused
@@ -425,33 +442,12 @@ export function createDiscoveryPage(dependencies) {
     if (item === undefined) return { ok: false, error: { kind: "DiscoveryUploadSourceUnavailable" } };
     dependencies.navigateToUpload({
       title: item.title,
+      ...(item.youtubeWatchUrl===null ? {url:item.candidate.canonicalUrl} : {}),
       reason: item.youtubeWatchUrl !== null
         ? markup.youtubeTranscriptGuidance
         : markup.manualUploadGuidance,
     });
     return { ok: true, value: undefined };
-  }
-
-  /** @param {string} itemId */
-  async function reject(itemId) {
-    if (pendingDecisionItemId !== null) return;
-    const item = routeItems.get(itemId);
-    if (item === undefined) return;
-    pendingDecisionItemId = item.id;
-    rerender();
-    const result = await sourceLibrary.reject({
-      canonicalIdentity: item.candidate.canonicalIdentity,
-      identityEvidence: item.candidate.identityEvidence,
-      idempotencyKey: `reject:${createId()}`,
-    });
-    pendingDecisionItemId = null;
-    if (!result.ok) {
-      onError(friendlySource(result.error, markup));
-    } else {
-      suppressed.add(item.candidate.canonicalIdentity);
-      onNotice(markup.sourceRejected);
-    }
-    rerender();
   }
 
   async function syncSuppressions() {
@@ -546,26 +542,6 @@ export function createDiscoveryPage(dependencies) {
   }
 }
 
-/** @param {unknown} command */
-function searchCommand(command) {
-  if (typeof command !== "object" || command === null || Array.isArray(command)) return null;
-  const value = /** @type {Record<string,unknown>} */ (command);
-  const limit = value.limit;
-  if (
-    Object.keys(value).length !== 3 ||
-    typeof value.query !== "string" || value.query.trim() === "" ||
-    !Array.isArray(value.providerIds) || value.providerIds.length === 0 ||
-    value.providerIds.length > 20 ||
-    !value.providerIds.every((id) => typeof id === "string" && id.trim() !== "") ||
-    new Set(value.providerIds).size !== value.providerIds.length ||
-    typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 20
-  ) return null;
-  return freeze({
-    query: value.query,
-    providerIds: freeze(/** @type {string[]} */ ([...value.providerIds])),
-    limit,
-  });
-}
 
 /** @param {(value:string)=>string} escapeHtml @param {import("../routes/discover.js").DiscoverMarkup} markup */
 function emptyRoute(escapeHtml, markup) {
@@ -576,7 +552,6 @@ function emptyRoute(escapeHtml, markup) {
     items: freeze([]),
     selectedItemId: null,
     maxVisibleItems: 20,
-    areas: freeze([]),
     pendingId: null,
     canAct: false,
     search: freeze({ query: "", limit: 10, capabilities: freeze([]), selectedProviderIds: freeze([]), available: false }),
@@ -587,19 +562,7 @@ function emptyRoute(escapeHtml, markup) {
 
 /** @param {import("../features/source-library/gateway.js").SourceGatewayFailure} failure @param {import("../routes/discover.js").DiscoverMarkup} failureCopy */
 function friendlySource(failure, failureCopy) {
-  if (
-    failure.kind === "SourceGatewayUnavailable" ||
-    failure.kind === "SourceGatewayTimedOut"
-  ) return failureCopy.sourceReconnect;
-  if (failure.kind === "SourceGatewayUnauthenticated") {
-    return failureCopy.sourceSignIn;
-  }
-  if (
-    failure.kind === "SourceGatewayRejected" &&
-    failure.failureKind === "SourceInterestAreaMissing"
-  ) return failureCopy.sourceAreaMissing;
-  if (failure.kind === "SourceGatewayRejected") return `Extraction or decision failed: ${failure.failureKind}.`;
-  return failureCopy.sourceDecisionFailed;
+  return failureCopy.failureMessages[failure.kind === "SourceGatewayRejected" ? failure.failureKind : failure.kind] ?? failureCopy.sourceDecisionFailed;
 }
 
 /** @param {(value:string)=>string} escapeHtml @param {import("../routes/discover.js").DiscoverMarkup} markup */

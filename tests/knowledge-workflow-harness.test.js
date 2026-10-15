@@ -255,3 +255,12 @@ Deno.test("context compaction pauses instead of compacting during an unsafe turn
   if (!result.ok) assertEquals(result.error.kind, "ContextLimitBeforeSafeCheckpoint");
   assertEquals(persisted, false);
 });
+
+Deno.test("callback diagnostics retain safe exception class without source or secret messages", async()=>{
+ const fixture=setup([]),namespace=await fixture.memory.createNamespace({ownerId:"owner-diagnostic",runId:"run-diagnostic",role:"question-evaluator"});
+ if(!namespace.ok)throw new Error("Expected namespace");
+ const logs=/** @type {unknown[]} */([]);
+ const harness=createAgentHarness({memory:fixture.memory,model:{respond:async()=>{throw new TypeError("private-source-and-secret-marker");}},eventLedger:{append:async()=>null},tools:new Map(),maxTurns:1,now:()=>"2026-10-15T00:00:00Z",logger:entry=>logs.push(entry)});
+ const result=await harness.run({namespace:namespace.value,taskId:"safe-diagnostic",input:{}});
+ assertEquals(result.ok,false);const serialized=JSON.stringify(logs);assertEquals(serialized.includes("callback-type-error"),true);assertEquals(serialized.includes("private-source-and-secret-marker"),false);
+});

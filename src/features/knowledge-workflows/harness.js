@@ -85,7 +85,7 @@ export class AgentExecutionBoundaryFailure extends Error {
  *   readonly maxTurns: number,
  *   readonly maxToolCalls?: number,
  *   readonly now: () => string,
- *   readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly role?: AgentRole, readonly failureKind?: string }) => void
+ *   readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly role?: AgentRole, readonly failureKind?: string, readonly diagnosticToken?:string }) => void
  * }} AgentHarnessDependencies
  */
 
@@ -161,7 +161,8 @@ export function createAgentHarness(dependencies) {
           response = await model.respond({ taskId: command.taskId, turn, input: command.input, toolResults });
         } catch (error) {
           if (error instanceof AgentExecutionBoundaryFailure) throw error;
-          logger({ event: "agent.failure", runId: command.namespace.runId, role: command.namespace.role, failureKind: "AgentOutputInvalid" });
+          const diagnosticToken=error instanceof TypeError?"callback-type-error":error instanceof SyntaxError?"callback-syntax-error":error instanceof RangeError?"callback-range-error":"callback-runtime-error";
+          logger({ event: "agent.failure", runId: command.namespace.runId, role: command.namespace.role, failureKind: "AgentOutputInvalid",diagnosticToken });
           return { ok: false, error: { kind: "AgentOutputInvalid" } };
         }
         if (!isModelResponse(response)) {

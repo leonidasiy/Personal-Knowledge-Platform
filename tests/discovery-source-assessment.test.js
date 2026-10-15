@@ -250,7 +250,7 @@ Deno.test("raw central search retains all provider claims in order before the di
   const search = createCentralDiscoverySearch({maximumLimit:20}, {
     budget:{timeoutMs:25000,now:Date.now,timeoutSignal:AbortSignal.timeout},
     policy:createEducationalSearchPolicy({version:"raw-v1",maximumSubmittedCharacters:120,maximumProviderCharacters:120}),
-    providers:[{descriptor:{id:"web",label:"Web",resultKind:"web",priority:1,enabled:true},search:async()=>({ok:true,value:items})}],
+    providers:[{descriptor:{id:"web",label:"Web",resultKind:"web",priority:1,enabled:true},search:async(command)=>({ok:true,value:items.slice(0,command.limit)})}],
   });
   const result = await search.search({query:"harmony",providerIds:["web"],limit:2});
   equal(result.ok,true);

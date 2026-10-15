@@ -164,7 +164,7 @@ export function createRobotsGate(dependencies) {
           const timer = setTimeout(() => controller.abort(), timeoutMs);
           let response;
           try {
-            response = await dependencies.fetch(robotsUrl,{method:"GET",redirect:"error",signal:controller.signal});
+            response = await dependencies.fetch(robotsUrl,{method:"GET",redirect:"manual",signal:controller.signal});
             if (!acceptedRobotsStatus(response.status)) return unavailable(response.status,{kind:"RobotsFetchUnavailable"});
             fetched = {status:response.status,bytes:new Uint8Array(await response.arrayBuffer())};
           } catch (error) { return unavailable(response?.status ?? 0,{kind:"RobotsFetchUnavailable"}); }

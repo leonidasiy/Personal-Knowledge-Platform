@@ -114,6 +114,8 @@ Deno.test("server-owned private document origin starts directly awaiting authori
   assertEquals(result.ok, true);
   if (!result.ok) throw new Error(result.error.kind);
   assertEquals(result.value.run.state, "awaiting-upload");
+  const urlRun=await fixture.service.createRun({ownerId:"owner-a",sourceId:"source-url",sourceRevision:1,canonicalSourceIdentity:"https://publisher.example/lesson",contentSignature:"url-material:1",configDigests:{},idempotencyKey:"url-material:1",sourceOrigin:"url-material"});
+  assertEquals(urlRun.ok,true);if(urlRun.ok){assertEquals(urlRun.value.run.state,"awaiting-upload");assertEquals(urlRun.value.run.canonicalSourceIdentity,"https://publisher.example/lesson");}
   const rejected = await fixture.service.createRun({ ownerId: "owner-a", sourceId: "source-private-2", sourceRevision: 1, canonicalSourceIdentity: "https://app.example/api/private-documents/source-private-2", contentSignature: "source-revision:2", configDigests: {}, idempotencyKey: "private-source-2", sourceOrigin: "web" });
   assertEquals(rejected.ok, false);
   if (!rejected.ok) assertEquals(rejected.error.kind, "WorkflowCommandInvalid");
@@ -388,4 +390,48 @@ Deno.test("cancelled extraction creates a fresh in-memory attempt and concurrent
  const cancelled=await f.service.control({ownerId:"owner-a",runId:first.run.runId,expectedRevision:1,action:"abandon",idempotencyKey:"cancel-fresh"});assertEquals(cancelled.ok,true);
  const [a,b]=await Promise.all([createRun(f.service),createRun(f.service)]);
  assertEquals(a.run.state,"source-added");assertEquals(a.run.runId===first.run.runId,false);assertEquals(a.run.runId,b.run.runId);assertEquals(f.runs.length,2);assertEquals(f.runs[0].state,"abandoned");
+});
+
+Deno.test("upload after failed empty web extraction starts its processing window when material arrives", async () => {
+  const fixture = setup();
+  const run = (await createRun(fixture.service)).run;
+  await fixture.service.rightsApproved({ownerId:"owner-a",sourceId:"source-a",sourceRevision:1});
+  const extracting = await fixture.service.advance({ownerId:"owner-a",runId:run.runId,expectedRevision:2,nextState:"extraction-loop"});
+  if(!extracting.ok)throw new Error(extracting.error.kind);
+  const waiting = await fixture.service.advance({ownerId:"owner-a",runId:run.runId,expectedRevision:extracting.value.revision,nextState:"awaiting-upload",failureKind:"WorkflowExtractionFailed:KnowledgeBrowserNavigationFailed"});
+  if(!waiting.ok)throw new Error(waiting.error.kind);
+  fixture.setNow("2026-08-14T00:00:00.000Z");
+  const attached = await fixture.service.attachMaterial({ownerId:"owner-a",runId:run.runId,materialId:"uploaded-fallback"});
+  if(!attached.ok)throw new Error(attached.error.kind);
+  assertEquals(attached.value.extractionStartedAt,"2026-08-14T00:00:00.000Z");
+  assertEquals(attached.value.extractionDeadlineAt,"2026-08-14T00:30:00.000Z");
+  assertEquals(attached.value.failureKind,null);
+  assertEquals(attached.value.state,"extraction-loop");
+});
+
+Deno.test("only a completed partial failure permits an approved failed-item retry", async () => {
+  const fixture = setup(), run = (await createRun(fixture.service)).run;
+  const completed = {...run, state: /** @type {const} */ ("completed"), revision: 6, failureKind:"WorkflowPagesFailed", extractionStartedAt:"2026-08-13T00:00:00.000Z", extractionDeadlineAt:"2026-08-13T00:30:00.000Z", counts:{pages:2,knowledgePoints:3,acceptedQuizzes:3,pendingQuizzes:0}};
+  fixture.runs[0] = completed;
+  const reuse = await fixture.service.ensureReuse({ownerId:run.ownerId,runId:run.runId});
+  assertEquals(reuse.ok,true); assertEquals(fixture.manifests.length,0);
+  const retried = await fixture.service.control({ownerId:run.ownerId,runId:run.runId,expectedRevision:6,action:"resume",idempotencyKey:"retry-failed"});
+  assertEquals(retried.ok,true);
+  if (!retried.ok) return;
+  assertEquals(retried.value.state,"extraction-loop"); assertEquals(retried.value.failureKind,"WorkflowRetryFailedPages");
+  assertEquals(retried.value.counts.pages,2); assertEquals(retried.value.counts.acceptedQuizzes,3);
+  assertEquals(retried.value.extractionDeadlineAt,completed.extractionDeadlineAt);
+  fixture.runs[0] = {...completed,failureKind:null};
+  const ordinary = await fixture.service.control({ownerId:run.ownerId,runId:run.runId,expectedRevision:6,action:"resume",idempotencyKey:"retry-completed"});
+  assertEquals(ordinary.ok,false); if (!ordinary.ok) assertEquals(ordinary.error.kind,"WorkflowControlInvalid");
+});
+
+Deno.test("quiz scheduling advances revision with monotonic counts and preserves the extraction clock", async () => {
+  const fixture=setup();const {run}=await createRun(fixture.service);
+  fixture.runs[0]={...run,state:"per-point-quiz-loop",extractionStartedAt:"2026-08-13T00:00:00.000Z",extractionDeadlineAt:"2026-08-13T00:30:00.000Z",counts:{pages:3,knowledgePoints:2,acceptedQuizzes:0,pendingQuizzes:0}};
+  const invalid=await fixture.service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState:"per-point-quiz-loop"});assertEquals(invalid.ok,false);
+  const chunk=await fixture.service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState:"per-point-quiz-loop",counts:{pages:3,knowledgePoints:2,acceptedQuizzes:1,pendingQuizzes:0}});assertEquals(chunk.ok,true);if(!chunk.ok)return;
+  assertEquals(chunk.value.revision,run.revision+1);assertEquals(chunk.value.extractionDeadlineAt,"2026-08-13T00:30:00.000Z");
+  const decrease=await fixture.service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:chunk.value.revision,nextState:"per-point-quiz-loop",counts:{pages:3,knowledgePoints:2,acceptedQuizzes:0,pendingQuizzes:0}});assertEquals(decrease.ok,false);
+  const dropped=await fixture.service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:chunk.value.revision,nextState:"per-point-quiz-loop",counts:chunk.value.counts});assertEquals(dropped.ok,true);
 });

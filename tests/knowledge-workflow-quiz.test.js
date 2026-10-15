@@ -184,10 +184,11 @@ Deno.test("quiz actor-critic rejects duplicate choice meanings and duplicate ans
       repository: fixture.repository, now: () => "2026-09-17T00:00:00.000Z", logger: () => {}, maxAttempts: 3,
     });
     const result = await actor.run({ ownerId: "owner-a", runId: "run-duplicate-options", points: [points()[0]] });
-    assertEquals(result.ok, true);
+    assertEquals(result.ok, false);
     assertEquals(fixture.published.length, 0);
-    assertEquals(fixture.attempts.length, 3);
-    assertEquals(fixture.attempts[0].failureKind, "QuizDraftSchemaInvalid");
+    assertEquals(fixture.attempts.length, 0);
+    assertEquals(fixture.purged.length, 0);
+    if(!result.ok)assertEquals(result.error.kind, "QuizDraftSchemaInvalid");
   }
 });
 
@@ -229,7 +230,7 @@ Deno.test("accepted quiz kinds are published directly after actor-critic approva
   if (result.ok) assertEquals(result.value.dispositions[0].publicationStatus, "published");
 });
 
-Deno.test("malformed evaluator output discards the knowledge point after generation", async () => {
+Deno.test("malformed evaluator output preserves knowledge and the valid draft after technical exhaustion", async () => {
   for (const grade of [{score:10},{score:9,reasons:["Synthetic supported reason"],feedback:["Use one concise answer term."],groundingProblems:[]}]) {
     const fixture = setup();
     const actor = createQuizActorCritic({
@@ -241,13 +242,14 @@ Deno.test("malformed evaluator output discards the knowledge point after generat
       maxAttempts: 3,
     });
     const result = await actor.run({ ownerId: "owner-a", runId: "run-malformed", points: [points()[0]] });
-    assertEquals(result.ok, true);
-    assertEquals(fixture.attempts.length, 3);
+    assertEquals(result.ok, false);
+    assertEquals(fixture.attempts.length, 0);
     assertEquals(fixture.restricted.length, 0);
     assertEquals(fixture.published.length, 0);
-    assertEquals(fixture.purged.length, 1);
-    if (!result.ok) return;
-    assertEquals(result.value.dispositions[0].restrictedUntil, null);
+    assertEquals(fixture.purged.length, 0);
+    if (result.ok) throw new Error("Expected retained technical failure");
+    assertEquals(result.error.kind, "QuizEvaluatorOutputInvalid");
+    assertEquals("technicalRetriesExhausted" in result.error && result.error.technicalRetriesExhausted, true);
   }
 });
 

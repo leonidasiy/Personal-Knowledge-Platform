@@ -1,9 +1,9 @@
 // @ts-check
 
-/** @template T @template E @typedef {{readonly ok:true,readonly value:T}|{readonly ok:false,readonly error:E}} Result */
+/** @template T @template E @typedef {{readonly ok:true,readonly value:T,readonly nextCursor?:string}|{readonly ok:false,readonly error:E}} Result */
 /** @typedef {{readonly id:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean}} SearchProviderDescriptor */
-/** @typedef {{readonly kind:"SearchProviderTimedOut"}|{readonly kind:"SearchProviderCredentialMissing"}|{readonly kind:"SearchProviderCredentialRejected"}|{readonly kind:"SearchProviderQuotaExceeded"}|{readonly kind:"SearchProviderUnavailable"}|{readonly kind:"SearchProviderResponseInvalid"}} SearchProviderFailure */
-/** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number}} SearchProviderCommand */
+/** @typedef {{readonly kind:"SearchProviderInputInvalid"}|{readonly kind:"SearchProviderTimedOut"}|{readonly kind:"SearchProviderCredentialMissing"}|{readonly kind:"SearchProviderCredentialRejected"}|{readonly kind:"SearchProviderQuotaExceeded"}|{readonly kind:"SearchProviderUnavailable"}|{readonly kind:"SearchProviderResponseInvalid"}} SearchProviderFailure */
+/** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number,readonly cursor?:string}} SearchProviderCommand */
 /** @typedef {{readonly providerId:string,readonly resultKind:string,readonly sourceLevel:"document",readonly title:string,readonly description:string|null,readonly canonicalUrl:string,readonly publisherLabel:null,readonly publishedAt:null,readonly identityEvidence:readonly {readonly attribute:string,readonly value:string,readonly provenanceUrl:string}[]}} BraveCandidate */
 /** @typedef {{readonly providerId:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean,readonly maximumResults:number,readonly apiVersion:string}} BraveSearchConfiguration */
 
@@ -30,6 +30,10 @@ export function createBraveSearchProvider(configuration, dependencies) {
       if (!commandValid(command, descriptor.id)) {
         throw new TypeError("Invalid Brave search command.");
       }
+      const parts = command.cursor?.split(":");
+      const page = parts === undefined ? 0 : Number(parts[0]);
+      const count = parts === undefined ? Math.min(command.limit, configuration.maximumResults) : Number(parts[1]);
+      if (parts !== undefined && parts.length !== 2 || !Number.isInteger(page) || page < 0 || page > 9 || !Number.isInteger(count) || count < 1 || count > Math.min(command.limit,configuration.maximumResults)) return {ok:false,error:{kind:"SearchProviderInputInvalid"}};
       const credential = dependencies.credential();
       if (!credential.ok) return credential;
       if (credential.value.trim() === "") {
@@ -38,11 +42,12 @@ export function createBraveSearchProvider(configuration, dependencies) {
       const url = new URL("https://api.search.brave.com/res/v1/web/search");
       url.search = new URLSearchParams({
         q: command.query,
-        count: String(Math.min(command.limit, configuration.maximumResults)),
+        count: String(count),
         safesearch: "strict",
         text_decorations: "false",
         result_filter: "web",
       }).toString();
+      if (command.cursor !== undefined) url.searchParams.set("offset", String(page));
       const response = await request(dependencies.fetch, url, {
         accept: "application/json",
         "api-version": configuration.apiVersion,
@@ -51,7 +56,10 @@ export function createBraveSearchProvider(configuration, dependencies) {
       if (!response.ok) return response;
       const document = await readDocument(response.value);
       if (!document.ok) return document;
-      return parseDocument(document.value, descriptor);
+      const parsed = parseDocument(document.value, descriptor);
+      const query = record(document.value) && record(document.value.query) ? document.value.query : null;
+      if (query?.more_results_available !== undefined && typeof query.more_results_available !== "boolean") return {ok:false,error:{kind:"SearchProviderResponseInvalid"}};
+      return parsed.ok && query?.more_results_available === true && page < 9 ? {...parsed, nextCursor:`${page + 1}:${count}`} : parsed;
     },
   });
 }
@@ -137,7 +145,7 @@ function configurationValid(value) {
 
 /** @param {unknown} value @param {string} providerId */
 function commandValid(value, providerId) {
-  return record(value) && Object.keys(value).length === 3 && value.providerId === providerId &&
+  return record(value) && Object.keys(value).every(key => ["providerId","query","limit","cursor"].includes(key)) && (value.cursor === undefined || text(value.cursor)) && value.providerId === providerId &&
     text(value.query) && positive(value.limit);
 }
 

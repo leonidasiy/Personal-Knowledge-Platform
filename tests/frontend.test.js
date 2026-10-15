@@ -38,9 +38,7 @@ Deno.test("learning shell is local, theme-aware, and keyboard reachable", async 
 
 Deno.test("active learner owns Feed rendering while app retains local history contracts", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
-  const learner = await Deno.readTextFile(
-    new URL("src/features/learning-generation/learner.js", root),
-  );
+  const learner = await readLearnerPresentation();
   assert(
     source.includes("if (learnerController !== null) return learnerController.renderFeed();") &&
       learner.includes("Preparing today's five knowledge cards") &&
@@ -538,9 +536,7 @@ Deno.test("fatal local restore keeps export/reset recovery without legacy review
 Deno.test("Learner controls expose approved targets and batch ownership", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const libraryRoute = await readLibraryPresentation();
-  const learner = await Deno.readTextFile(
-    new URL("src/features/learning-generation/learner.js", root),
-  );
+  const learner = await readLearnerPresentation();
   assert(
     source.includes("data-daily-settings-form") &&
       source.includes('min="1" max="50"') &&
@@ -621,7 +617,7 @@ Deno.test("Discover remains a lazy destination with one bounded search command",
       discoveryPage.includes("centralGateway.search(command)") &&
       discoveryPage.includes('form.getAll("provider")') &&
       discoveryPage.includes("sourceLibrary.extract(") &&
-      discoveryPage.includes("sourceLibrary.reject(") &&
+      !discoveryPage.includes("sourceLibrary.reject(") &&
       discoveryPage.includes("sourceLibrary.suppressed(") &&
       !discoveryPage.includes("data-discovery-rss-form") &&
       !discoveryPage.includes("data-discovery-youtube-form"),
@@ -655,10 +651,10 @@ Deno.test("Discover route re-entry retries the hosted source capability probe", 
     source.indexOf("async function loadReviewRoute()"),
   );
   const discoveryBranch = loadRoute.slice(
-    loadRoute.indexOf('if (activeView === "discover")'),
+    loadRoute.indexOf('if (view === "discover")'),
   );
   assert(
-    discoveryBranch.includes('if (activeView === "discover")') &&
+    discoveryBranch.includes('if (view === "discover")') &&
       discoveryBranch.includes("if (discoveryPage === null)") &&
       !discoveryBranch.includes(
         'activeView === "discover" && discoveryPage === null',
@@ -816,6 +812,13 @@ async function readLibraryPresentation() {
   const data = html.match(/<script id="library-markup" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
   if (!data) throw new Error("Library shell markup missing");
   return await Deno.readTextFile(new URL("src/routes/library.js", root)) + JSON.parse(data).flat().join("");
+}
+
+async function readLearnerPresentation() {
+  const shell = await Deno.readTextFile(new URL("index.html", root));
+  const data = shell.match(/<script id="feed-markup" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
+  if (!data) throw new Error("Feed shell markup missing");
+  return await Deno.readTextFile(new URL("src/features/learning-generation/learner.js", root)) + JSON.parse(data).flat().join("");
 }
 
 Deno.test("Upload and header controls retain visible contrast without faded disabled text", async () => {

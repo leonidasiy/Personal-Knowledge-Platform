@@ -315,17 +315,47 @@ Deno.test("9 unit 2 preserves fail-closed rights, deterministic quiz publication
 
 Deno.test("executor classifies the complete consolidated source exactly once before quiz publication", async () => {
   /** @type {string[]} */ const calls = [];
+  let classifyFails = false;
   const point = { id: "k-a", sourceId: "source-a", sourceRevision: 1, summary: "A cadence resolves.", normalizedHash: "h-a", evidenceAnchors: [{ url: "https://example.test/learn", selector: "main" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://example.test/learn" }, extractionVersion: "v1" };
   const executor = createKnowledgeWorkflowExecutor({
     transition: async ({ run: active, nextState }) => ({ ok: true, value: { ...active, state: nextState } }),
     robots: { check: async () => ({ ok: true, value: {} }) },
     extraction: { run: async () => ({ ok: true, value: { state: "completed", scratchpad: {}, knowledgePointCount: 1, pagesProcessed: 2 } }) },
     knowledge: { list: async () => ({ ok: true, value: [point] }) },
-    classification: { ensure: async ({ points }) => { calls.push(`classify:${points.length}`); return { ok: true, value: null }; } },
+    classification: { ensure: async ({ points }) => { calls.push(`classify:${points.length}`); return classifyFails ? {ok:false,error:{kind:"SourceClassificationInferenceFailed"}} : { ok: true, value: null }; } },
     quiz: { run: async ({ points }) => { calls.push(`quiz:${points.length}`); return { ok: true, value: { dispositions: [{ knowledgeId: "k-a", status: "accepted", publicationStatus: "published", attempts: 1, failureKind: null, restrictedUntil: null }] } }; } },
     logger: () => {},
   });
   const result = await executor.run({ run: run("extraction-finalized"), rootUrl: "https://example.test/learn" });
   assertEquals(result.ok, true);
   assertEquals(calls.join(","), "classify:1,quiz:1");
+  classifyFails = true;
+  calls.length = 0;
+  const failed = await executor.run({run:run("extraction-finalized"),rootUrl:"https://example.test/learn"});
+  assertEquals(failed.ok,false);
+  assertEquals(calls.join(","),"classify:1");
+  if (!failed.ok) {
+    assertEquals(failed.error.causeKind,"WorkflowSourceClassificationFailed");
+    assertEquals(failed.error.detailKind,"SourceClassificationInferenceFailed");
+  }
+
+});
+
+Deno.test("executor checkpoints one quiz chunk and completes only after the remaining points", async () => {
+  let more = true;
+  const initial = {...run("per-point-quiz-loop"),failureKind:"WorkflowPagesFailed",counts:{pages:3,knowledgePoints:2,acceptedQuizzes:0,pendingQuizzes:0}};
+  const executor = createKnowledgeWorkflowExecutor({
+    transition:async ({run:current,nextState,counts,failureKind})=>({ok:true,value:{...current,state:nextState,revision:current.revision+1,counts:counts??current.counts,failureKind:failureKind??current.failureKind}}),
+    robots:{check:async()=>{throw new Error("Do not restart acquisition");}}, extraction:{run:async()=>{throw new Error("Do not restart extraction");}},
+    knowledge:{list:async()=>({ok:true,value:[{id:"knowledge-a",sourceId:"source-a",sourceRevision:1,summary:"Specific",normalizedHash:"hash-a",evidenceAnchors:[{url:"https://example.test/learn",selector:"#a"}],coverageGoalIds:[],mediaCandidates:[],attribution:{sourceUrl:"https://example.test/learn"},extractionVersion:"v1"}]})},
+    classification:{ensure:async()=>({ok:true,value:null})},
+    quiz:{run:async()=>({ok:true,value:{hasMore:more,dispositions:[{knowledgeId:"knowledge-a",status:"accepted",publicationStatus:"published",attempts:1,failureKind:null,restrictedUntil:null}]}})},logger:()=>{},
+  });
+  const chunk = await executor.run({run:initial,rootUrl:initial.canonicalSourceIdentity});
+  assert(chunk.ok,"First quiz chunk must succeed");if(!chunk.ok)return;
+  assertEquals(chunk.value.state,"per-point-quiz-loop");assertEquals(chunk.value.run.counts.acceptedQuizzes,1);assertEquals(chunk.value.run.failureKind,"WorkflowPagesFailed");
+  more=false;
+  const completed=await executor.run({run:chunk.value.run,rootUrl:initial.canonicalSourceIdentity});
+  assert(completed.ok,"Last quiz chunk must succeed");if(!completed.ok)return;
+  assertEquals(completed.value.state,"completed");assertEquals(completed.value.run.counts.knowledgePoints,2);assertEquals(completed.value.run.failureKind,"WorkflowPagesFailed");
 });

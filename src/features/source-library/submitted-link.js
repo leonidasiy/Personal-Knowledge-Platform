@@ -3,14 +3,14 @@ import { isIsoDateTime, isNonEmptyText, isPublicHttpsUrl, isRecord, validatePubl
 
 /** @typedef {{readonly kind:"SubmittedLinkCommandInvalid",readonly field:string}} SubmittedLinkFailure */
 /** @param {unknown} input @param {string} observedAt @returns {import('./contracts.js').Result<Omit<import('./service.js').ValidatedApproval,'ownerId'> & {readonly identityStatus:"resolved"},SubmittedLinkFailure>} */
-export function prepareSubmittedLink(input, observedAt) {
-  const checked=validateSubmittedLink(input);
+export function prepareSubmittedLink(input, observedAt, material = false) {
+  const checked=validateSubmittedLink(input,material);
   if (!checked.ok) return checked;
   if (!isIsoDateTime(observedAt)) return {ok:false,error:{kind:"SubmittedLinkCommandInvalid",field:"observedAt"}};
   const {title,url,interestAreaId,idempotencyKey}=checked.value;
   return {ok:true,value:Object.freeze({
     identityStatus:"resolved", title, description:"",
-    submittedUrl:url, canonicalUrl:url, interestAreaIds:[interestAreaId],
+    submittedUrl:url, canonicalUrl:url, interestAreaIds:interestAreaId ? [interestAreaId] : [],
     idempotencyKey,
     adapter:{id:"submitted-link",version:"v1",granularity:"document",capabilities:["metadata","bounded-ingestion"]},
     identityEvidence:[{attribute:"user-submitted-url",value:url,provenanceUrl:url,observedAt}], initialItem:null,
@@ -19,13 +19,13 @@ export function prepareSubmittedLink(input, observedAt) {
 
 /** @typedef {{readonly title:string,readonly url:string,readonly interestAreaId:string,readonly idempotencyKey:string}} SubmittedLinkCommand */
 /** @param {unknown} input @returns {import('./contracts.js').Result<SubmittedLinkCommand,SubmittedLinkFailure>} */
-export function validateSubmittedLink(input) {
+export function validateSubmittedLink(input, material = false) {
   /** @param {string} field @returns {import('./contracts.js').Result<never,SubmittedLinkFailure>} */
   const invalid = field => ({ok:false,error:{kind:"SubmittedLinkCommandInvalid",field}});
-  if (!isRecord(input) || Object.keys(input).length !== 4 || !Object.keys(input).every(key => ["title","url","interestAreaId","idempotencyKey"].includes(key))) return invalid("command");
-  for (const field of ["title","interestAreaId","idempotencyKey"]) if (!isNonEmptyText(input[field])) return invalid(field);
+  if (!isRecord(input) || Object.keys(input).length !== (material ? 3 : 4) || !Object.keys(input).every(key => ["title","url","interestAreaId","idempotencyKey"].includes(key))) return invalid("command");
+  for (const field of ["title",...(material ? [] : ["interestAreaId"]),"idempotencyKey"]) if (!isNonEmptyText(input[field])) return invalid(field);
   if (/** @type {string} */(input.title).trim().length > 300) return invalid("title");
   if (!isPublicHttpsUrl(input.url) || !validatePublisherDestination(input.url).ok) return invalid("url");
   const url = new URL(/** @type {string} */(input.url)).href;
-  return {ok:true,value:{title:/** @type {string} */(input.title).trim(),url,interestAreaId:/** @type {string} */(input.interestAreaId).trim(),idempotencyKey:/** @type {string} */(input.idempotencyKey).trim()}};
+  return {ok:true,value:{title:/** @type {string} */(input.title).trim(),url,interestAreaId:material ? "" : /** @type {string} */(input.interestAreaId).trim(),idempotencyKey:/** @type {string} */(input.idempotencyKey).trim()}};
 }

@@ -87,7 +87,8 @@ export class D1BrowserRunCapacityLedger {
         "UPDATE source_browser_run_reservations SET charged_milliseconds = ?, state = ?, closed_at = ? WHERE account_scope = ? AND reservation_id = ? AND owner_id = ? AND job_id = ? AND state = 'active'",
       ).bind(charged, uncertain ? "uncertain" : "closed", closedAt, reservation.accountScope, reservation.reservationId, reservation.ownerId, reservation.jobId).run();
       if (!result.success) return fail({ kind: "BrowserRunUsageReconciliationFailed" });
-      if (result.meta?.changes !== 1) return fail({ kind: "BrowserRunCapacityConflict" });
+      // D1 counts the daily-capacity trigger update along with the reservation update.
+      if ((result.meta?.changes ?? 0) < 1) return fail({ kind: "BrowserRunCapacityConflict" });
       return { ok: true, value: null };
     } catch (error) {
       if (error instanceof Error) return fail({ kind: "BrowserRunUsageReconciliationFailed" });

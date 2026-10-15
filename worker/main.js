@@ -1,3 +1,4 @@
+import { createUrlPdfCapture } from "./url-pdf.mjs";
 import { D1KnowledgeContentRepository } from "./knowledge-workflow-content-d1.js";
 import { D1KnowledgeWorkflowProgressRepository } from './knowledge-workflow-progress-d1.js';
 import { D1SourceRenameRepository } from "./source-rename-d1.js";
@@ -200,6 +201,7 @@ import { createReminderRuntime } from "./reminders/runtime.js";
  *   readonly id: string,
  *   readonly pause: () => Promise<void>,
  *   readonly resume: () => Promise<void>,
+ *   readonly restart?: () => Promise<void>,
  *   readonly terminate: (options?: { readonly rollback?: boolean }) => Promise<void>,
  *   readonly status?: () => Promise<{ readonly status: string }>,
  *   readonly sendEvent: (event: { readonly type: string, readonly payload?: unknown }) => Promise<void>
@@ -736,16 +738,16 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       }),
       /** @param {unknown} command */
       control: async (command) => {
-        const prior = isRecord(command) && command.action === "resume"
+        const prior = isRecord(command) && (command.action === "resume" || command.action === "retry-quizzes")
           ? await knowledgeWorkflowService.status(command)
           : null;
         if (prior !== null && !prior.ok) return prior;
       const controlled = await knowledgeWorkflowService.control(command);
       if (!controlled.ok) return controlled;
-      if (!isRecord(command) || (command.action !== "stop" && command.action !== "resume" && command.action !== "generate" && command.action !== "abandon")) return controlled;
+      if (!isRecord(command) || (command.action !== "stop" && command.action !== "resume" && command.action !== "generate" && command.action !== "abandon" && command.action !== "retry-quizzes")) return controlled;
       try {
         const instance = await knowledgeWorkflowBinding.get(workflowInstanceId(controlled.value.runId));
-        await deliverKnowledgeWorkflowControl(instance, command.action);
+        await deliverKnowledgeWorkflowControl(instance, command.action, Boolean(prior?.ok && prior.value.state === "completed" && ["WorkflowPagesFailed","WorkflowQuizItemsFailed"].includes(prior.value.failureKind??"")));
       } catch (error) {
         if (!(error instanceof Error)) throw error;
         const rollback = workflowControlRollback(command, prior, controlled);
@@ -1028,6 +1030,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       now: () => platform.now().toISOString(),
       requestLogger: discoveryRequestLogger,
       waitUntil: platform.waitUntil,
+      urlCapture:browserConfiguration===null || configuration.value.sourceLibraryDatabase===null ? undefined : createUrlPdfCapture({
+        binding:/** @type {import("@cloudflare/puppeteer").BrowserWorker} */ (browserConfiguration.binding),fetch:platform.fetch,now:()=>platform.now().getTime(),logger:entry=>console.info(JSON.stringify(entry)),
+        capacity:new D1BrowserRunCapacityLedger({database:/** @type {import("./browser-run-capacity-d1.js").D1DatabasePort} */(/** @type {unknown} */(configuration.value.sourceLibraryDatabase)),now:()=>platform.now().toISOString(),createId:()=>crypto.randomUUID(),policy:browserRunCapacityPolicy(browserConfiguration.accountScope)}),
+      }),
       manualMaterial,
       learningGeneration: learningRepository === null || learningStatus === null || learningReview === null || learningRevocation === null
         ? null
@@ -2519,18 +2525,24 @@ async function reconcileKnowledgeWorkflowLaunch(binding, run, params, reused) {
  * is waiting at step.waitForEvent, so the matching event is authoritative and
  * is delivered first with bounded retries. If direct delivery is rejected, the
  * instance may be paused; resume it once and redeliver the event.
- * @param {{ readonly pause?: () => Promise<void>, readonly resume?: () => Promise<void>, readonly sendEvent?: (event: { readonly type: string, readonly payload?: unknown }) => Promise<void>, readonly terminate?: (options: { readonly rollback: boolean }) => Promise<void> }} instance
+ * @param {{ readonly restart?: () => Promise<void>, readonly pause?: () => Promise<void>, readonly resume?: () => Promise<void>, readonly sendEvent?: (event: { readonly type: string, readonly payload?: unknown }) => Promise<void>, readonly terminate?: (options: { readonly rollback: boolean }) => Promise<void> }} instance
  * @param {unknown} action
+ * @param {boolean} [restartCompleted]
  * @returns {Promise<void>}
  */
-async function deliverKnowledgeWorkflowControl(instance, action) {
+async function deliverKnowledgeWorkflowControl(instance, action, restartCompleted = false) {
   if (instance === null || typeof instance !== "object") throw new TypeError("Knowledge workflow instance is invalid.");
   if (action === "stop") {
     if (typeof instance.pause !== "function") throw new TypeError("Knowledge workflow pause control is unavailable.");
     await instance.pause();
     return;
   }
-  if (action === "resume") {
+  if (action === "resume" || action === "retry-quizzes") {
+    if (restartCompleted) {
+      if (typeof instance.restart !== "function") throw new TypeError("Knowledge workflow restart is unavailable.");
+      await instance.restart();
+      return;
+    }
     if (typeof instance.resume !== "function" || typeof instance.sendEvent !== "function") throw new TypeError("Knowledge workflow resume control is unavailable.");
     const event = { type: "workflow-control", payload: { action } };
     let lastError = null;
@@ -2572,11 +2584,11 @@ async function deliverKnowledgeWorkflowControl(instance, action) {
  * @returns {{ readonly ownerId: string, readonly runId: string, readonly expectedRevision: number, readonly nextState: "retryable-failure", readonly failureKind: string } | null}
  */
 function workflowControlRollback(command, prior, controlled) {
-  if (!isRecord(command) || command.action !== "resume" || !isRecord(prior) || prior.ok !== true || !isRecord(prior.value) || !isRecord(controlled) || controlled.ok !== true || !isRecord(controlled.value)) return null;
+  if (!isRecord(command) || (command.action !== "resume" && command.action !== "retry-quizzes") || !isRecord(prior) || prior.ok !== true || !isRecord(prior.value) || !isRecord(controlled) || controlled.ok !== true || !isRecord(controlled.value)) return null;
   const previous = prior.value;
   const transitioned = controlled.value;
-  if (previous.state !== "retryable-failure" || transitioned.state !== (previous.retryState ?? "extraction-loop") || typeof previous.ownerId !== "string" || typeof previous.runId !== "string" || typeof transitioned.revision !== "number" || !Number.isSafeInteger(transitioned.revision)) return null;
-  return Object.freeze({ ownerId: previous.ownerId, runId: previous.runId, expectedRevision: transitioned.revision, nextState: "retryable-failure", failureKind: typeof previous.failureKind === "string" && previous.failureKind.trim() !== "" ? previous.failureKind : "WorkflowInstanceControlFailed" });
+  if (!(previous.state === "retryable-failure" || previous.state === "completed" && (previous.failureKind === "WorkflowPagesFailed" || previous.failureKind === "WorkflowQuizItemsFailed")) || transitioned.state !== (command.action === "retry-quizzes" ? "per-point-quiz-loop" : previous.retryState ?? "extraction-loop") || typeof previous.ownerId !== "string" || typeof previous.runId !== "string" || typeof transitioned.revision !== "number" || !Number.isSafeInteger(transitioned.revision)) return null;
+  return Object.freeze({ ownerId: previous.ownerId, runId: previous.runId, expectedRevision: transitioned.revision, nextState: "retryable-failure", failureKind: previous.state === "completed" ? command.action === "retry-quizzes" ? "WorkflowRetryFailedQuizzes" : "WorkflowRetryFailedPages" : typeof previous.failureKind === "string" && previous.failureKind.trim() !== "" ? previous.failureKind : "WorkflowInstanceControlFailed" });
 }
 
 /** @param {unknown} error @returns {string} */

@@ -154,6 +154,7 @@ Deno.test("YouTube search preserves descriptive evidence with official link/embe
   const responses = [
     new Response(
       JSON.stringify({
+        nextPageToken: "next-page",
         items: [{
           id: { videoId: "video-1" },
           snippet: {
@@ -206,7 +207,7 @@ Deno.test("YouTube search preserves descriptive evidence with official link/embe
       },
     },
   );
-  const result = await adapter.search({ query: "music harmony" });
+  const result = await adapter.search({ query: "music harmony", limit: 3, pageToken: "previous-page" });
   assertEquals(result.ok, true);
   assertEquals(
     JSON.stringify(reservations),
@@ -220,7 +221,10 @@ Deno.test("YouTube search preserves descriptive evidence with official link/embe
   assertEquals(requests[1].authorization, null);
   assertEquals(requests[0].url.searchParams.get("key"), "server-api-key");
   assertEquals(requests[1].url.searchParams.get("key"), "server-api-key");
+  assertEquals(requests[0].url.searchParams.get("maxResults"),"3");
+  assertEquals(requests[0].url.searchParams.get("pageToken"),"previous-page");
   if (result.ok) {
+    assertEquals(result.nextCursor,"next-page");
     assertEquals(
       result.value[0].canonicalUrl,
       "https://www.youtube.com/watch?v=video-1",

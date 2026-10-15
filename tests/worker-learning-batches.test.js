@@ -61,7 +61,7 @@ class Database {
 }
 
 function rows(count = 5) {
-  return Array.from({ length: count }, (_, index) => ({ point_json: point(index), knowledge_id: `knowledge-${index}`, source_id: "source-a", source_revision: 1, source_main_subject: null, source_topic: null, source_classification_revision: null, task_json: task(index), source_title: "Music theory", canonical_url: "https://example.test/lesson", view_count: 0, last_answer_correct: null, scheduled_days: 0, due_at: null, studied_at: null, preference: 0, asset_id: null, media_kind: null, media_attribution: null }));
+  return Array.from({ length: count }, (_, index) => ({ point_json: point(index), knowledge_id: `knowledge-${index}`, source_id: "source-a", source_revision: 1, source_main_subject: null, source_topic: null, source_classification_revision: null, task_json: task(index), source_title: "Music theory", canonical_url: "https://example.test/lesson", view_count: 0, last_answer_correct: null, scheduled_days: 0, due_at: null, studied_at: null, preference: 0, media_candidates: "[]", asset_id: null, media_kind: null, media_attribution: null }));
 }
 
 Deno.test("native paired Review projection passes the gateway without pre-answer explanations or answer keys", async () => {
@@ -94,7 +94,7 @@ Deno.test("learner projection preserves illustration purpose only for a verified
   const binding = { kind: "webpage-support", purpose: "illustration", ownerId: "owner-a", runId: "run-a", sourceRevision: 1, factHash, originalDigest: "sha256:original", imageId: "image-a", evidence: "Source illustration depicts the example scene." };
   const alternatives = [{ ...binding, purpose: undefined }, { ...binding, purpose: "evidence" }, binding, { ...binding, purpose: "unknown" }, { ...binding, kind: "uploaded-source", locator: "page:1", sourceDigest: "source-original" }, { ...binding, ownerId: "foreign" }, { ...binding, runId: "foreign" }, { ...binding, sourceRevision: 2 }, { ...binding, factHash: "changed" }, { ...binding, originalDigest: "changed" }];
   for (const [index, candidateBinding] of alternatives.entries()) {
-    const entries = rows().map((entry, position) => position === 0 ? { ...entry, run_id: "run-a", asset_id: "media-a", media_kind: "image", media_attribution: "Source attribution", media_binding: JSON.stringify(candidateBinding), media_original_digest: "sha256:original" } : entry);
+    const entries = rows().map((entry, position) => position === 0 ? { ...entry, run_id: "run-a", media_candidates: JSON.stringify([{ asset_id: "media-a", media_kind: "image", media_attribution: "Source attribution", media_binding: JSON.stringify(candidateBinding), media_original_digest: "sha256:original" }]) } : entry);
     const database = new Database(entries);
     const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
     const result = await service.loadFeed("owner-a", "2026-08-19");

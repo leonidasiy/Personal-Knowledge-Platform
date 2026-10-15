@@ -130,7 +130,6 @@ export function toDiscoverRouteModel(model, escapeHtml) {
     items: freeze(items),
     selectedItemId: model.selectedItem?.itemId ?? null,
     maxVisibleItems: PAGE_SIZE,
-    areas: freeze([]),
     pendingId: null,
     canAct: false,
     search: freeze({

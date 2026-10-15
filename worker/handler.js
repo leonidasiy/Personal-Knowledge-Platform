@@ -82,6 +82,7 @@ import { handleReminderRequest } from "./reminders/http.js";
  *   },
  *   readonly waitUntil?: (promise: Promise<unknown>) => void,
  *   readonly reminders?: ReturnType<typeof import('./reminders/service.js').createReminderService>|null,
+ *   readonly urlCapture?: (command:{ownerId:string,url:string})=>Promise<Result<Uint8Array,{kind:string}>>,
  *   readonly manualMaterial?: null | { readonly upload: (command: unknown) => Promise<Result<{ readonly status: "processing-ready", readonly reference: import("../src/features/source-library/ingestion-contracts.js").SourceContentReference, readonly reused: boolean }, import("../src/features/source-library/ingestion-contracts.js").SourceIngestionFailure>> },
  *   readonly wikimediaTimedText?: null | { readonly retrieve: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>> },
  *   readonly learningGeneration?: null | {
@@ -156,7 +157,9 @@ export function createDiscoveryWorker(configuration, dependencies) {
         url.pathname === "/api/discovery/search/capabilities";
       const sourceUploadContext = url.pathname === "/api/source-library/upload-context";
       const sourceRename = url.pathname === "/api/source-library/rename";
-      const sourceExtraction = url.pathname === "/api/source-library/extract";
+      const urlCapture = url.pathname === "/api/source-library/url-capture";
+      const urlMaterial = url.pathname === "/api/source-library/url-material";
+      const sourceExtraction = urlMaterial || url.pathname === "/api/source-library/extract";
       const sourceAction = sourceExtraction ? "approve" : sourceLibraryAction(url.pathname);
       const privateDocumentCreate = url.pathname === "/api/source-library/private-documents";
       const privateDocumentId = url.pathname.match(/^\/api\/private-documents\/([^/]+)$/)?.[1] ?? null;
@@ -197,7 +200,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const learningMedia = url.pathname === "/api/learning-media";
       if (
         !reminders && !rssPath && !centralSearchPath &&
-        !centralCapabilitiesPath && !sourceUploadContext && !sourceRename && sourceAction === null && !privateDocumentCreate && privateDocumentId === null && !sourceRightsApproval && !sourceBrowse &&
+        !urlCapture && !centralCapabilitiesPath && !sourceUploadContext && !sourceRename && sourceAction === null && !privateDocumentCreate && privateDocumentId === null && !sourceRightsApproval && !sourceBrowse &&
         !sourceSearch && !sourceClassification && !sourceClassificationBackfill && !sourceSuppressionCheck && !sourceActiveCheck &&
         !sourceIngestion && !manualMaterial && !wikimediaTimedText &&
         !learningStatus && !learningReviewQueue && !learningPublished && !learningReview && !learningRevocation &&
@@ -457,6 +460,12 @@ export function createDiscoveryWorker(configuration, dependencies) {
         }
         throw error;
       }
+      if(urlCapture){
+        if(!isRecord(document)||Object.keys(document).length!==1||!validatePublisherDestination(document.url).ok)return json({error:"SourceExtractionUrlInvalid"},400);
+        if(!dependencies.urlCapture)return json({error:"KnowledgeBrowserUnavailable"},503);
+        const result=await dependencies.urlCapture({ownerId:authenticated.value.ownerId,url:/** @type {string} */(document.url)});
+        return result.ok ? new Response(result.value,{headers:{"content-type":"application/pdf","cache-control":"private, no-store","x-content-type-options":"nosniff"}}) : json({error:result.error.kind},422);
+      }
       if (sourceClassification) {
         if (dependencies.sourceClassification == null) return sourceClassificationFailureResponse({ kind: "SourceClassificationPersistenceFailed" });
         if (!isRecord(document) || Object.hasOwn(document, "ownerId") || Object.keys(document).some((key) => !["sourceId", "sourceRevision", "expectedRevision", "mainSubject", "topic"].includes(key))) return sourceClassificationFailureResponse({ kind: "SourceClassificationCommandInvalid" });
@@ -580,7 +589,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         if (sourceExtraction) {
           if (dependencies.knowledgeWorkflow == null) return knowledgeWorkflowFailureResponse({kind:"KnowledgeWorkflowUnavailable"});
           if (Object.hasOwn(document,"url")) {
-            const prepared = prepareSubmittedLink(document, dependencies.now?.() ?? new Date().toISOString());
+            const prepared = prepareSubmittedLink(document, dependencies.now?.() ?? new Date().toISOString(),urlMaterial);
             if (!prepared.ok) return json({error:prepared.error.kind,field:prepared.error.field},400);
             approvalInput = prepared.value;
           }
@@ -590,7 +599,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
           if (!checked.value.adapter.capabilities.includes("bounded-ingestion")) return json({error:"SourceExtractionFormatUnsupported"},422);
         }
         const ownedCommand = Object.freeze({...approvalInput,ownerId:authenticated.value.ownerId});
-      const result = sourceAction === "approve"
+      let result = sourceAction === "approve"
           ? await dependencies.sourceLibrary.approve(ownedCommand)
           : sourceAction === "revise"
           ? await dependencies.sourceLibrary.revise(ownedCommand)
@@ -599,6 +608,11 @@ export function createDiscoveryWorker(configuration, dependencies) {
           : sourceAction === "restore"
           ? await dependencies.sourceLibrary.restore(ownedCommand)
           : await dependencies.sourceLibrary.reject(ownedCommand);
+        if(urlMaterial && !result.ok && result.error.kind==="SourceStateConflict"){
+          const restored=await dependencies.sourceLibrary.restore({ownerId:authenticated.value.ownerId,sourceId:result.error.sourceId,expectedRevision:result.error.revision,idempotencyKey:`url-restore:${document.idempotencyKey}`});
+          if(!restored.ok)return sourceFailureResponse(restored.error);
+          result=await dependencies.sourceLibrary.approve(ownedCommand);
+        }
         if (result.ok && sourceAction === "disable" && dependencies.learningGeneration !== null && dependencies.learningGeneration !== undefined) {
           const revoked = await dependencies.learningGeneration.revoke.revoke({ ownerId: authenticated.value.ownerId, sourceId: result.value.id, sourceRevision: result.value.revision, idempotencyKey: `source-disable:${result.value.id}:${result.value.revision}`, reason: "source-disabled", revokedAt: result.value.updatedAt });
           if (!revoked.ok) return learningGenerationFailureResponse(revoked.error);
@@ -615,7 +629,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         let workflowStart = null;
         if (result.ok && sourceAction === "approve" && dependencies.knowledgeWorkflow !== null && dependencies.knowledgeWorkflow !== undefined) {
           const rightsProfile = dependencies.sourceRightsProfileFor?.(result.value.source.canonicalUrl) ?? null;
-          workflowStart = await dependencies.knowledgeWorkflow.start({ ownerId: authenticated.value.ownerId, sourceId: result.value.source.id, sourceRevision: result.value.source.revision, canonicalSourceIdentity: result.value.source.canonicalUrl, contentSignature: `source-revision:${result.value.source.canonicalUrl}:${result.value.source.revision}`, configDigests: {}, idempotencyKey: `knowledge-workflow:${result.value.source.id}:${result.value.source.revision}`, userAuthorization: {kind:"user-authorized-link",ownerId:authenticated.value.ownerId,sourceId:result.value.source.id,sourceRevision:result.value.source.revision,url:result.value.source.canonicalUrl,recordedAt:result.value.source.approvedAt}, rightsProfile });
+          workflowStart = await dependencies.knowledgeWorkflow.start({ ownerId: authenticated.value.ownerId, sourceId: result.value.source.id, sourceRevision: result.value.source.revision, canonicalSourceIdentity: result.value.source.canonicalUrl, contentSignature: `source-revision:${result.value.source.canonicalUrl}:${result.value.source.revision}`, configDigests: {}, idempotencyKey: urlMaterial ? `url-material:${result.value.source.id}:${document.idempotencyKey}` : `knowledge-workflow:${result.value.source.id}:${result.value.source.revision}`, ...(urlMaterial ? {sourceOrigin:"url-material"} : {}), userAuthorization: {kind:"user-authorized-link",ownerId:authenticated.value.ownerId,sourceId:result.value.source.id,sourceRevision:result.value.source.revision,url:result.value.source.canonicalUrl,recordedAt:result.value.source.approvedAt}, rightsProfile });
           if (!workflowStart.ok) return knowledgeWorkflowFailureResponse(workflowStart.error);
         }
         if (result.ok && sourceAction === "approve" && workflowStart === null && !result.value.reused && result.value.job !== null && dependencies.sourceIngestion !== null && dependencies.sourceIngestion !== undefined && result.value.source.adapter.capabilities.includes("bounded-ingestion")) {
@@ -1206,14 +1220,23 @@ function publicReplayResult(value, ownerId) {
   return Object.freeze({ status: value.status, ownerId, sourceCount: value.sourceCount, runIds: Object.freeze([...value.runIds]), blockedSources: Object.freeze(blockedSources) });
 }
 
-/** @param {string | null} failureKind @param {string} state @param {number | null} remainingMs @returns {{ readonly reasonCode: "paywall-or-login" | "robots-blocked" | "robots-check-unavailable" | "audio-video-transcription-unavailable" | "rights-not-verified" | "upload-content" | "retryable-failure", readonly message: string } | null} */
+/** @param {string | null} failureKind @param {string} state @param {number | null} remainingMs @returns {{ readonly reasonCode: "partial-failure" | "failed" | "paywall-or-login" | "robots-blocked" | "robots-check-unavailable" | "audio-video-transcription-unavailable" | "rights-not-verified" | "upload-content" | "retryable-failure", readonly message: string } | null} */
 function workflowStatusReason(failureKind, state, remainingMs) {
+  if (state === "completed" && (failureKind === "WorkflowPagesFailed" || failureKind === "WorkflowQuizItemsFailed")) return Object.freeze({reasonCode:"partial-failure",message:"Processing finished for the remaining content. Some items could not be processed after retries. Review the failed items and choose whether to retry them."});
+  if(failureKind?.startsWith("WorkflowExtractionFailed:")){
+    const cause=workflowStatusReason(failureKind.slice("WorkflowExtractionFailed:".length),"failed",null)?.message??"Automatic processing could not finish for this source.";
+    return Object.freeze({reasonCode:"failed",message:state==="awaiting-upload"?`${cause} Would you like to open the website, gather the relevant page links or content yourself, and continue in Upload? Choose Upload text or documents to continue, or cancel to keep this source in Library.`:"Processing could not finish. This source and any saved knowledge or quiz drafts remain in Library. You can retry processing or upload source content."});
+  }
   if (state === "awaiting-upload" && failureKind === null) return Object.freeze({reasonCode:"upload-content",message:"This source is awaiting material attachment. If the previous upload is missing, re-upload the material to start processing."});
   const normalized = (failureKind ?? "").toLowerCase();
+  if (/knowledgebrowsernavigationfailed/u.test(normalized)) return Object.freeze({reasonCode:"failed",message:"The browser could not load this web source."});
   if (state === "extraction-loop" && remainingMs === 0) return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped after its processing deadline elapsed. Retry processing to try again." });
   if (/extractionplaninvalid/u.test(normalized)) return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped because the planner returned an invalid ExtractionPlan after one correction attempt (ExtractionPlanInvalid). Retry processing to try again." });
-  if (state === "retryable-failure") return Object.freeze({ reasonCode: "retryable-failure", message: "Automatic extraction stopped because the workflow encountered a retryable error. Retry processing to try again." });
+  if (state === "retryable-failure" && normalized.includes("workflowstagecalluncertain")) return Object.freeze({reasonCode:"retryable-failure",message:"Processing paused because a request's result could not be confirmed. Your extracted knowledge and completed quizzes have been retained."});
+  if (state === "retryable-failure") return Object.freeze({ reasonCode: "retryable-failure", message: "Processing stopped because the workflow encountered a retryable error. Retry processing to try again." });
   if (/paywall|authentication|login|authenticated/u.test(normalized)) return Object.freeze({ reasonCode: "paywall-or-login", message: "This source could not be scraped because it is behind a paywall or requires sign-in. Upload authorized text, PDF, PPTX, or a transcript instead." });
+  if (/knowledgepagebotaccessdenied/u.test(normalized)) return Object.freeze({ reasonCode: "upload-content", message: "The source website blocked automated access. Processing is waiting for authorized text, PDF, PPTX, or a transcript to be uploaded." });
+  if (/knowledgepageratelimited/u.test(normalized)) return Object.freeze({ reasonCode: "upload-content", message: "The source website rate-limited automated access. Processing is waiting for authorized text, PDF, PPTX, or a transcript to be uploaded." });
   if (/audio|video|transcri/u.test(normalized)) return Object.freeze({ reasonCode: "audio-video-transcription-unavailable", message: "This source contains audio or video, but native audio/video transcription is not available yet. Upload an authorized transcript or text/document instead." });
   if (/robotsdenied|robotsblocked/u.test(normalized)) return Object.freeze({ reasonCode: "robots-blocked", message: "This source cannot be scraped because its robots policy blocks the workflow. Upload authorized text, PDF, PPTX, or a transcript instead." });
   if (/robotstargetunavailable/u.test(normalized)) return Object.freeze({ reasonCode: "robots-check-unavailable", message: "The source's robots.txt returned HTTP 403 and the source page could not be reached by the browser. Upload authorized text, PDF, PPTX, or a transcript instead." });

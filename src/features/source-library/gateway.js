@@ -8,7 +8,7 @@ import {
 } from "./contracts.js";
 import { parseWorkflowProgress } from '../knowledge-workflows/progress.js';
 
-/** @import { KnowledgeSearchHit, LibrarySource, Result, SourceCatalogPage, SourceInterestArea, SourceSearchHit, SourceSearchScope, SourceSuppression } from "./contracts.js" */
+/** @import { KnowledgeSearchHit, LibrarySource, Result, SourceCatalogPage, SourceInterestArea, SourceSearchHit, SourceSearchScope } from "./contracts.js" */
 
 /** @typedef {{ readonly kind: "SourceGatewayCommandInvalid", readonly field: string } | { readonly kind: "SourceGatewayUnauthenticated" } | { readonly kind: "SourceGatewayUnauthorized" } | { readonly kind: "SourceGatewayUnavailable" } | { readonly kind: "SourceGatewayTimedOut" } | { readonly kind: "SourceGatewayResponseInvalid" } | { readonly kind: "SourceGatewayRejected", readonly failureKind: string }} SourceGatewayFailure */
 /** @typedef {{ readonly runId: string }} WorkflowStartProjection */
@@ -180,38 +180,24 @@ export class SourceLibraryGatewayClient {
     return source === null ? bad() : { ok: true, value: source };
   }
 
-  /** @param {unknown} command @returns {Promise<Result<{ readonly source: LibrarySource, readonly reused: boolean, readonly workflow: WorkflowStartProjection | null }, SourceGatewayFailure>>} */
-  async approve(command) { return this.#approve(command, "approve"); }
-
   /** @param {unknown} command @returns {Promise<Result<{readonly source:LibrarySource,readonly reused:boolean,readonly workflow:WorkflowStartProjection},SourceGatewayFailure>>} */
-  async extract(command) {
-    const result = await this.#approve(command, "extract");
-    if (!result.ok) return result;
-    if (result.value.workflow === null) return bad();
-    return {ok:true,value:{...result.value,workflow:result.value.workflow}};
-  }
-
-  /** @param {unknown} command @param {"approve"|"extract"} action @returns {Promise<Result<{readonly source:LibrarySource,readonly reused:boolean,readonly workflow:WorkflowStartProjection|null},SourceGatewayFailure>>} */
-  async #approve(command, action) {
+  async extract(command, material = false) {
     if (!isRecord(command) || Object.hasOwn(command, "ownerId")) {
       return invalid("command");
     }
     const response = await this.#request(
-      `api/source-library/${action}`,
+      material ? "api/source-library/url-material" : "api/source-library/extract",
       "POST",
       command,
     );
     if (!response.ok) return response;
-    const value = isRecord(response.value) ? response.value.result : null;
+    if (!isRecord(response.value)) return bad();
+    const value = response.value.result;
     if (!isRecord(value) || typeof value.reused !== "boolean") return bad();
     const source = parseSource(value.source);
-    if (source === null) return bad();
-    const workflowValue = isRecord(response.value) ? response.value.workflow : null;
-    const workflow = workflowValue === undefined || workflowValue === null
-      ? null
-      : parseWorkflowStart(workflowValue);
-    if (workflowValue != null && workflow === null) return bad();
-    return { ok: true, value: freeze({ source, reused: value.reused, workflow }) };
+    const workflow = parseWorkflowStart(response.value.workflow);
+    if (source === null || workflow === null) return bad();
+    return { ok: true, value: { source, reused: value.reused, workflow } };
   }
 
   /** @param {unknown} command @returns {Promise<Result<{ readonly source: LibrarySource, readonly runId: string, readonly reused: boolean }, SourceGatewayFailure>>} */
@@ -286,13 +272,13 @@ export class SourceLibraryGatewayClient {
     return parsed.ok && parsed.value.sourceId !== sourceId ? bad() : parsed;
   }
 
-  /** @param {{ readonly runId: string, readonly expectedRevision: number, readonly idempotencyKey: string }} command @returns {Promise<Result<WorkflowRunStatus, SourceGatewayFailure>>} */
-  async retryWorkflow(command) {return this.#controlWorkflow(command,"resume");}
+  /** @param {{ readonly runId: string, readonly expectedRevision: number, readonly idempotencyKey: string, readonly quizzes?:boolean }} command @returns {Promise<Result<WorkflowRunStatus, SourceGatewayFailure>>} */
+  async retryWorkflow(command) {return this.#controlWorkflow(command,command.quizzes?"retry-quizzes":"resume");}
 
   /** @param {{readonly runId:string,readonly expectedRevision:number,readonly idempotencyKey:string}} command */
   async cancelWorkflow(command) {return this.#controlWorkflow(command,"abandon");}
 
-  /** @param {{readonly runId:string,readonly expectedRevision:number,readonly idempotencyKey:string}} command @param {"resume"|"abandon"} action @returns {Promise<Result<WorkflowRunStatus, SourceGatewayFailure>>} */
+  /** @param {{readonly runId:string,readonly expectedRevision:number,readonly idempotencyKey:string}} command @param {"resume"|"abandon"|"retry-quizzes"} action @returns {Promise<Result<WorkflowRunStatus, SourceGatewayFailure>>} */
   async #controlWorkflow(command,action) {
     if (!isRecord(command) || !isNonEmptyText(command.runId) || !Number.isSafeInteger(command.expectedRevision) || command.expectedRevision < 1 || !isNonEmptyText(command.idempotencyKey)) return invalid("command");
     const response = await this.#request("api/knowledge-workflows/control", "POST", { runId: command.runId, expectedRevision: command.expectedRevision, action, idempotencyKey: command.idempotencyKey });
@@ -300,24 +286,6 @@ export class SourceLibraryGatewayClient {
     const value = isRecord(response.value) ? response.value.result : null;
     const run = parseWorkflowRunStatus(value);
     return run === null || run.runId !== command.runId ? bad() : { ok: true, value: run };
-  }
-
-  /** @param {unknown} command @returns {Promise<Result<{ readonly suppression: SourceSuppression, readonly reused: boolean }, SourceGatewayFailure>>} */
-  async reject(command) {
-    if (!isRecord(command) || Object.hasOwn(command, "ownerId")) {
-      return invalid("command");
-    }
-    const response = await this.#request(
-      "api/source-library/reject",
-      "POST",
-      command,
-    );
-    if (!response.ok) return response;
-    const value = isRecord(response.value) ? response.value.result : null;
-    if (!isRecord(value) || typeof value.reused !== "boolean") return bad();
-    const suppression = parseSuppression(value.suppression);
-    if (suppression === null) return bad();
-    return { ok: true, value: freeze({ suppression, reused: value.reused }) };
   }
 
   /** @param {readonly string[]} canonicalIdentities @returns {Promise<Result<readonly string[], SourceGatewayFailure>>} */
@@ -540,23 +508,6 @@ function parseWorkflowSourceStatus(value) {
   if (!isRecord(value) || !isNonEmptyText(value.sourceId) || (value.reasonCode !== null && !isNonEmptyText(value.reasonCode)) || (value.message !== null && !isNonEmptyText(value.message))) return bad();
   const run = value.run === null ? null : parseWorkflowRunStatus(value.run);
   return value.run !== null && run === null ? bad() : { ok: true, value: freeze({ sourceId: value.sourceId, run, reasonCode: value.reasonCode, message: value.message }) };
-}
-
-/** @param {unknown} value @returns {SourceSuppression | null} */
-function parseSuppression(value) {
-  if (
-    !isRecord(value) || !isNonEmptyText(value.id) ||
-    !isNonEmptyText(value.ownerId) ||
-    !isNonEmptyText(value.canonicalIdentity) ||
-    !Array.isArray(value.identityEvidence) ||
-    !isNonEmptyText(value.idempotencyKey) || !isIsoDateTime(value.createdAt)
-  ) return null;
-  return freeze(
-    /** @type {SourceSuppression} */ ({
-      ...value,
-      identityEvidence: freeze([...value.identityEvidence]),
-    }),
-  );
 }
 
 /** @returns {Result<never, SourceGatewayFailure>} */

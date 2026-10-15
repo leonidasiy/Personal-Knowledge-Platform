@@ -151,7 +151,7 @@ Deno.test("Taddy provider searches once and safety-checks the bounded batch once
         requestedUrls.push(new URL(String(input)));
         requestedHeaders.push(new Headers(init?.headers));
         requestedBodies.push(JSON.parse(String(init?.body)));
-        if (requestedBodies.length === 1) return Response.json({ data: { searchForTerm: {
+        if (requestedBodies.length % 2 === 1) return Response.json({ data: { searchForTerm: {
             searchId: "search-1",
             podcastSeries: [{
               uuid: "6bdfd429-f58b-427d-8072-353d478aa15f",
@@ -202,7 +202,7 @@ Deno.test("Taddy provider searches once and safety-checks the bounded batch once
   equal(query.includes("audioUrl"), false);
   equal(query.includes("imageUrl"), false);
   equal(query.includes("transcript"), false);
-  equal(query.includes("page:"), false);
+  equal(query.includes("page:1"), true);
   equal(query.includes("searchResultsBoostType:"), false);
   equal(query.includes("includeSearchOperator:OR"), true);
   equal(query.includes("isBlocked"), false);
@@ -221,6 +221,17 @@ Deno.test("Taddy provider searches once and safety-checks the bounded batch once
   equal(detailsQuery.includes("websiteUrl"), true);
   equal(detailsQuery.includes("isBlocked"), true);
   equal(detailsQuery.includes("feedRefreshDetails"), true);
+  const paged = await provider.search({...command,providerId:"podcasts",limit:1});
+  equal(paged.ok,true);
+  if (paged.ok) {
+    equal(paged.nextCursor,"2:1");
+    const next = await provider.search({...command,providerId:"podcasts",cursor:paged.nextCursor});
+    equal(next.ok,true);
+    const nextQuery = String(/** @type {{query:string}} */ (requestedBodies[4]).query);
+    equal(nextQuery.includes("page:2"),true);
+    equal(nextQuery.includes("limitPerPage:1"),true);
+  }
+
   equal(compactDetailsQuery.endsWith("}}}"), true);
   equal(compactDetailsQuery.endsWith("}}}}"), false);
   equal(result.value[0].canonicalUrl, "https://feeds.example/song-exploder.xml");
@@ -413,7 +424,7 @@ Deno.test("YouTube provider forwards the centralized query without modifying it"
     },
   );
   const result = await provider.search({ ...command, providerId: "youtube" });
-  equal(JSON.stringify(received), JSON.stringify({ query: command.query }));
+  equal(JSON.stringify(received), JSON.stringify({ query: command.query, limit: command.limit }));
   equal(result.ok, true);
   if (!result.ok) return;
   equal(result.value[0].description, "Worked examples of phrasing and pitch control");
@@ -453,4 +464,23 @@ Deno.test("Taddy retains search order and original fields when detail hydration 
  const provider=createTaddySearchProvider({providerId:"podcasts",label:"Podcasts",resultKind:"podcast",priority:2,enabled:true,maximumResults:6,timeoutMs:5000},{credentials:()=>({ok:true,value:{userId:"fixture",apiKey:"fixture"}}),timeoutSignal:()=>new AbortController().signal,fetch:async()=> ++requests===1?Response.json({data:{searchForTerm:{podcastSeries:ids.map((uuid,i)=>({uuid,name:` Search ${i} `,description:` Snippet ${i} `,rssUrl:`https://feeds.example/${i}`,authorName:`Publisher ${i}`,websiteUrl:null})),rankingDetails:[...ids].reverse().map(uuid=>({uuid,rankingScore:1}))}}}):Response.json({data:{getMultiplePodcastSeries:[...ids].reverse().map(uuid=>({uuid,name:"Hydrated",description:"Replacement",authorName:"Replacement",websiteUrl:null,rssUrl:"https://feeds.example/hydrated",isBlocked:null,feedRefreshDetails:{uuid,priority:"HIGH",priorityReason:null,dateLastRefreshed:1785242096}}))}})});
  const result=await provider.search({...command,providerId:"podcasts"});equal(result.ok,true);if(!result.ok)return;
  equal(JSON.stringify(result.value.map(c=>c.title)),JSON.stringify([" Search 0 "," Search 1 "]));equal(result.value[0].description," Snippet 0 ");equal(result.value[0].canonicalUrl,"https://feeds.example/0");equal(result.value[1].canonicalUrl,"https://feeds.example/1");
+});
+
+Deno.test("Brave follows provider pagination even when a page is short and stops when exhausted", async () => {
+  const offsets = /** @type {(string|null)[]} */ ([]);
+  const counts = /** @type {(string|null)[]} */ ([]);
+  const provider = createBraveSearchProvider({providerId:'web',label:'Web',resultKind:'web',priority:1,enabled:true,maximumResults:20,apiVersion:'2023-10-11'}, {credential:()=>({ok:true,value:'fixture'}),fetch:async input=>{const url=new URL(String(input));offsets.push(url.searchParams.get('offset'));counts.push(url.searchParams.get('count'));return Response.json({query:{more_results_available:offsets.length===1},web:{results:[{title:'Lesson',url:'https://example.test/'+offsets.length}]}});}});
+  const first=await provider.search(command);
+  equal(first.ok,true);
+  if (!first.ok) return;
+  equal(first.value.length,1);
+  equal(first.nextCursor,'1:8');
+  const second=await provider.search({...command,limit:20,cursor:first.nextCursor});
+  equal(second.ok,true);
+  if (second.ok) equal(second.nextCursor,undefined);
+  equal(JSON.stringify(offsets),JSON.stringify([null,'1']));
+  equal(JSON.stringify(counts),JSON.stringify(['8','8']));
+  const invalid=await provider.search({...command,cursor:'10'});
+  equal(invalid.ok,false);
+  equal(offsets.length,2);
 });

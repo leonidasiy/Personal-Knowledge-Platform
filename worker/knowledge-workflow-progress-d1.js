@@ -1,5 +1,6 @@
 // @ts-check
 import { isKnowledgeWorkflowRun } from '../src/features/knowledge-workflows/workflow.js';
+import { readFailedQuizItems } from './knowledge-workflow-quiz-failures.js';
 import { parseWorkflowProgress } from '../src/features/knowledge-workflows/progress.js';
 
 /** @typedef {import('./knowledge-workflow-d1.js').D1DatabasePort} D1DatabasePort */
@@ -65,7 +66,8 @@ export class D1KnowledgeWorkflowProgressRepository {
       const processed = scratchpad?.processedUrls ?? [], discovered = scratchpad?.discoveredUrls ?? [];
       const latest = Array.isArray(scratchpad?.pageNotes) ? scratchpad.pageNotes.at(-1) : null;
       const timestamps = [row.run_updated_at,row.updated_at,row.scratchpad_updated_at].filter(text).sort();
-      const progress = parseWorkflowProgress({currentUrl:row.current_url ?? (record(latest) ? latest.url ?? null : null),pageTitle:row.page_title ?? (record(latest) ? latest.title ?? null : null),sectionTitle:row.section_title ?? null,stage:row.state === 'completed' || row.state === 'abandoned' ? null : row.stage ?? null,updatedAt:timestamps.at(-1) ?? null,knowledgePoints,generatedQuizQuestions:questions.n,processedPageCount:processed.length,totalPages:discovered.length ? new Set([...processed,...discovered]).size : null});
+      const failedQuizzes=await readFailedQuizItems(this.#database,run);if(!failedQuizzes.ok)return failedQuizzes;
+      const progress = parseWorkflowProgress({currentUrl:row.current_url ?? (record(latest) ? latest.url ?? null : null),pageTitle:row.page_title ?? (record(latest) ? latest.title ?? null : null),sectionTitle:row.section_title ?? null,stage:row.state === 'completed' || row.state === 'abandoned' ? null : row.stage ?? null,updatedAt:timestamps.at(-1) ?? null,knowledgePoints,generatedQuizQuestions:questions.n,failedItems:scratchpad?.failedPages,failedQuizItems:failedQuizzes.value,processedPageCount:processed.length,totalPages:discovered.length ? new Set([...processed,...discovered]).size : null});
       return progress === null ? {ok:false,error:{kind:'WorkflowProgressReadFailed'}} : {ok:true,value:progress};
     } catch (error) {
       this.#logger({event:'workflow-progress-read-failure',ownerId:run.ownerId,runId:run.runId,failureKind:'WorkflowProgressReadFailed'});

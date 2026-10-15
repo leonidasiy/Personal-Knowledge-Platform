@@ -61,7 +61,7 @@ export async function runBenchmarkQuizzes({caseId,points,generate,file,maximumEv
  const ok=value=>({ok:true,value});
  let stopReason;const paidGenerate=generate;generate=async command=>{if(stopReason)throw new Error(stopReason);let result;try{result=await paidGenerate({...command,failureOrigin:'pipeline'});}catch(error){const failure=error?.failure??{kind:error?.kind??'BenchmarkPipelineExecutionFailed'};if(classifyEvaluationFailure(failure)==='pipeline')return {ok:false,error:failure};stopReason=failure.kind;throw new Error(stopReason,{cause:error});}if(!result.ok&&classifyEvaluationFailure(result.error)!=='pipeline'){stopReason=result.error.kind;throw new Error(stopReason);}return result;};
  const cached=new Map(),dispatch=command=>cached.has(command.role+':'+command.input.knowledge.id+':'+command.input.attempt)?Promise.resolve(cached.get(command.role+':'+command.input.knowledge.id+':'+command.input.attempt)):generate(command);
- const actor=createQuizActorCritic({maxAttempts:3,now,logger,
+ const actor=createQuizActorCritic({maxAttempts:3,technicalRetries:false,now,logger,
   generator:{generate:async command=>{
    const result=await dispatch({role:'knowledge-scraper',taskId:caseId+':quiz-generator:'+command.knowledge.id+':attempt-'+command.attempt,systemPrompt:questionGeneratorPrompt,input:command,maxOutputTokens:2048,responseSchema:quizPairSchema(true)});
    saved.outputs.push({phase:'generation',knowledgeId:command.knowledge.id,attempt:command.attempt,result});await persist();

@@ -38,7 +38,6 @@
   "./src/features/reminders/page.js",
   "./src/features/source-library/contracts.js",
   "./src/features/source-library/gateway.js",
-  "./src/features/source-library/submitted-link.js",
   "./src/features/study/contracts.js",
   "./src/features/study/repository.js",
   "./src/features/study/service.js",

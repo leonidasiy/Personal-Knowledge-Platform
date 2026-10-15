@@ -7,6 +7,15 @@ function assertEquals(actual, expected) { if (!Object.is(actual, expected)) thro
 
 function command() { return { role: "question-generator", systemPrompt: "Generate a grounded question.", input: { knowledge: "A specific concept" }, maxOutputTokens: 256 }; }
 
+Deno.test("model preserves an embedded HTTP error code inside a successful transport response", async () => {
+  for (const code of [401, 408, 429, 503, undefined, "401", 99]) {
+    const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async () => Response.json({error:{code}}), now: Date.now, logger: () => {} });
+    const result = await model.generate(command());
+    if (result.ok || result.error.kind !== "KnowledgeModelRejected") throw new Error("Provider error was accepted.");
+    assertEquals(result.error.status, typeof code === "number" && code >= 400 ? code : 200);
+  }
+});
+
 /** @param {Promise<unknown>} value */
 async function assertRejects(value) {
   try { await value; } catch (_error) { return; }
@@ -46,7 +55,29 @@ Deno.test("knowledge model sends raster attachments as vision blocks without put
   assertEquals(body.messages[1].content[1].type, "text");
   assertEquals(body.messages[1].content[1].text.includes("page-1"),true);
   assertEquals(body.messages[1].content[2].type,"image_url");
-  assertEquals(body.messages[1].content[2].image_url.url.startsWith("data:image/png;base64,iVBOR"), true);
+  assertEquals(body.messages[1].content[2].image_url.url, "data:image/png;base64,iVBORw0KGgo=");
+});
+
+Deno.test("knowledge model encodes only the attachment view across image buffer boundaries", async () => {
+  for (const length of [8, 32_769, 65_539]) for (const nativeAvailable of [true, false]) {
+    const backing = new Uint8Array(length + 7).fill(0xa5);
+    const bytes = backing.subarray(3, 3 + length);
+    for (let index = 0; index < bytes.length; index++) bytes[index] = [0x00, 0xff, 0xfe][index % 3];
+    const expected = "AP/+".repeat(Math.floor(length / 3)) + ["", "AA==", "AP8="][length % 3];
+    let nativeCalls = 0;
+    Object.defineProperty(bytes, 'toBase64', { value: nativeAvailable ? /** @this {Uint8Array} */ function () { assertEquals(this, bytes); nativeCalls++; return expected; } : undefined });
+    /** @type {RequestInit | undefined} */ let request;
+    const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async (_input, init) => { request = init; return Response.json({ id: "request-offset", choices: [{ finish_reason: "stop", message: { content: "{}" } }] }); }, now: () => 1_000, logger: () => {} });
+    const result = await model.generate({ role: "knowledge-scraper", systemPrompt: "Inspect image.", input: { page: 1 }, maxOutputTokens: 256, attachments: [{ id: "page-1", mediaType: "image/png", bytes }] });
+    assertEquals(result.ok, true);
+    if (request === undefined || typeof request.body !== "string") throw new Error("Request body was not captured.");
+    const body = JSON.parse(request.body);
+    assertEquals(body.messages[1].content[2].image_url.url, `data:image/png;base64,${expected}`);
+    assertEquals(nativeCalls, nativeAvailable ? 1 : 0);
+    assertEquals(body.messages[1].content[0].text, '<task_input>\n{"page":1}\n</task_input>');
+    assertEquals(backing[0], 0xa5);
+    assertEquals(backing[backing.length - 1], 0xa5);
+  }
 });
 
 Deno.test("image extraction requests strict provider-enforced schema and low-latency parameters", async () => {

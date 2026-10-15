@@ -343,7 +343,7 @@ Deno.test("material batch fails closed on malformed pages, unsupported anchors, 
     const result = await requestMaterialBatch({ reviewMaterial: false, taskId: "batch", input: { sections: [section], coverageGoals: [], fileName: "example.pdf", progress: {} }, maxOutputTokens: 16384, logger: () => {}, generate: async () => { calls++; return { ok: true, value: output }; } });
     assertEquals(result.ok, false);
     if (!result.ok) assertEquals(result.error.kind, "KnowledgeMaterialBatchInvalid");
-    assertEquals(calls, 2);
+    assertEquals(calls, 4);
   }
   let calls = 0;
   const invalid = await requestMaterialBatch({ reviewMaterial: false, taskId: "batch", input: { sections: [], coverageGoals: [], fileName: "example.pdf", progress: {} }, maxOutputTokens: 16384, logger: () => {}, generate: async () => { calls++; return { ok: false, error: { kind: "KnowledgeModelTimeout" } }; } });
@@ -352,7 +352,7 @@ Deno.test("material batch fails closed on malformed pages, unsupported anchors, 
   const failed = await requestMaterialBatch({ reviewMaterial: false, taskId: "batch", input: { sections: [section], coverageGoals: [], fileName: "example.pdf", progress: {} }, maxOutputTokens: 16384, logger: () => {}, generate: async () => { calls++; return { ok: false, error: { kind: "KnowledgeModelTimeout" } }; } });
   assertEquals(failed.ok, false);
   if (!failed.ok) assertEquals(failed.error.kind, "KnowledgeModelTimeout");
-  assertEquals(calls, 2);
+  assertEquals(calls, 4);
 });
 
 // Extraction-stage fixtures replay the earlier single-pass protocol; observation behavior is covered separately below.
@@ -386,7 +386,7 @@ Deno.test("image material batches reject extra source fields and unsupported goa
     let calls = 0;
     const result = await requestMaterialBatch({ reviewMaterial: false, observeImage: false, taskId: "image-batch-extra-fields", input: { sections: [section], coverageGoals: [], fileName: "chapter5-page-001.png", progress: {}, mode: "image", visualId, ...await uploadFixture(section,visualId) }, ...await uploadFixture(section,visualId), maxOutputTokens: 4_096, logger: () => {}, generate: async () => { calls += 1; return { ok: true, value: { notes: "The image contributes one distinction.", candidates: [candidate] } }; } });
     assertEquals(result.ok, false);
-    assertEquals(calls, 2);
+    assertEquals(calls, 4);
   }
 });
 
@@ -419,7 +419,7 @@ Deno.test("image material batches produce unclassified candidates for source-lev
   if (result.ok) assertEquals(Object.hasOwn(result.value[0].candidates[0], "classification"), false);
 });
 
-Deno.test("failed initial image processing retries once without changing the selected page", async () => {
+Deno.test("image processing has three technical retries without changing the selected page", async () => {
   const section = { id: "page-4", url: "https://example.test/source#section=page-4", title: "Page 4", locator: "page:4", text: "" };
   const visualId = "visual:source:page-4";
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -433,13 +433,13 @@ Deno.test("failed initial image processing retries once without changing the sel
   if (!recovered.ok || calls !== 2) throw new Error("Initial provider failure did not recover in one bounded retry.");
   calls = 0;
   const exhausted = await requestMaterialBatch({ reviewMaterial: false, observeImage: false, ...base, generate: async () => { calls++; return { ok: false, error: { kind: "KnowledgeModelUnavailable" } }; } });
-  if (exhausted.ok || exhausted.error.kind !== "KnowledgeModelUnavailable" || calls !== 2) throw new Error("Provider retries were not bounded.");
+  if (exhausted.ok || exhausted.error.kind !== "KnowledgeModelUnavailable" || calls !== 4 || !exhausted.error.technicalRetriesExhausted) throw new Error("Provider retries were not bounded.");
 });
 
 Deno.test("image processing repairs malformed JSON and retries rate limits, but not unsupported parameters", async () => {
   const section = { id: "image-1", url: "https://example.test/source#section=image-1", title: "Figure", locator: "image:1", text: "" };
   const base = { taskId: "image-repair", input: { sections: [section], coverageGoals: [], fileName: "figure.png", progress: {}, mode: /** @type {const} */ ("image"), visualId: "visual:image-1", ...await uploadFixture(section,"visual:image-1") }, ...await uploadFixture(section,"visual:image-1"), maxOutputTokens: 4_096, logger: () => {} };
-  for (const error of [{ kind: "KnowledgeModelResponseInvalid" }, { kind: "KnowledgeModelRejected", status: 429 }]) {
+  for (const error of [{ kind: "KnowledgeModelResponseInvalid" }, ...[200, 408, 429].map(status => ({ kind: "KnowledgeModelRejected", status }))]) {
     let calls = 0;
     const result = await requestMaterialBatch({ reviewMaterial: false, observeImage: false, ...base, generate: async (command) => { calls++; if (calls === 2 && error.kind === "KnowledgeModelResponseInvalid" && !command.systemPrompt.includes("# Correction")) throw new Error("Schema repair lacked targeted guidance."); return calls === 1 ? { ok: false, error } : { ok: true, value: { notes: "The figure supports one relationship.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two labeled cases are shown.", normalizedHash: "cases", coverageGoalIds: [] }] } }; } });
     assertEquals(result.ok, true);

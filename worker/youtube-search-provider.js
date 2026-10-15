@@ -1,9 +1,9 @@
 // @ts-check
 
-/** @template T @template E @typedef {{readonly ok:true,readonly value:T}|{readonly ok:false,readonly error:E}} Result */
+/** @template T @template E @typedef {{readonly ok:true,readonly value:T,readonly nextCursor?:string}|{readonly ok:false,readonly error:E}} Result */
 /** @typedef {{readonly id:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean}} SearchProviderDescriptor */
 /** @typedef {{readonly kind:"SearchProviderCredentialMissing"}|{readonly kind:"SearchProviderCredentialRejected"}|{readonly kind:"SearchProviderQuotaExceeded"}|{readonly kind:"SearchProviderUnavailable"}|{readonly kind:"SearchProviderResponseInvalid"}} SearchProviderFailure */
-/** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number}} SearchProviderCommand */
+/** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number,readonly cursor?:string}} SearchProviderCommand */
 /** @typedef {{readonly videoId:string,readonly title:string,readonly description:string|null,readonly channelId:string|null,readonly publisherLabel:string,readonly publishedAt:string,readonly canonicalUrl:string,readonly embedUrl:string,readonly madeForKids:boolean,readonly refreshBy:string}} YouTubeCandidate */
 /** @typedef {{readonly providerId:string,readonly resultKind:string,readonly sourceLevel:"video",readonly title:string,readonly description:string|null,readonly canonicalUrl:string,readonly publisherLabel:string,readonly publishedAt:string,readonly identityEvidence:readonly {readonly attribute:string,readonly value:string,readonly provenanceUrl:string}[]}} CentralYouTubeCandidate */
 
@@ -28,7 +28,7 @@ export function createYouTubeSearchProvider(configuration, dependencies) {
     async search(command, execution) {
       if (execution !== undefined && (!(execution.signal instanceof AbortSignal) || typeof execution.remainingMs !== "function")) throw new TypeError("Invalid YouTube execution budget.");
       if (!commandValid(command, descriptor.id)) throw new TypeError("Invalid YouTube search command.");
-      const result = await dependencies.adapter.search({ query: command.query }, execution?.signal);
+      const result = await dependencies.adapter.search({ query: command.query, limit: command.limit, ...(command.cursor === undefined ? {} : {pageToken: command.cursor}) }, execution?.signal);
       if (!result.ok) return { ok: false, error: mapFailure(result.error.kind) };
       /** @type {CentralYouTubeCandidate[]} */ const candidates = [];
       for (const item of result.value) {
@@ -53,7 +53,7 @@ export function createYouTubeSearchProvider(configuration, dependencies) {
           ]),
         }));
       }
-      return { ok: true, value: Object.freeze(candidates.slice(0, command.limit)) };
+      return { ok: true, value: Object.freeze(candidates.slice(0, command.limit)), ...(result.nextCursor === undefined ? {} : {nextCursor:result.nextCursor}) };
     },
   });
 }
@@ -77,7 +77,7 @@ function configurationValid(value) {
   return record(value) && Object.keys(value).length === 5 && [value.providerId, value.label, value.resultKind].every(text) && positive(value.priority) && typeof value.enabled === "boolean";
 }
 /** @param {unknown} value @param {string} providerId */
-function commandValid(value, providerId) { return record(value) && Object.keys(value).length === 3 && value.providerId === providerId && text(value.query) && positive(value.limit); }
+function commandValid(value, providerId) { return record(value) && Object.keys(value).every(key => ["providerId","query","limit","cursor"].includes(key)) && (value.cursor === undefined || text(value.cursor)) && value.providerId === providerId && text(value.query) && positive(value.limit); }
 /** @param {unknown} value @returns {value is Record<string,unknown>} */
 function record(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
 /** @param {unknown} value @returns {value is string} */

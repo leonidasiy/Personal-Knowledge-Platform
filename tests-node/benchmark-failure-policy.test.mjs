@@ -121,13 +121,13 @@ test('reviewed hidden provider failure and ledger halt remain resumable stops, n
  }
 });
 
-test('legacy quiz pipeline failure completes its existing actor attempts and persists a nonpassing disposition',async()=>{
+test('legacy benchmark command failure stops without quality attempts and persists a nonpassing disposition',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'quiz-failure-policy-')),file=join(directory,'quiz.json'),calls=[];
  try{
   const point={id:'synthetic:knowledge',sourceId:'synthetic',sourceRevision:1,summary:'A synthetic concept.',normalizedHash:'synthetic',coverageGoalIds:[],mediaCandidates:[],evidenceAnchors:[{url:'https://synthetic.invalid',selector:'p'}]};
   const result=await runBenchmarkQuizzes({caseId:'synthetic',points:[point],file,maximumEvaluatorOutputTokens:1024,generate:async command=>{calls.push(command);assert.equal(command.failureOrigin,'pipeline');return {ok:false,error:{kind:'KnowledgeModelCommandInvalid'}};}});
-  assert.equal(result.passes,false);assert.equal(result.dispositions[0].status,'abandoned');assert.equal(calls.length,3);
-  const saved=JSON.parse(await readFile(file));assert.equal(saved.dispositions.length,1);assert.equal(saved.attempts.length,3);
+  assert.equal(result.passes,false);assert.equal(result.dispositions[0].status,'abandoned');assert.equal(result.dispositions[0].attempts,0);assert.equal(calls.length,1);
+  const saved=JSON.parse(await readFile(file));assert.equal(saved.dispositions.length,1);assert.equal(saved.attempts.length,0);
   await runBenchmarkQuizzes({caseId:'synthetic',points:[point],file,maximumEvaluatorOutputTokens:1024,generate:async()=>assert.fail('terminal case is not retried')});
  }finally{await rm(directory,{recursive:true,force:true});}
 });

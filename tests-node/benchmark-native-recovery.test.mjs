@@ -98,7 +98,7 @@ test('actual adapter closed-store exact quiz call recovery preserves completed e
  }finally{await f.cleanup();}
 });
 test('unproven claimed native child is blocked without transport dispatch or quiz attempt renewal',async t=>{
- const f=await fixture(t);try{const app=await f.reopen(false),result=await app.quiz(f.item);assert.equal(result.ok,false);assert.equal(result.error.causeKind,'WorkflowStageCallUncertain');assert.equal(f.calls.length,3);assert.equal(f.port.rows.size,3);}finally{await f.cleanup();}
+ const f=await fixture(t);try{const app=await f.reopen(false),result=await app.quiz(f.item);assert.equal(result.ok,false);assert.equal(result.error.kind,'WorkflowStageCallUncertain');assert.equal(f.calls.length,3);assert.equal(f.port.rows.size,3);}finally{await f.cleanup();}
 });
 for(const field of ['input','admission','cost','body','extraction','unadmitted'])test(`native recovery rejects changed ${field} before paid dispatch`,async t=>{
  const f=await fixture(t);try{
@@ -161,7 +161,7 @@ test('public runtime recovery candidate binds admitted original cost/version and
 test('actual native quiz boundary rejects a fresh evaluation missing typed point assessment',async t=>{
  const f=await fixture(t,'missing-point-field');try{
   const app=await f.reopen();const result=await app.quiz(f.item);
-  assert.equal(result.ok,false);assert.equal(result.error.causeKind,'QuizEvaluatorOutputInvalid');
+  assert.equal(result.ok,false);assert.equal(result.error.kind,'QuizEvaluatorOutputInvalid');
   assert.equal(f.calls.length,4);assert.equal(f.calls.at(-1).body.max_tokens,2048);
   assert.equal(f.calls.at(-1).schema,'quiz_evaluation_v3');
   assert.equal(f.storage.sqlite.prepare('SELECT count(*) AS n FROM knowledge_workflow_quizzes').get().n,0);
@@ -184,7 +184,7 @@ test('actual native quiz point-level negative discards knowledge without another
 for(const mode of ['absent-claim','legacy-negative'])test(`actual native fresh ${mode} output fails closed without extra draft or publication`,async t=>{
  const f=await fixture(t,mode);try{
   const app=await f.reopen();const result=await app.quiz(f.item);
-  assert.equal(result.ok,false);assert.equal(result.error.causeKind,'QuizEvaluatorOutputInvalid');assert.equal(f.calls.length,4);assert.equal(f.calls.at(-1).body.max_tokens,2048);
+  assert.equal(result.ok,false);assert.equal(result.error.kind,'QuizEvaluatorOutputInvalid');assert.equal(f.calls.length,4);assert.equal(f.calls.at(-1).body.max_tokens,2048);
   const row=f.storage.sqlite.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key LIKE 'question-evaluator:quiz-evaluator-%' AND status='completed'").get(f.row.owner_id,f.row.run_id);
   assert(row,'Raw model result remains persisted before actor projection.');assert.equal(f.storage.sqlite.prepare('SELECT count(*) AS n FROM knowledge_workflow_quizzes').get().n,0);
   assert.equal(f.port.rows.size,4,'No additional evaluator or generator call is admitted.');

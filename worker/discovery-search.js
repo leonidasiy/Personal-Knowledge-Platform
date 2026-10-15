@@ -1,18 +1,18 @@
 // @ts-check
 
-/** @template T @template E @typedef {{readonly ok:true,readonly value:T}|{readonly ok:false,readonly error:E}} Result */
+/** @template T @template E @typedef {{readonly ok:true,readonly value:T,readonly nextCursor?:string}|{readonly ok:false,readonly error:E}} Result */
 /** @typedef {{readonly id:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean}} SearchProviderDescriptor */
 /** @typedef {{readonly attribute:string,readonly value:string,readonly provenanceUrl:string}} SearchIdentityEvidence */
 /** @typedef {{readonly providerId:string,readonly resultKind:string,readonly sourceLevel:"site"|"document"|"feed"|"episode"|"video"|"unknown",readonly title:string,readonly description:string|null,readonly canonicalUrl:string,readonly publisherLabel:string|null,readonly publishedAt:string|null,readonly identityEvidence:readonly SearchIdentityEvidence[]}} CentralSearchCandidate */
-/** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number}} SearchProviderCommand */
+/** @typedef {{readonly providerId:string,readonly query:string,readonly limit:number,readonly cursor?:string}} SearchProviderCommand */
 /** @typedef {{readonly kind:"SearchProviderCredentialMissing"}|{readonly kind:"SearchProviderCredentialRejected"}|{readonly kind:"SearchProviderQuotaExceeded"}|{readonly kind:"SearchProviderTimedOut"}|{readonly kind:"SearchProviderNetworkFailed"}|{readonly kind:"SearchProviderUpstreamRejected",readonly status:number}|{readonly kind:"SearchProviderQueryInvalid",readonly reason:"argument"|"complexity"|"field"|"input"|"syntax"|"variable"|"unspecified",readonly diagnosticTokens:readonly string[]}|{readonly kind:"SearchProviderInputInvalid"}|{readonly kind:"SearchProviderQueryTooComplex"}|{readonly kind:"SearchProviderGraphqlRejected",readonly code:string}|{readonly kind:"SearchProviderUnavailable"}|{readonly kind:"SearchProviderResponseInvalid"}|{readonly kind:"SearchProviderFeedBlocked",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedPrivate",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedDuplicate",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedInvalid",readonly seriesUuid:string}|{readonly kind:"SearchProviderFeedMissing",readonly seriesUuid:string}} SearchProviderFailure */
 /** @typedef {{readonly signal:AbortSignal,remainingMs():number}} SearchExecution */
 /** @typedef {{readonly descriptor:SearchProviderDescriptor,search(command:SearchProviderCommand,execution?:SearchExecution):Promise<Result<readonly CentralSearchCandidate[],SearchProviderFailure>>}} SearchProvider */
 /** @typedef {{prepare(input:unknown):Result<{readonly submittedQuery:string,readonly providerQuery:string,readonly policyVersion:string},import("./educational-search-policy.js").EducationalSearchFailure>}} EducationalSearchPolicy */
 /** @typedef {{readonly kind:"CentralSearchTimedOut",readonly stage:"providers"}|{readonly kind:"CentralSearchCommandInvalid",readonly field:string}|{readonly kind:"CentralSearchProvidersInvalid"}|{readonly kind:"CentralSearchProviderUnknown",readonly providerId:string}|{readonly kind:"CentralSearchProviderDisabled",readonly providerId:string}|{readonly kind:"CentralSearchLimitInvalid",readonly maximum:number}|{readonly kind:"CentralSearchAllProvidersFailed",readonly failures:readonly ProviderFailure[]}|import("./educational-search-policy.js").EducationalSearchFailure} CentralSearchFailure */
 /** @typedef {{readonly providerId:string,readonly failure:SearchProviderFailure}} ProviderFailure */
-/** @typedef {{readonly query:string,readonly providerIds:readonly string[],readonly limit:number}} CentralSearchCommand */
-/** @typedef {{readonly items:readonly CentralSearchCandidate[],readonly providerFailures:readonly ProviderFailure[],readonly submittedQuery:string,readonly providerQuery:string,readonly policyVersion:string}} CentralSearchResult */
+/** @typedef {{readonly query:string,readonly providerIds:readonly string[],readonly limit:number,readonly cursors?:Readonly<Record<string,string>>}} CentralSearchCommand */
+/** @typedef {{readonly items:readonly CentralSearchCandidate[],readonly providerFailures:readonly ProviderFailure[],readonly submittedQuery:string,readonly providerQuery:string,readonly policyVersion:string,readonly nextCursors?:Readonly<Record<string,string>>}} CentralSearchResult */
 
 /**
  * @param {{readonly maximumLimit:number}} configuration
@@ -65,6 +65,8 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
         left.descriptor.priority - right.descriptor.priority ||
         left.descriptor.id.localeCompare(right.descriptor.id)
       );
+      selected.splice(command.value.limit);
+      const providerLimit = (/** @type {number} */ index) => Math.floor(command.value.limit / selected.length) + (index < command.value.limit % selected.length ? 1 : 0);
       const startedAt = dependencies.budget.now();
       if (!Number.isFinite(startedAt)) throw new TypeError("Invalid discovery budget clock.");
       const deadline = startedAt + dependencies.budget.timeoutMs;
@@ -76,16 +78,18 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
         return Math.max(0, deadline - now);
       }});
       if (signal.aborted || execution.remainingMs() <= 0) return {ok:false,error:{kind:"CentralSearchTimedOut",stage:"providers"}};
-      const responsesResult = await bounded(Promise.all(selected.map(async (provider) => ({
+      const responsesResult = await bounded(Promise.all(selected.map(async (provider, index) => ({
         provider,
         result: await provider.search({
           providerId: provider.descriptor.id,
           query: prepared.value.providerQuery,
-          limit: Math.min(maximumLimit, Math.floor(60 / selected.length)),
+          limit: providerLimit(index),
+          ...(command.value.cursors?.[provider.descriptor.id] === undefined ? {} : {cursor:command.value.cursors[provider.descriptor.id]}),
         }, execution),
       }))), execution, "providers");
       if (!responsesResult.ok) return responsesResult;
       const responses = responsesResult.value;
+      /** @type {Record<string,string>} */ const nextCursors = {};
       /** @type {ProviderFailure[]} */ const providerFailures = [];
       /** @type {CentralSearchCandidate[]} */ const pool = [];
       let successfulProviders = 0;
@@ -97,7 +101,8 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
           }));
           continue;
         }
-        let responseValid = Array.isArray(response.result.value) && response.result.value.length <= Math.min(maximumLimit, Math.floor(60 / selected.length));
+        let responseValid = Array.isArray(response.result.value) && response.result.value.length <= providerLimit(selected.indexOf(response.provider));
+        responseValid = responseValid && (response.result.nextCursor === undefined || text(response.result.nextCursor));
         if (!responseValid) {
           providerFailures.push({providerId:response.provider.descriptor.id, failure:{kind:"SearchProviderResponseInvalid"}});
           continue;
@@ -115,6 +120,7 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
           }
         }
         if (!responseValid) continue;
+        if (response.result.nextCursor !== undefined) nextCursors[response.provider.descriptor.id] = response.result.nextCursor;
         successfulProviders += 1;
         for (const item of response.result.value) {
           pool.push(item);
@@ -133,6 +139,7 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
       return {
         ok: true,
         value: Object.freeze({
+          ...(Object.keys(nextCursors).length ? {nextCursors:Object.freeze(nextCursors)} : {}),
           items: Object.freeze(pool.slice(0, command.value.limit)),
           providerFailures: Object.freeze(providerFailures),
           ...prepared.value,
@@ -144,7 +151,7 @@ export function createCentralDiscoverySearch(configuration, dependencies) {
 
 /** @param {unknown} input @param {number} maximum @returns {Result<CentralSearchCommand,CentralSearchFailure>} */
 function commandValue(input, maximum) {
-  if (!record(input) || Object.keys(input).length !== 3) {
+  if (!record(input) || Object.keys(input).some(key => !["query","providerIds","limit","cursors"].includes(key))) {
     return {
       ok: false,
       error: { kind: "CentralSearchCommandInvalid", field: "command" },
@@ -169,9 +176,11 @@ function commandValue(input, maximum) {
       error: { kind: "CentralSearchLimitInvalid", maximum },
     };
   }
+  if (input.cursors !== undefined && (!record(input.cursors) || Object.entries(input.cursors).some(([id,cursor]) => !/** @type {string[]} */ (input.providerIds).includes(id) || !text(cursor)))) return {ok:false,error:{kind:"CentralSearchCommandInvalid",field:"cursors"}};
   return {
     ok: true,
     value: Object.freeze({
+      ...(input.cursors === undefined ? {} : {cursors: /** @type {Record<string,string>} */ (input.cursors)}),
       query: input.query,
       providerIds: Object.freeze([...input.providerIds]),
       limit: input.limit,

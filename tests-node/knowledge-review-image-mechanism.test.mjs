@@ -43,7 +43,7 @@ test('a constructed diagram supporting the complete relationship retains its ima
 
 for(const mode of ['text','image'])test(`image removal without valid permission stays exhausted in ${mode} mode`,async()=>{
  let critics=0,repairs=0;const result=await createKnowledgeQualityReviewer({context,sourceMode:mode,sourceEvidence:{},digest:async()=>assert.fail('Invalid removal cannot reach digest'),evaluate:async current=>{critics++;return ok(assessment(current,'revise',{mode,allowTextOnly:false,visible:true}));},regenerate:async()=>{repairs++;return ok({summary,coverageGoalIds:[],useSupportingImage:false,evidenceClauses:[summary]});}}).review(point);
- assert.deepEqual(result,ok(null));assert.equal(critics,1);assert.equal(repairs,1);
+ assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeRepairOutputInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});assert.equal(critics,1);assert.equal(repairs,4);
 });
 
 test('generic appearance cues remain structurally valid: semantic correctness is still an LLM responsibility',async()=>{

@@ -18,11 +18,12 @@ import { discoverHybridNavigation, boundHybridExtractionPlan, createRobotsNaviga
 import { createKnowledgeQualityReviewer, sourcePrecisionInstruction, knowledgeReviewerPrompt, knowledgeRepairPrompt, knowledgeReviewSchemaFor, knowledgeReviewAuditInput, knowledgeRepairSchemaFor, knowledgeRepairRequirements, knowledgeCriticRepairContextPrompt } from "../src/features/knowledge-workflows/quality-review.js";
 import { D1WorkflowStageRepository } from "./knowledge-workflow-stages-d1.js";
 import { D1KnowledgeWorkflowProgressRepository } from "./knowledge-workflow-progress-d1.js";
+import { readFailedQuizItems, exhaustedQuizTechnicalFailure } from "./knowledge-workflow-quiz-failures.js";
 import { createQuizActorCritic, normalizeKnowledgeQuizEvaluation, QUIZ_MAX_ATTEMPTS } from "../src/features/knowledge-workflows/quiz.js";
 import { assembleQuizPair, normalizeQuizPairDraftAliases, isQuizPairDraft, quizPairDraftValidationIssues, quizPairSchema, quizPairStableId } from "../src/features/knowledge-workflows/quiz-pair.js";
 import { D1SourceRightsRegistry } from "./source-rights-registry-d1.js";
 import { D1KnowledgeContentRepository, D1QuizRepository } from "./knowledge-workflow-content-d1.js";
-import { createRoleConfiguredKnowledgeModel, MAXIMUM_ATTACHMENT_TOTAL_BYTES } from "./knowledge-workflow-model.js";
+import { createRoleConfiguredKnowledgeModel, createSourceDecisionModel, MAXIMUM_ATTACHMENT_TOTAL_BYTES } from "./knowledge-workflow-model.js";
 import { D1AgentEventLedger, D1AgentMemoryRepository, D1CompactionRecordRepository } from "./knowledge-workflow-agents-d1.js";
 import { createAgentMemoryStore } from "../src/features/knowledge-workflows/memory.js";
 import { createContextCompactor } from "../src/features/knowledge-workflows/context.js";
@@ -30,7 +31,7 @@ import { createKnowledgeWorkflowAgentRuntime } from "./knowledge-workflow-agent-
 import { resolvePublicAddresses } from "./knowledge-workflow-network.js";
 import { BUNDLE_TYPE, parseImageBundle } from "../src/features/knowledge-workflows/image-upload.js";
 
-import { createSourceClassifier } from "../src/features/source-classification/public.js";
+import { createSourceClassifier, parseSourceClassification } from "../src/features/source-classification/public.js";
 import { D1SourceClassificationRepository } from "./source-classification-d1.js";
 
 // A critic may emit retrieval comparisons and whole-claim audits within the existing reviewer ceiling.
@@ -412,7 +413,7 @@ export function normalizePlannerOutput(value, input) {
  *   readonly maxOutputTokens: number,
  *   readonly systemPrompt?: string,
  *   readonly repairPrompt?: string,
-   *   readonly generate: (command: { readonly taskId: string, readonly systemPrompt: string, readonly input: unknown, readonly maxOutputTokens: number, readonly attachments?: readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[], readonly timeoutMs?: number, readonly responseSchema?: import("./knowledge-workflow-model.js").KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput", readonly phase?: import("./webpage-facts.js").WebpagePhase }) => Promise<Result<Record<string, unknown>, { readonly kind: string, readonly status?: number }>>,
+   *   readonly generate: (command: { readonly taskId: string, readonly systemPrompt: string, readonly input: unknown, readonly maxOutputTokens: number, readonly technicalAttempt?:number, readonly attachments?: readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[], readonly timeoutMs?: number, readonly responseSchema?: import("./knowledge-workflow-model.js").KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput", readonly phase?: import("./webpage-facts.js").WebpagePhase }) => Promise<Result<Record<string, unknown>, { readonly kind: string, readonly status?: number, readonly technicalRetriesExhausted?:boolean, readonly technicalAttempts?:number }>>,
  *   readonly logger: (entry: { readonly event: string, readonly failureKind?: string, readonly diagnosticToken?: string }) => void
  * }} ExtractionPlanRequest
  */
@@ -467,7 +468,8 @@ function pageObservationDiagnostic(value) {
  *   readonly systemPrompt?: string,
  *   readonly repairPrompt?: string,
  *   readonly attachments?: readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[],
- *   readonly generate: (command: { readonly taskId: string, readonly systemPrompt: string, readonly input: unknown, readonly maxOutputTokens: number, readonly attachments?: readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[], readonly timeoutMs?: number, readonly responseSchema?: import("./knowledge-workflow-model.js").KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput", readonly phase?: import("./webpage-facts.js").WebpagePhase }) => Promise<Result<Record<string, unknown>, { readonly kind: string, readonly status?: number }>>,
+ *   readonly generate: (command: { readonly taskId: string, readonly systemPrompt: string, readonly input: unknown, readonly maxOutputTokens: number, readonly technicalAttempt?:number, readonly attachments?: readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[], readonly timeoutMs?: number, readonly responseSchema?: import("./knowledge-workflow-model.js").KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput", readonly phase?: import("./webpage-facts.js").WebpagePhase }) => Promise<Result<Record<string, unknown>, { readonly kind: string, readonly status?: number, readonly technicalRetriesExhausted?:boolean, readonly technicalAttempts?:number }>>,
+ *   readonly technicalRetries?:boolean,
  *   readonly logger: (entry: { readonly event: string, readonly failureKind?: string, readonly diagnosticToken?: string }) => void
  * }} PageObservationRequest
  */
@@ -479,7 +481,7 @@ export async function requestPageObservation(dependencies) {
 
 /**
  * @param {Omit<PageObservationRequest, "input"> & { readonly input: { readonly sections: readonly (MaterialSection & { readonly url: string })[], readonly coverageGoals: readonly { readonly id: string }[], readonly fileName: string, readonly progress: unknown, readonly sourceContext?: { readonly title: string, readonly overview: string }, readonly mode?: "text" | "image", readonly visualId?: string, readonly scope?: {readonly ownerId:string,readonly runId:string}, readonly imageIdentity?: import("./upload-image-boundary.js").UploadedImageIdentity }, readonly observeImage?: boolean, readonly reviewMaterial?: boolean, readonly decodeImage?: import("./upload-image-boundary.js").ImageDecoder, readonly attachments?: readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[] }} dependencies
- * @returns {Promise<Result<readonly { readonly url: string, readonly notes: string, readonly candidates: readonly import("../src/features/knowledge-workflows/extraction.js").KnowledgeCandidate[] }[], { readonly kind: string }>>}
+ * @returns {Promise<Result<readonly { readonly url: string, readonly notes: string, readonly candidates: readonly import("../src/features/knowledge-workflows/extraction.js").KnowledgeCandidate[] }[], { readonly kind: string, readonly technicalRetriesExhausted?:boolean, readonly technicalAttempts?:number }>>}
  */
 export async function requestMaterialBatch(dependencies) {
   const input = dependencies?.input;
@@ -524,14 +526,15 @@ export async function requestMaterialBatch(dependencies) {
     return { ok: /** @type {const} */ (true), value: result };
   }
   let correction = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const maximumTechnicalAttempts=dependencies.technicalRetries===false?1:4;
+  for (let attempt = 0; attempt < maximumTechnicalAttempts; attempt++) {
     const modelInput = mode === "image" ? { mode, ...(input.sourceContext === undefined ? {} : { sourceContext: input.sourceContext }), sections: input.sections.map((section) => ({ id: section.id, locator: section.locator })), coverageGoals: input.coverageGoals, progress: input.progress, ...(visualObservations === undefined ? {} : { visualObservations }) } : { ...input, sections: input.sections.map(section => ({ ...section, textIntegrity: { replacementCharacterCount: [...section.text].filter(character => character === "\uFFFD").length } })) };
-    const response = await dependencies.generate({ taskId: `${dependencies.taskId}${attempt === 0 ? "" : ":retry"}`, systemPrompt: `${mode === "image" ? materialImagePrompt : materialBatchPrompt}${correction}`, input: modelInput, maxOutputTokens: dependencies.maxOutputTokens, ...(dependencies.attachments === undefined ? {} : { attachments: dependencies.attachments }), responseSchema: mode === "image" ? materialImageSchema : materialTextSchemaFor(input.sections,input.coverageGoals), ...(mode === "image" ? { timeoutMs: 90_000, providerSort: /** @type {const} */ ("throughput") } : {}) });
+    const response = await dependencies.generate({ taskId: dependencies.taskId, technicalAttempt:attempt+1, systemPrompt: `${mode === "image" ? materialImagePrompt : materialBatchPrompt}${correction}`, input: modelInput, maxOutputTokens: dependencies.maxOutputTokens, ...(dependencies.attachments === undefined ? {} : { attachments: dependencies.attachments }), responseSchema: mode === "image" ? materialImageSchema : materialTextSchemaFor(input.sections,input.coverageGoals), ...(mode === "image" ? { timeoutMs: 90_000, providerSort: /** @type {const} */ ("throughput") } : {}) });
     if (!response.ok) {
       const retryableOutput = response.error.kind === "KnowledgeModelResponseInvalid";
-      const retryableProvider = response.error.kind === "KnowledgeModelUnavailable" || response.error.kind === "KnowledgeModelTimeout" || response.error.kind === "KnowledgeModelRejected" && [429, 500, 502, 503, 504].includes(response.error.status ?? 0);
+      const retryableProvider = response.error.kind === "KnowledgeModelUnavailable" || response.error.kind === "KnowledgeModelTimeout" || response.error.kind === "KnowledgeModelRejected" && ((response.error.status ?? 0) >= 200 && (response.error.status ?? 0) < 300 || [408, 429, 500, 502, 503, 504].includes(response.error.status ?? 0));
       dependencies.logger({ event: attempt === 0 && retryableOutput ? "knowledge-workflow-material-batch-schema-retry" : attempt === 0 && retryableProvider ? "knowledge-workflow-material-batch-provider-retry" : "knowledge-workflow-material-batch-failure", failureKind: response.error.kind });
-      if (attempt === 0 && (retryableOutput || retryableProvider)) { if (retryableOutput) correction = repairInstruction; continue; }
+      if (!response.error.technicalRetriesExhausted && retryableTechnicalFailure(response.error)) { if (attempt < maximumTechnicalAttempts-1) { if (retryableOutput) correction = repairInstruction; continue; } return {ok:false,error:{...response.error,technicalRetriesExhausted:true,technicalAttempts:maximumTechnicalAttempts}}; }
       return response;
     }
     const payload = record(response.value) ? response.value : null;
@@ -555,7 +558,7 @@ export async function requestMaterialBatch(dependencies) {
     dependencies.logger({ event: attempt === 0 ? "knowledge-workflow-material-batch-schema-retry" : "knowledge-workflow-material-batch-failure", failureKind: "KnowledgeMaterialBatchInvalid" });
     correction = repairInstruction;
   }
-  return { ok: false, error: { kind: "KnowledgeMaterialBatchInvalid" } };
+  return { ok: false, error: { kind: "KnowledgeMaterialBatchInvalid",technicalRetriesExhausted:true,technicalAttempts:maximumTechnicalAttempts } };
 }
 
 /**
@@ -587,7 +590,7 @@ export async function webpageImageCommandKey(model,configDigest,command) {
  return command.taskId+':'+await imageHash(new TextEncoder().encode(JSON.stringify({model,configDigest,systemPrompt:command.systemPrompt,input:command.input,maxOutputTokens:command.maxOutputTokens,responseSchema:command.responseSchema,attachments:await Promise.all((command.attachments??[]).map(async a=>({id:a.id,mediaType:a.mediaType,digest:a.bytes instanceof Uint8Array?await imageHash(a.bytes):a.url})))})));
 }
 
-/** @param {{ readonly modelProtocols?:Partial<Record<import("./knowledge-workflow-model.js").KnowledgeAgentRole,import("./knowledge-workflow-model.js").KnowledgeModelProtocol>>, readonly reviewedNavigation?:import("./hybrid-navigation.js").NavigationPlan, readonly preflightModelWork?:(role:import("../src/features/knowledge-workflows/memory.js").AgentRole,identity:{ownerId:string,runId:string,stageKey:string,inputDigest:string,createdAt:string})=>void, readonly authorizeFailedReviewCall?:(identity:import("./knowledge-workflow-stages-d1.js").FailedModelStage)=>Promise<{attemptKey:string,allowAdditionalAttempt?:boolean}|null>, readonly authorizeClaimedModelCall?:(identity:{ownerId:string,runId:string,stageKey:string,inputDigest:string,createdAt:string})=>Promise<boolean>, readonly webpageStructuredOutput?:boolean, readonly extractionDurationMs?:number, readonly imagePolicy:import("./webpage-image-budget.js").WebpageImagePolicy, readonly database: RuntimeDatabase, readonly fetch: typeof fetch, readonly browser: KnowledgeWorkflowBrowser, readonly apiKey: string | null, readonly endpoint: string, readonly now: () => string, readonly nowMs: () => number, readonly logger: (entry: { readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?:import("./webpage-facts.js").WebpagePhase,readonly durationMs?:number,readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null }) => void, readonly transition: (command: { readonly run: KnowledgeWorkflowRun, readonly nextState: import("../src/features/knowledge-workflows/workflow.js").WorkflowState, readonly counts?: { readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }, readonly failureKind?: string | null, readonly robotsEvidence?: import("../src/features/knowledge-workflows/workflow.js").WorkflowRobotsEvidence | null }) => Promise<Result<KnowledgeWorkflowRun, unknown>>, readonly configSnapshots: Readonly<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>, readonly resolveAddresses?: (hostname: string) => Promise<Result<readonly string[], { readonly kind: string }>>, readonly publicEgress?: import("../src/features/knowledge-workflows/media.js").MediaPublicEgress, readonly media?: { readonly ingest: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>, readonly ingestBytes?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>> }, readonly imageSearch?: { readonly search: (command: { readonly query: string }) => Promise<Result<readonly unknown[], { readonly kind: string }>> }, readonly fallbackManifest?: import("../src/features/knowledge-workflows/media.js").UserAttestedLocalManifest, readonly reviewMedia?: {readonly readOriginal:(scope:{ownerId:string,runId:string,knowledgeId:string,sourceRevision:number})=>Promise<Result<{id:string,bytes:Uint8Array,mediaType:'image/png'|'image/jpeg'|'image/webp'|'image/gif'}|null,{kind:string}>>}, readonly mediaBucket?: Partial<import("./webpage-image-cache.js").ImageCacheBucket> & { readonly delete: (key: string) => Promise<unknown> } | null, readonly material?: { readonly read: (ownerId: string, runId: string) => Promise<Result<StoredMaterial | null, { readonly kind: string }>> }, readonly decodeImage?: import("./upload-image-boundary.js").ImageDecoder, readonly materialContent?: { readonly read: (ownerId: string, objectKey: string, identity: {readonly sourceId:string,readonly runId:string,readonly sourceRevision:number,readonly digest:string}) => Promise<Result<Uint8Array, { readonly kind: string }>> } }} dependencies @returns {KnowledgeWorkflowRuntime} */
+/** @param {{ readonly technicalRetries?:boolean, readonly modelProtocols?:Partial<Record<import("./knowledge-workflow-model.js").KnowledgeAgentRole,import("./knowledge-workflow-model.js").KnowledgeModelProtocol>>, readonly reviewedNavigation?:import("./hybrid-navigation.js").NavigationPlan, readonly preflightModelWork?:(role:import("../src/features/knowledge-workflows/memory.js").AgentRole,identity:{ownerId:string,runId:string,stageKey:string,inputDigest:string,createdAt:string})=>void, readonly authorizeFailedReviewCall?:(identity:import("./knowledge-workflow-stages-d1.js").FailedModelStage)=>Promise<{attemptKey:string,allowAdditionalAttempt?:boolean}|null>, readonly authorizeClaimedModelCall?:(identity:{ownerId:string,runId:string,stageKey:string,inputDigest:string,createdAt:string})=>Promise<boolean>, readonly webpageStructuredOutput?:boolean, readonly extractionDurationMs?:number, readonly imagePolicy:import("./webpage-image-budget.js").WebpageImagePolicy, readonly database: RuntimeDatabase, readonly fetch: typeof fetch, readonly browser: KnowledgeWorkflowBrowser, readonly apiKey: string | null, readonly endpoint: string, readonly now: () => string, readonly nowMs: () => number, readonly logger: (entry: { readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?:import("./webpage-facts.js").WebpagePhase,readonly durationMs?:number,readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null }) => void, readonly transition: (command: { readonly run: KnowledgeWorkflowRun, readonly nextState: import("../src/features/knowledge-workflows/workflow.js").WorkflowState, readonly counts?: { readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }, readonly failureKind?: string | null, readonly robotsEvidence?: import("../src/features/knowledge-workflows/workflow.js").WorkflowRobotsEvidence | null }) => Promise<Result<KnowledgeWorkflowRun, unknown>>, readonly configSnapshots: Readonly<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>, readonly resolveAddresses?: (hostname: string) => Promise<Result<readonly string[], { readonly kind: string }>>, readonly publicEgress?: import("../src/features/knowledge-workflows/media.js").MediaPublicEgress, readonly media?: { readonly ingest: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>, readonly ingestBytes?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>> }, readonly imageSearch?: { readonly search: (command: { readonly query: string }) => Promise<Result<readonly unknown[], { readonly kind: string }>> }, readonly fallbackManifest?: import("../src/features/knowledge-workflows/media.js").UserAttestedLocalManifest, readonly reviewMedia?: {readonly readOriginal:(scope:{ownerId:string,runId:string,knowledgeId:string,sourceRevision:number})=>Promise<Result<{id:string,bytes:Uint8Array,mediaType:'image/png'|'image/jpeg'|'image/webp'|'image/gif'}|null,{kind:string}>>}, readonly mediaBucket?: Partial<import("./webpage-image-cache.js").ImageCacheBucket> & { readonly delete: (key: string) => Promise<unknown> } | null, readonly material?: { readonly read: (ownerId: string, runId: string) => Promise<Result<StoredMaterial | null, { readonly kind: string }>> }, readonly decodeImage?: import("./upload-image-boundary.js").ImageDecoder, readonly materialContent?: { readonly read: (ownerId: string, objectKey: string, identity: {readonly sourceId:string,readonly runId:string,readonly sourceRevision:number,readonly digest:string}) => Promise<Result<Uint8Array, { readonly kind: string }>> } }} dependencies @returns {KnowledgeWorkflowRuntime} */
 export function createKnowledgeWorkflowRuntime(dependencies) {
   if ((dependencies?.extractionDurationMs!==undefined&&(!Number.isSafeInteger(dependencies.extractionDurationMs)||dependencies.extractionDurationMs<=0)) || (dependencies?.preflightModelWork!==undefined&&typeof dependencies.preflightModelWork!=="function") || (dependencies?.webpageStructuredOutput!==undefined&&typeof dependencies.webpageStructuredOutput!=="boolean") || !isWebpageImagePolicy(dependencies?.imagePolicy) || typeof dependencies?.database?.prepare !== "function" || typeof dependencies.database.batch !== "function" || typeof dependencies.fetch !== "function" || typeof dependencies.browser?.readPage !== "function" || (dependencies.browser.readImage!==undefined&&typeof dependencies.browser.readImage!=="function") || typeof dependencies.browser.readRobots !== "function" || typeof dependencies.browser.screenshot !== "function" || typeof dependencies.browser.close !== "function" || (dependencies.apiKey !== null && typeof dependencies.apiKey !== "string") || !text(dependencies.endpoint) || !timestamp(dependencies.now()) || typeof dependencies.nowMs !== "function" || typeof dependencies.logger !== "function" || typeof dependencies.transition !== "function" || !record(dependencies.configSnapshots) || (dependencies.resolveAddresses !== undefined && typeof dependencies.resolveAddresses !== "function") || (dependencies.media !== undefined && (typeof dependencies.media.ingest !== "function" || (dependencies.media.ingestBytes !== undefined && typeof dependencies.media.ingestBytes !== "function"))) || (dependencies.imageSearch !== undefined && typeof dependencies.imageSearch.search !== "function") || (dependencies.fallbackManifest !== undefined && (!record(dependencies.fallbackManifest) || !Array.isArray(dependencies.fallbackManifest.entries) || typeof dependencies.fallbackManifest.resolve !== "function")) || (dependencies.material !== undefined && typeof dependencies.material.read !== "function") || (dependencies.materialContent !== undefined && typeof dependencies.materialContent.read !== "function")) throw new TypeError("Knowledge workflow runtime dependencies are invalid.");
   // GLM-5.3-Flash is configured by the provider with a 1,048,576-token context;
@@ -597,17 +600,25 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
   if(reviewedNavigation!==undefined&&(!record(reviewedNavigation)||!text(reviewedNavigation.rationale)||!Array.isArray(reviewedNavigation.lessonUrls)||!reviewedNavigation.lessonUrls.length||new Set(reviewedNavigation.lessonUrls).size!==reviewedNavigation.lessonUrls.length||!reviewedNavigation.lessonUrls.every(url=>typeof url==="string"&&navigationWithinScope(reviewedNavigation.sourceRootUrl,url))||!Array.isArray(reviewedNavigation.observations)||!reviewedNavigation.observations.every(isNavigationObservation)))throw new TypeError("ReviewedNavigationInvalid");
   const model = createRoleConfiguredKnowledgeModel({ modelProtocols:dependencies.modelProtocols, apiKey: dependencies.apiKey, endpoint: dependencies.endpoint, configSnapshots: dependencies.configSnapshots, maximumInputCharacters: 3_000_000, fetch: dependencies.fetch, now: dependencies.nowMs, logger: (entry) => dependencies.logger({ event: entry.event, stage: entry.role, failureKind: entry.failureKind, field: entry.field, diagnosticToken: entry.diagnosticToken,phase:entry.phase,durationMs:entry.durationMs,requestId:entry.requestId,inputTokens:entry.inputTokens,outputTokens:entry.outputTokens }) });
   const rightsRegistry = new D1SourceRightsRegistry({ database: /** @type {import("./source-rights-registry-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (dependencies.database)), now: dependencies.now, logger: (entry) => dependencies.logger({ event: entry.event, failureKind: entry.failureKind }) });
-  const stages = new D1WorkflowStageRepository({database:dependencies.database,now:dependencies.now});
+  const stages = new D1WorkflowStageRepository({database:dependencies.database,now:dependencies.now,logger:dependencies.logger});
   const progress = new D1KnowledgeWorkflowProgressRepository({database:dependencies.database,logger:dependencies.logger});
   const content = new D1KnowledgeContentRepository({ database: /** @type {import("./knowledge-workflow-content-d1.js").D1DatabasePort} */ (dependencies.database), logger: (entry) => dependencies.logger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind }) });
   /** Restore accepted facts when a process stopped between point commit and page checkpoint.
    * @param {Parameters<D1KnowledgeContentRepository["loadScratchpad"]>[0]} scope
+   * @param {KnowledgeWorkflowRun} run
    * @returns {ReturnType<D1KnowledgeContentRepository["loadScratchpad"]>} */
-  async function loadExtractionScratchpad(scope) {
+  async function loadExtractionScratchpad(scope, run) {
     const [loaded, committed] = await Promise.all([content.loadScratchpad(scope), content.listKnowledgePoints(scope)]);
     if (!loaded.ok) return loaded;
     if (!committed.ok) return {ok:false,error:{kind:"ScratchpadPersistenceFailed"}};
-    return {ok:true,value:{...loaded.value,acceptedHashes:[...new Set([...loaded.value.acceptedHashes,...committed.value.map(point=>point.normalizedHash)])],coverage:[...new Set([...loaded.value.coverage,...committed.value.flatMap(point=>point.coverageGoalIds)])]}};
+    let scratchpad = loaded.value;
+    if (run.failureKind === "WorkflowRetryFailedPages" && !scratchpad.retryingFailedPages) {
+      const retry = {...scratchpad, failedPages:[], frontier:(scratchpad.failedPages??[]).map((/** @type {import("../src/features/knowledge-workflows/extraction.js").ExtractionFailedPage} */ page)=>page.url), retryingFailedPages:true, retryGeneration:run.revision, pendingBatch:undefined, revision:scratchpad.revision+1};
+      const saved = await content.saveScratchpad(retry, dependencies.now());
+      if (!saved.ok) return {ok:false,error:{kind:"ScratchpadPersistenceFailed"}};
+      scratchpad = retry;
+    }
+    return {ok:true,value:{...scratchpad,acceptedHashes:[...new Set([...scratchpad.acceptedHashes,...committed.value.map(point=>point.normalizedHash)])],coverage:[...new Set([...scratchpad.coverage,...committed.value.flatMap(point=>point.coverageGoalIds)])]}};
   }
   const sourceClassifications = new D1SourceClassificationRepository({ database: /** @type {import("./source-classification-d1.js").SourceClassificationDatabase} */ (dependencies.database), now: dependencies.now, logger: (entry) => dependencies.logger({ event: entry.event, ownerId: entry.ownerId, stage: "source-classifier", failureKind: entry.failureKind }) });
   const quizRepository = new D1QuizRepository({ database: /** @type {import("./knowledge-workflow-content-d1.js").D1DatabasePort} */ (dependencies.database), bucket: dependencies.mediaBucket, now: dependencies.now, logger: (entry) => dependencies.logger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind }) });
@@ -650,6 +661,12 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
 
   /** @param {Parameters<typeof dependencies.transition>[0]} command @returns {ReturnType<typeof dependencies.transition>} */
   async function transition(command) {
+    if (command.nextState === "completed") {
+      const scratchpad = await content.loadScratchpad(command.run);
+      if (!scratchpad.ok) return scratchpad;
+      const failedQuizzes=await readFailedQuizItems(dependencies.database,command.run);if(!failedQuizzes.ok)return failedQuizzes;
+      command={...command,failureKind:failedQuizzes.value.length?"WorkflowQuizItemsFailed":scratchpad.value.failedPages?.length?"WorkflowPagesFailed":["WorkflowRetryFailedQuizzes","WorkflowQuizItemsFailed"].includes(command.failureKind??"")?null:command.failureKind};
+    }
     try { return await dependencies.transition(command); } catch (error) { return { ok: false, error: { kind: record(error) && text(error.kind) ? error.kind : "WorkflowTransitionRejected" } }; }
   }
 
@@ -775,8 +792,44 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     const signature=await imageHash(new TextEncoder().encode(JSON.stringify({sourceSignature:run.contentSignature,configDigest:dependencies.configSnapshots[agentRole].digest,systemPrompt,input,maxOutputTokens,responseSchema:options.responseSchema,reasoningEffort:options.reasoningEffort,providerSort:options.providerSort,phase:options.phase,attachments:await Promise.all((attachments??[]).map(async a=>({id:a.id,mediaType:a.mediaType,digest:a.bytes instanceof Uint8Array?await imageHash(a.bytes):a.url})))})));
     return `${agentRole}:${taskId}:${signature}`;
   }
-  /** @param {KnowledgeWorkflowRun} run @param {import("./knowledge-workflow-model.js").KnowledgeModelCommand["role"]} agentRole @param {string} taskId @param {string} systemPrompt @param {unknown} input @param {number} maxOutputTokens @param {readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[]} [attachments] @param {{ readonly timeoutMs?: number, readonly responseSchema?: import("./knowledge-workflow-model.js").KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput",readonly budgetPageUrl?:string,readonly phase?:import("./webpage-facts.js").WebpagePhase }} [options] @returns {Promise<Result<Record<string, unknown>, { readonly kind: string }>>} */
+  /** @param {KnowledgeWorkflowRun} run @returns {Promise<Result<null,{kind:string}>>} */
+  async function checkProcessingState(run) {
+    // A timed-out callback must not start another paid call after its run stops.
+    try {
+      const current = await dependencies.database.prepare('SELECT state FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=?').bind(run.ownerId,run.runId).first();
+      if (!record(current) || !text(current.state)) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+      if (['paused','retryable-failure','awaiting-upload','awaiting-rights-review','awaiting-time-limit-decision','completed','abandoned'].includes(current.state)) return {ok:false,error:{kind:'WorkflowProcessingStopped'}};
+      if(current.state==='extraction-loop'){
+        let deadlineAt=run.extractionDeadlineAt;
+        if(deadlineAt===null){const row=await dependencies.database.prepare('SELECT extraction_deadline_at FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=?').bind(run.ownerId,run.runId).first();if(!record(row)||!timestamp(row.extraction_deadline_at))return {ok:false,error:{kind:'WorkflowExtractionClockInvalid'}};deadlineAt=row.extraction_deadline_at;}
+        const now=dependencies.nowMs();if(!timestamp(deadlineAt)||!Number.isFinite(now))return {ok:false,error:{kind:'WorkflowExtractionClockInvalid'}};
+        if(now>=Date.parse(deadlineAt))return {ok:false,error:{kind:'WebpageImageRunDeadlineExceeded'}};
+      }
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+    }
+    return {ok:true,value:null};
+  }
+
+  /** @param {KnowledgeWorkflowRun} run @param {import("./knowledge-workflow-model.js").KnowledgeModelCommand["role"]} agentRole @param {string} taskId @param {string} systemPrompt @param {unknown} input @param {number} maxOutputTokens @param {readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[]} [attachments] @param {{ readonly technicalAttempt?: number, readonly timeoutMs?: number, readonly responseSchema?: import("./knowledge-workflow-model.js").KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput",readonly budgetPageUrl?:string,readonly phase?:import("./webpage-facts.js").WebpagePhase }} [options] @returns {Promise<Result<Record<string, unknown>, { readonly kind: string, readonly technicalRetriesExhausted?:boolean,readonly technicalAttempts?:number }>>} */
   async function generate(run, agentRole, taskId, systemPrompt, input, maxOutputTokens, attachments = undefined, options = {}) {
+    const managed = options.technicalAttempt !== undefined;
+    const maximumAttempts=dependencies.technicalRetries===false?1:4;
+    for (let attempt = managed ? options.technicalAttempt ?? 1 : 1; attempt <= maximumAttempts; attempt += 1) {
+      const {technicalAttempt: _technicalAttempt, ...modelOptions} = options;
+      const result = await generateOnce(run, agentRole, attempt === 1 ? taskId : `${taskId}:technical-${attempt}`, systemPrompt, input, maxOutputTokens, attachments, modelOptions);
+      if (result.ok || managed || !retryableTechnicalFailure(result.error)) return result;
+      dependencies.logger({event:'knowledge-workflow-technical-retry',ownerId:run.ownerId,runId:run.runId,stage:agentRole,failureKind:result.error.kind});
+      if (attempt === maximumAttempts) return {ok:false,error:{...result.error,technicalRetriesExhausted:true,technicalAttempts:maximumAttempts}};
+    }
+    return {ok:false,error:{kind:'WorkflowStageCommandInvalid'}};
+  }
+
+  /** @param {KnowledgeWorkflowRun} run @param {import("./knowledge-workflow-model.js").KnowledgeModelCommand["role"]} agentRole @param {string} taskId @param {string} systemPrompt @param {unknown} input @param {number} maxOutputTokens @param {readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[]} [attachments] @param {{ readonly timeoutMs?: number, readonly responseSchema?: import("./knowledge-workflow-model.js").KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput",readonly budgetPageUrl?:string,readonly phase?:import("./webpage-facts.js").WebpagePhase }} [options] @returns {Promise<Result<Record<string, unknown>, { readonly kind: string }>>} */
+  async function generateOnce(run, agentRole, taskId, systemPrompt, input, maxOutputTokens, attachments = undefined, options = {}) {
+    const active = await checkProcessingState(run);
+    if (!active.ok) return active;
     const stageKey=await modelStageKey(run,agentRole,taskId,systemPrompt,input,maxOutputTokens,attachments,options),signature=stageKey.slice(`${agentRole}:${taskId}:`.length);
     return stages.run(run,stageKey,signature,async identity=>{
     const progressStage=taskId.startsWith("quiz-")?(agentRole==="question-evaluator"?"Reviewing quizzes":"Generating quizzes"):options.phase==="match"?"Associating images":agentRole==="rights-assessor"?"Checking source access":agentRole==="question-evaluator"?"Reviewing knowledge":"Extracting knowledge";
@@ -799,7 +852,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     try {generated=await agentRuntimeFor(run).run({ownerId:run.ownerId,runId:run.runId,role:agentRole,taskId,systemPrompt,input,maxOutputTokens,...(attachments===undefined?{}:{attachments}),...modelOptions,timeoutMs:remaining,signal:AbortSignal.timeout(remaining)});}
     catch(error){if(error instanceof AgentExecutionBoundaryFailure)error.notStarted=false;throw error;}
     if(!generated.ok)return generated;const saved=await budget.complete(key,generated.value);return saved.ok?generated:saved;
-    },{modelCall:true,maximumProviderAttempts:dependencies.configSnapshots[agentRole].limits.maxTurns,...(dependencies.authorizeFailedReviewCall===undefined?{}:{recoverFailedModel:dependencies.authorizeFailedReviewCall}),...(dependencies.authorizeClaimedModelCall===undefined?{}:{recoverClaimed:({scope,key,inputDigest,createdAt})=>dependencies.authorizeClaimedModelCall?.({ownerId:scope.ownerId,runId:scope.runId,stageKey:key,inputDigest,createdAt})??Promise.resolve(false)})});
+    },{modelCall:true,maximumProviderAttempts:4,cacheProviderRefusals:true,...(dependencies.authorizeFailedReviewCall===undefined?{}:{recoverFailedModel:dependencies.authorizeFailedReviewCall}),...(dependencies.authorizeClaimedModelCall===undefined?{}:{recoverClaimed:({scope,key,inputDigest,createdAt})=>dependencies.authorizeClaimedModelCall?.({ownerId:scope.ownerId,runId:scope.runId,stageKey:key,inputDigest,createdAt})??Promise.resolve(false)})});
   }
 
   /**
@@ -811,17 +864,46 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     dependencies.logger({ event: "source-classification-ensure-entry", ownerId: run.ownerId, runId: run.runId, stage: "source-classifier" });
     const existing = await sourceClassifications.get({ ownerId: run.ownerId, sourceId: run.sourceId });
     if (!existing.ok) return { ok: false, error: { kind: existing.error.kind } };
-    if (existing.value !== null && existing.value.status === "classified") return { ok: true, value: null };
+    if (existing.value !== null && existing.value.sourceRevision === run.sourceRevision && existing.value.status === "classified" && !["WorkflowRetryFailedPages","WorkflowPagesFailed"].includes(run.failureKind??"")) return { ok: true, value: null };
     const context = await sourceContext(run);
     if (!context.ok) return { ok: false, error: { kind: context.error.kind } };
+    /** @type {{kind:string,status?:number,causeKind?:string,technicalRetriesExhausted?:boolean,technicalAttempts?:number}|undefined} */ let technicalFailure;
     const classifier = createSourceClassifier({
-      provider: { generate: async (command) => { const result = await generate(run, command.role, command.taskId, command.systemPrompt, command.input, command.maxOutputTokens, undefined, { responseSchema: command.responseSchema, reasoningEffort: command.reasoningEffort }); return result.ok ? { ok: true, value: { output: result.value } } : result; } },
+      provider: { generate: async (command) => {
+        const config = dependencies.configSnapshots["rights-assessor"];
+        const baseProtocol = dependencies.modelProtocols?.["rights-assessor"];
+        const protocol = baseProtocol === undefined ? undefined : {...baseProtocol, reasoningEffort: /** @type {const} */ ("low")};
+        const maximumAttempts=dependencies.technicalRetries===false?1:4;
+        let correction="";
+        for(let attempt=1;attempt<=maximumAttempts;attempt++) {
+          const active = await checkProcessingState(run);
+          if (!active.ok) {technicalFailure=active.error;return active;}
+          const attemptedCommand=attempt===1?command:{...command,taskId:`${command.taskId}:technical-${attempt}`,systemPrompt:command.systemPrompt+(correction?`\n\n${correction}`:"")};
+          // Keep attempt one byte-compatible with existing durable classification stages.
+          const inputDigest = await imageHash(new TextEncoder().encode(JSON.stringify({model:config.model.name,configDigest:config.digest,protocol,command:attemptedCommand})));
+          let generated;
+          try { generated=await stages.run(run, `source-classifier:${attemptedCommand.taskId}:${inputDigest}`, inputDigest, async identity => {
+            dependencies.preflightModelWork?.("rights-assessor",{ownerId:run.ownerId,runId:run.runId,stageKey:identity.key,inputDigest:identity.inputDigest,createdAt:identity.createdAt});
+            const decisionModel = createSourceDecisionModel({configuration:config,apiKey:dependencies.apiKey,endpoint:dependencies.endpoint,protocol,maximumInputCharacters:3_000_000,fetch:dependencies.fetch,now:dependencies.nowMs,logger:entry=>dependencies.logger({...entry,ownerId:run.ownerId,runId:run.runId,stage:"source-classifier"})});
+            return decisionModel.generate({...attemptedCommand,role:"source-assessor"});
+          },{modelCall:true,maximumProviderAttempts:1,cacheProviderRefusals:true}); }catch(error){if(!(error instanceof AgentExecutionBoundaryFailure))throw error;technicalFailure={kind:error.failure.kind};return {ok:false,error:technicalFailure};}
+          const parsed=generated.ok?parseSourceClassification(generated.value.output):null;
+          if(generated.ok&&parsed?.ok)return generated;
+          const failure=generated.ok?{kind:"SourceClassificationOutputInvalid"}:generated.error;
+          technicalFailure=failure;
+          if(failure.kind!=="SourceClassificationOutputInvalid"&&!retryableTechnicalFailure(failure))return {ok:false,error:failure};
+          if(attempt===maximumAttempts){technicalFailure={...failure,technicalRetriesExhausted:true,technicalAttempts:maximumAttempts};return {ok:false,error:technicalFailure};}
+          if(failure.kind==="SourceClassificationOutputInvalid"||failure.kind==="KnowledgeModelResponseInvalid"||failure.kind==="KnowledgeModelResponseDuplicateKey")correction="The previous response failed output validation. Return exactly mainSubject and topic, with no extra keys: mainSubject must be an exact approved ID from the supplied schema; topic must be 1–120 trimmed characters without HTML or control characters. Classify the same complete, unchanged point set under the original evidence and quality instructions.";
+          dependencies.logger({event:"knowledge-workflow-technical-retry",ownerId:run.ownerId,runId:run.runId,stage:"source-classifier",failureKind:failure.kind});
+        }
+        return {ok:false,error:{kind:"SourceClassificationInferenceFailed"}};
+      } },
       logger: (entry) => dependencies.logger({ event: entry.event, ownerId: entry.ownerId, runId: run.runId, stage: "source-classifier", failureKind: entry.failureKind }),
     });
     const inferred = await classifier.classify({ ownerId: run.ownerId, sourceId: run.sourceId, sourceRevision: run.sourceRevision, title: context.value.title, points });
     if (!inferred.ok) {
       const issue = await sourceClassifications.recordReviewIssue({ runId:run.runId, ownerId: run.ownerId, sourceId: run.sourceId, sourceRevision: run.sourceRevision, issueKind: "inference-failed" });
-      return issue.ok ? { ok: false, error: { kind: inferred.error.kind } } : { ok: false, error: { kind: issue.error.kind } };
+      return issue.ok ? { ok: false, error: technicalFailure ?? { kind: inferred.error.kind } } : { ok: false, error: { kind: issue.error.kind } };
     }
     const legacyAudit = points.flatMap((point) => Object.hasOwn(point, "classification") ? [{ knowledgeId: point.id, classification: point.classification }] : []);
     const persisted = await sourceClassifications.persistAgent({ runId:run.runId, ownerId: run.ownerId, sourceId: run.sourceId, sourceRevision: run.sourceRevision, classification: inferred.value, legacyAudit });
@@ -938,19 +1020,31 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
 
   /** @param {KnowledgeWorkflowRun} run @param {KnowledgePoint} point @param {unknown} sourceEvidence @param {'text'|'image'} sourceMode @param {readonly import('./knowledge-workflow-model.js').KnowledgeModelAttachment[]} [attachments] @param {'illustration'|'evidence'} [imagePurpose] @returns {Promise<Result<{point:KnowledgePoint,verdict:import("../src/features/knowledge-workflows/quality-review.js").ReviewVerdict}|null,{kind:string}>>} */
   async function reviewKnowledge(run,point,sourceEvidence,sourceMode,attachments=[],imagePurpose='evidence') {
+    const savedProgress = await content.loadScratchpad(run);
+    if (!savedProgress.ok) return savedProgress;
+    const retrySuffix = savedProgress.value.retryGeneration ? `-retry-${savedProgress.value.retryGeneration}` : "";
     const evidenceDigest=await imageHash(new TextEncoder().encode(JSON.stringify(sourceEvidence)));
-    const signature=await imageHash(new TextEncoder().encode(JSON.stringify({point,evidenceDigest,sourceMode,imagePurpose,protocol:{review:knowledgeReviewerPrompt,repair:knowledgeRepairPrompt,repairContext:knowledgeCriticRepairContextPrompt,maximumCriticOutputTokens:knowledgeCriticMaximumOutputTokens},config:run.configDigests,attachments:await Promise.all(attachments.map(async a=>({id:a.id,digest:a.bytes instanceof Uint8Array?await imageHash(a.bytes):a.url})))})));
+    const signature=await imageHash(new TextEncoder().encode(JSON.stringify({point,evidenceDigest,sourceMode,imagePurpose,retrySuffix,protocol:{review:knowledgeReviewerPrompt,repair:knowledgeRepairPrompt,repairContext:knowledgeCriticRepairContextPrompt,maximumCriticOutputTokens:knowledgeCriticMaximumOutputTokens},config:run.configDigests,attachments:await Promise.all(attachments.map(async a=>({id:a.id,digest:a.bytes instanceof Uint8Array?await imageHash(a.bytes):a.url})))})));
     return stages.run(run,`knowledge-quality:${signature}:${point.id}`,signature,async()=>{
       const context=await stages.run(run,`knowledge-quality-context:${signature}:${point.id}`,signature,()=>content.reviewContext({ownerId:run.ownerId,runId:run.runId,sourceId:run.sourceId,knowledgeId:point.id}),{resumeSafe:true});
       if(!context.ok)return context;
-      const reviewer=createKnowledgeQualityReviewer({context:context.value,sourceMode,sourceEvidence,imagePurpose,digest:(value)=>imageHash(new TextEncoder().encode(value)),
-        evaluate:(candidate,attempt,repairContext)=>{
+      const reviewer=createKnowledgeQualityReviewer({technicalRetries:dependencies.technicalRetries,context:context.value,sourceMode,sourceEvidence,imagePurpose,digest:(value)=>imageHash(new TextEncoder().encode(value)),
+        evaluate:(candidate,attempt,repairContext,technicalAttempt=1,technicalRetryFeedback)=>{
           const currentAttachments=candidate.mediaCandidates.length?attachments:[],auditEvidence=knowledgeReviewAuditInput(candidate,context.value,sourceEvidence);
-          return generate(run,'question-evaluator',`knowledge-quality-${point.id}-${attempt}`,repairContext===undefined?knowledgeReviewerPrompt:knowledgeReviewerPrompt+"\n"+knowledgeCriticRepairContextPrompt,{knowledge:candidate,sourceEvidence,sourceMode,imagePurpose,...context.value,auditEvidence,currentAttachmentIds:currentAttachments.map(attachment=>attachment.id),...(repairContext===undefined?{}:{repairContext})},knowledgeCriticMaximumOutputTokens,currentAttachments,{responseSchema:knowledgeReviewSchemaFor(context.value,auditEvidence)});
+          return generate(run,'question-evaluator',`knowledge-quality-${point.id}-${attempt}${retrySuffix}`,repairContext===undefined?knowledgeReviewerPrompt:knowledgeReviewerPrompt+"\n"+knowledgeCriticRepairContextPrompt,{knowledge:candidate,sourceEvidence,sourceMode,imagePurpose,...context.value,auditEvidence,...(attempt===1?{}:{reviewAttempt:attempt}),...(savedProgress.value.retryGeneration?{retryGeneration:savedProgress.value.retryGeneration}:{}),currentAttachmentIds:currentAttachments.map(attachment=>attachment.id),...(technicalRetryFeedback===undefined?{}:{technicalRetryFeedback}),...(repairContext===undefined?{}:{repairContext})},knowledgeCriticMaximumOutputTokens,currentAttachments,{responseSchema:knowledgeReviewSchemaFor(context.value,auditEvidence,currentAttachments.map(attachment=>attachment.id)),technicalAttempt});
         },
-        regenerate:(candidate,verdict,retrievalComparison)=>{
+        regenerate:async(candidate,verdict,retrievalComparison,technicalAttempt=1,technicalRetryFeedback)=>{
           const auditEvidence=knowledgeReviewAuditInput(candidate,context.value,sourceEvidence);
-          return generate(run,'knowledge-scraper',`knowledge-repair-${point.id}`,knowledgeRepairPrompt,{knowledge:candidate,review:verdict,sourceEvidence,sourceMode,imagePurpose,...context.value,auditEvidence,requiredRevisions:knowledgeRepairRequirements(candidate,verdict,sourceMode,auditEvidence),retrievalComparison,currentAttachmentIds:attachments.map(attachment=>attachment.id)},16384,attachments,{responseSchema:knowledgeRepairSchemaFor(candidate),budgetPageUrl:point.attribution.sourceUrl});
+          const taskId=`knowledge-repair-${point.id}${retrySuffix}`,input={knowledge:candidate,review:verdict,sourceEvidence,sourceMode,imagePurpose,...context.value,auditEvidence,requiredRevisions:knowledgeRepairRequirements(candidate,verdict,sourceMode,auditEvidence),retrievalComparison,currentAttachmentIds:attachments.map(attachment=>attachment.id)},options={responseSchema:knowledgeRepairSchemaFor(candidate),budgetPageUrl:point.attribution.sourceUrl,technicalAttempt};
+          // Replay any pre-feedback numbered attempt so new input cannot replenish its allowance.
+          if(technicalAttempt>1&&technicalRetryFeedback!==undefined){
+            try{
+              const legacyKey=await modelStageKey(run,'knowledge-scraper',`${taskId}:technical-${technicalAttempt}`,knowledgeRepairPrompt,input,16384,attachments,options);
+              const legacy=await dependencies.database.prepare('SELECT stage_key FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key=? LIMIT 1').bind(run.ownerId,run.runId,legacyKey).first();
+              if(legacy!==null){if(!record(legacy)||legacy.stage_key!==legacyKey)return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};return generate(run,'knowledge-scraper',taskId,knowledgeRepairPrompt,input,16384,attachments,options);}
+            }catch(error){if(!(error instanceof Error))throw error;return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};}
+          }
+          return generate(run,'knowledge-scraper',taskId,knowledgeRepairPrompt,{...input,...(technicalRetryFeedback===undefined?{}:{technicalRetryFeedback})},16384,attachments,options);
         },
       });
       const reviewed=await reviewer.review(point);
@@ -1007,7 +1101,11 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     };
     /** @type {import("../src/features/knowledge-workflows/extraction.js").PageAcquirer} */
     const acquirer = {
-      fetchPage: async ({ url, rootUrl, plan }) => {
+      fetchPage: async ({ url, rootUrl, plan, attempt = 1 }) => {
+        const savedProgress = await content.loadScratchpad(run);
+        if (!savedProgress.ok) return savedProgress;
+        const retryGeneration = savedProgress.value.retryGeneration;
+        const retrySuffix = `${retryGeneration ? `-retry-${retryGeneration}` : ""}${attempt > 1 ? `-attempt-${attempt}` : ""}`;
         const started=await progress.save({ownerId:run.ownerId,runId:run.runId,currentUrl:url,pageTitle:null,sectionTitle:null,stage:"Opening lesson",updatedAt:dependencies.now()});if(!started.ok)return started;
         const context = await sourceContext(run);
         if (!context.ok) return /** @type {const} */ ({ ok: false, error: context.error });
@@ -1015,10 +1113,10 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         const budget=createWebpageImageBudget({database:dependencies.database,policy:dependencies.imagePolicy,scope:{ownerId:run.ownerId,runId:run.runId,pageUrl:url},maximumPages:WEBPAGE_EXTRACTION_POLICY.maximumPages,deadlineAtMs:Date.parse(run.extractionDeadlineAt),now:dependencies.nowMs,logger:dependencies.logger});
         // A resumed workflow may revisit an unfinished page; retain the old
         // reservation and admit a separately bounded read for this revision.
-        const pageAttempt=await budget.reserve({key:`page-acquisition:${run.revision}`,evaluations:0,decodedBytes:0,timeoutMs:ACQUISITION_POLICY.operationMilliseconds});
+        const pageAttempt=await budget.reserve({key:`page-acquisition:${run.revision}${retrySuffix}`,evaluations:0,decodedBytes:0,timeoutMs:ACQUISITION_POLICY.operationMilliseconds});
         if(!pageAttempt.ok)return pageAttempt;
         const pageRemaining=pageAttempt.value.deadlineAtMs-dependencies.nowMs();if(pageRemaining<=0)return {ok:false,error:{kind:'WebpageImageAttemptDeadlineExceeded'}};
-        const acquired = await invokeTool(run, "knowledge-scraper", `scraper-page-read-${url}`, "browser.page.read", { url, rootUrl,signal:AbortSignal.timeout(pageRemaining) });
+        const acquired = await invokeTool(run, "knowledge-scraper", `scraper-page-read-${url}${retrySuffix}`, "browser.page.read", { url, rootUrl,signal:AbortSignal.timeout(pageRemaining) });
         if (!acquired.ok) return /** @type {const} */ ({ ok: false, error: { kind: acquired.error.kind, ...(acquired.error.diagnosticToken === undefined ? {} : { diagnosticToken: acquired.error.diagnosticToken }) } });
         if (!toolRecord(acquired.value) || !(acquired.value.bytes instanceof Uint8Array) || typeof acquired.value.contentType !== "string") return /** @type {const} */ ({ ok: false, error: { kind: "KnowledgePageFetchFailed" } });
         const payload = acquired.value.bytes;
@@ -1044,7 +1142,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         if(!preferences.ok)return preferences;
         // All committed knowledge is authoritative, including points saved before an interrupted page completed.
         const previousKnowledge=preferences.value.previousKnowledge;
-        const observed = await requestPageObservation({normalizeClaims:true,deferQualityReview,structuredOutput:dependencies.webpageStructuredOutput,attemptPolicy,taskId:`scraper-observe-${url}`,input:{url:acquired.value.responseUrl,evidence:acquired.value.evidence,coverageGoals:plan.coverageGoals,lessOften:preferences.value.lessOften,previousKnowledge},maxOutputTokens:4096,
+        const observed = await requestPageObservation({normalizeClaims:true,deferQualityReview,structuredOutput:dependencies.webpageStructuredOutput,attemptPolicy,taskId:`scraper-observe-${url}${retrySuffix}`,input:{url:acquired.value.responseUrl,evidence:acquired.value.evidence,coverageGoals:plan.coverageGoals,lessOften:preferences.value.lessOften,previousKnowledge},maxOutputTokens:4096,
           generate:imageModel,
           logger:dependencies.logger});
         if (!observed.ok) return observed;
@@ -1053,6 +1151,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         if(observed.value.status!=='complete')warnings.push(`Text extraction ${observed.value.status}: ${JSON.stringify(observed.value.partialIssues)}`);
         /** @param {import('./webpage-facts.js').SourceCommand} command @returns {Promise<Result<Record<string,unknown>,{kind:string}>>} */
         async function imageModel(command){
+          if (retrySuffix) command = {...command,input:{.../** @type {Record<string,unknown>} */(command.input),processingAttempt:attempt,...(retryGeneration?{retryGeneration}:{})}};
           const role=command.phase==='normalization'||command.phase==='grounding'?'question-evaluator':'knowledge-scraper';
           let key=await webpageImageCommandKey(dependencies.configSnapshots[role].model.name,dependencies.configSnapshots[role].digest,command);
           let cached=await budget.lookup(key);if(!cached.ok)return cached;if(cached.value!==null)return {ok:true,value:cached.value};
@@ -1130,14 +1229,14 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         associations.set(accepted.normalizedHash,{normalizedHash:accepted.normalizedHash,status:'match',image,binding:reviewed.value.binding});
       }
       return reviewed.ok?{ok:true,value:reviewed.value?.point??null}:reviewed;
-    }}, scratchpad: { load: loadExtractionScratchpad, save: (scratchpad) => content.saveScratchpad(scratchpad, dependencies.now()) }, knowledge: { append: async (point) => {
+    }}, scratchpad: { load: (scope) => loadExtractionScratchpad(scope, run), save: (scratchpad) => content.saveScratchpad(scratchpad, dependencies.now()) }, knowledge: { append: async (point) => {
       const page=embeddedImagesByPage.get(point.attribution.sourceUrl);
       const association=associations.get(point.normalizedHash);
       const image=point.mediaCandidates.length&&association?.status==="match"?association.image:undefined;
       const saved=await appendKnowledge(run,image===undefined?point:{...point,mediaCandidates:[{visualId:image.id}]},image===undefined?undefined:{...image,kind:/** @type {const} */("image"),sourceUrl:image.url,attribution:`${point.attribution.sourceUrl} — supporting source image`,binding:association?.binding},[],page?.warnings);
       if (!saved.ok) return saved;
       return saved;
-    } }, memory: scraperMemory, now: dependencies.now, nowMs: dependencies.nowMs, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken }), policy: {...WEBPAGE_EXTRACTION_POLICY,maximumDurationMs:dependencies.extractionDurationMs??WEBPAGE_EXTRACTION_POLICY.maximumDurationMs} });
+    } }, memory: scraperMemory, now: dependencies.now, nowMs: dependencies.nowMs, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken }), policy: {...WEBPAGE_EXTRACTION_POLICY,maximumPagesPerExecution:1,maximumDurationMs:dependencies.extractionDurationMs??WEBPAGE_EXTRACTION_POLICY.maximumDurationMs} });
   }
 
   /** @param {KnowledgeWorkflowRun} run @param {RightsDecision} rights @returns {Promise<Result<ReturnType<typeof createExtractionRunner>, { readonly kind: string }>>} */
@@ -1168,7 +1267,8 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       if(dependencies.materialContent===undefined)return {ok:false,error:{kind:"WorkflowMaterialImageUnavailable"}};
       const read=await dependencies.materialContent.read(run.ownerId,storedMaterial.objectKey,{sourceId:run.sourceId,runId:run.runId,sourceRevision:run.sourceRevision,digest:material.contentDigest});
       if(!read.ok)return read;
-      if(await imageHash(read.value)!==material.contentDigest)return {ok:false,error:{kind:"UploadedImageHashMismatch"}};
+      // Uploaded material stores bare SHA-256; image provenance uses the prefixed form.
+      if((await imageHash(read.value)).slice(7)!==material.contentDigest.replace(/^sha256:/u,""))return {ok:false,error:{kind:"UploadedImageHashMismatch"}};
       originalBytes=read.value;
       if(material.mediaType===BUNDLE_TYPE){cachedBundle=parseImageBundle(originalBytes);if(!cachedBundle.ok)return cachedBundle;}
     }
@@ -1190,14 +1290,14 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         const result = await requestExtractionPlan({ taskId: "scraper-material-plan", input: { operation: "plan-authorized-material", ...input, availableSections: sectionSummary, embeddedMedia }, maxOutputTokens: 2048, systemPrompt: `${extractionPlanPrompt} Copy frontier URLs literally from availableSections.url. Include the supplied section URLs needed to cover the key concepts, prioritize high-value sections, and leave unresolvedGaps for concepts that still need observation.`, repairPrompt: `${extractionPlanRepairPrompt} Copy frontier URLs literally from availableSections.url. Include the supplied section URLs needed to cover the key concepts, prioritize high-value sections, and leave unresolvedGaps for concepts that still need observation.`, generate: (command) => generatePlanner(run, command), logger: dependencies.logger });
         if (!result.ok) return result;
         const plan = /** @type {import("../src/features/knowledge-workflows/extraction.js").ExtractionPlan} */ (result.value);
-        const remaining = sectionUrls.filter((sectionUrl) => !input.scratchpad.processedUrls.includes(sectionUrl));
+        const remaining = sectionUrls.filter((sectionUrl) => !input.scratchpad.processedUrls.includes(sectionUrl) && !input.scratchpad.failedPages?.some(page=>page.url===sectionUrl) && (!input.scratchpad.retryingFailedPages || input.scratchpad.frontier?.includes(sectionUrl)));
         return /** @type {const} */ ({ ok: true, value: boundAuthorizedMaterialPlan({ ...plan, frontier: remaining }, remaining, input.scratchpad) });
       },
       replan: async (input) => {
         const result = await requestExtractionPlan({ taskId: `scraper-material-replan-${input.observation.url}`, input: { operation: "replan-authorized-material", ...input, availableSections: sectionSummary, embeddedMedia }, maxOutputTokens: 2048, systemPrompt: `${extractionPlanPrompt} Re-plan authorized-material extraction after this observation. Copy frontier URLs literally from availableSections.url. Preserve useful coverage, remove processed section URLs from the frontier, prioritize unresolved high gaps, and use only the exact available section URLs.`, repairPrompt: `${extractionPlanRepairPrompt} Re-plan authorized-material extraction after this observation. Copy frontier URLs literally from availableSections.url. Preserve useful coverage, remove processed section URLs from the frontier, prioritize unresolved high gaps, and use only the exact available section URLs.`, generate: (command) => generatePlanner(run, command), logger: dependencies.logger });
         if (!result.ok) return result;
         const plan = /** @type {import("../src/features/knowledge-workflows/extraction.js").ExtractionPlan} */ (result.value);
-        const remaining = sectionUrls.filter((sectionUrl) => !input.scratchpad.processedUrls.includes(sectionUrl));
+        const remaining = sectionUrls.filter((sectionUrl) => !input.scratchpad.processedUrls.includes(sectionUrl) && !input.scratchpad.failedPages?.some(page=>page.url===sectionUrl) && (!input.scratchpad.retryingFailedPages || input.scratchpad.frontier?.includes(sectionUrl)));
         return /** @type {const} */ ({ ok: true, value: boundAuthorizedMaterialPlan({ ...plan, frontier: remaining }, remaining, input.scratchpad) });
       },
     };
@@ -1205,7 +1305,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     /** @type {NonNullable<import("../src/features/knowledge-workflows/extraction.js").ExtractionDependencies["batchAcquirer"]>} */
     const batchAcquirer = {
       key: Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join(""),
-      fetchBatch: async ({ urls, plan, scratchpad }) => {
+      fetchBatch: async ({ urls, plan, scratchpad, attempt = 1 }) => {
         const context = await sourceContext(run);
         if (!context.ok) return { ok: false, error: context.error };
         /** @type {(MaterialSection & { readonly url: string })[]} */
@@ -1223,11 +1323,11 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         }
         const materialProgress=await progress.save({ownerId:run.ownerId,runId:run.runId,currentUrl:sections[0].url,pageTitle:material.fileName,sectionTitle:sections[0].title,stage:"Extracting knowledge",updatedAt:dependencies.now()});if(!materialProgress.ok)return materialProgress;
         const imageIdentity=currentVisual===undefined?undefined:{ownerId:run.ownerId,runId:run.runId,locator:sections[0].locator,visualId:currentVisual.id,digest:await imageHash(currentVisual.bytes)};
-        const observed = await requestMaterialBatch({ reviewMaterial:false, taskId: `scraper-material-batch-${sections[0]?.id}`, input: { sections, fileName: material.fileName, sourceContext: context.value, mode: material.mode, scope:{ownerId:run.ownerId,runId:run.runId}, ...(currentVisual === undefined ? {} : { visualId: currentVisual.id, imageIdentity }), coverageGoals: plan.coverageGoals, progress: { processedUrls: scratchpad.processedUrls, acceptedHashes: scratchpad.acceptedHashes, coverage: scratchpad.coverage, pageNotes: scratchpad.pageNotes ?? [], unresolvedGaps: scratchpad.unresolvedGaps } }, decodeImage:dependencies.decodeImage, maxOutputTokens: 16384, ...(currentVisual === undefined ? {} : { attachments: [{ id: currentVisual.id, mediaType: /** @type {"image/png" | "image/jpeg" | "image/webp" | "image/gif"} */ (currentVisual.mediaType), bytes: currentVisual.bytes }] }), generate: (command) => generate(run, command.phase === "normalization" ? "question-evaluator" : "knowledge-scraper", command.taskId, command.systemPrompt, command.input, command.maxOutputTokens, command.attachments, { timeoutMs: command.timeoutMs, responseSchema: command.responseSchema, reasoningEffort: command.reasoningEffort, providerSort: command.providerSort,budgetPageUrl:sections[0].url }), logger: (entry) => dependencies.logger({ ...entry, runId: run.runId, stage: "knowledge-scraper" }) });
+        const observed = await requestMaterialBatch({ technicalRetries:dependencies.technicalRetries, reviewMaterial:false, taskId: `scraper-material-batch-${sections[0]?.id}${scratchpad.retryGeneration ? `-retry-${scratchpad.retryGeneration}` : ""}${attempt > 1 ? `-attempt-${attempt}` : ""}`, input: { sections, fileName: material.fileName, sourceContext: context.value, mode: material.mode, scope:{ownerId:run.ownerId,runId:run.runId}, ...(currentVisual === undefined ? {} : { visualId: currentVisual.id, imageIdentity }), coverageGoals: plan.coverageGoals, progress: { processedUrls: scratchpad.processedUrls, acceptedHashes: scratchpad.acceptedHashes, coverage: scratchpad.coverage, pageNotes: scratchpad.pageNotes ?? [], unresolvedGaps: scratchpad.unresolvedGaps } }, decodeImage:dependencies.decodeImage, maxOutputTokens: 16384, ...(currentVisual === undefined ? {} : { attachments: [{ id: currentVisual.id, mediaType: /** @type {"image/png" | "image/jpeg" | "image/webp" | "image/gif"} */ (currentVisual.mediaType), bytes: currentVisual.bytes }] }), generate: (command) => generate(run, command.phase === "normalization" ? "question-evaluator" : "knowledge-scraper", command.taskId, command.systemPrompt, {.../** @type {Record<string,unknown>} */(command.input),...(attempt>1?{processingAttempt:attempt}:{}),...(scratchpad.retryGeneration?{retryGeneration:scratchpad.retryGeneration}:{})}, command.maxOutputTokens, command.attachments, { timeoutMs: command.timeoutMs, responseSchema: command.responseSchema, technicalAttempt:command.technicalAttempt, reasoningEffort: command.reasoningEffort, providerSort: command.providerSort,budgetPageUrl:sections[0].url }), logger: (entry) => dependencies.logger({ ...entry, runId: run.runId, stage: "knowledge-scraper" }) });
         if (!observed.ok) return observed;
-        return { ok: true, value: observed.value.map((page, index) => ({ ...page, title: `${material.fileName} — ${sections[index].title}`, byteCount: material.mode === "image" && currentVisual !== undefined ? currentVisual.bytes.byteLength : new TextEncoder().encode(sections[index].text).byteLength, redirects: 0, links: sectionUrls, observedAt: dependencies.now() })) };
+        return { ok: true, value: observed.value.map((page, index) => ({ ...page, title: sections[index].title, byteCount: material.mode === "image" && currentVisual !== undefined ? currentVisual.bytes.byteLength : new TextEncoder().encode(sections[index].text).byteLength, redirects: 0, links: sectionUrls, observedAt: dependencies.now() })) };
       },
-      ...(material.mode === "image" ? { maximumBatchSize: 1 } : {}),
+      maximumBatchSize: 1,
     };
     return { ok: true, value: createExtractionRunner({ rights: { status: "allowed", sourceId: run.sourceId, sourceRevision: run.sourceRevision }, robots: { status: "allowed" }, planner, acquirer: { fetchPage: async () => ({ ok: false, error: { kind: "WorkflowMaterialBatchRequired" } }) }, batchAcquirer, reviewer:{review:async(point)=>{
       const section=sectionsByUrl.get(point.attribution.sourceUrl);
@@ -1236,18 +1336,22 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       if(!visual.ok)return {ok:false,error:{kind:'error' in visual?visual.error?.kind??'WorkflowMaterialImageUnavailable':'WorkflowMaterialImageUnavailable'}};
       const reviewed=await reviewCapturedCandidate({run,point,sourceEvidence:{sections:[{id:section.id,url:point.attribution.sourceUrl,locator:section.locator,text:section.text}]},sourceMode:material.mode==='image'?'image':'text',...(visual.value===undefined?{}:{supportingImage:{id:visual.value.id,bytes:visual.value.bytes,mediaType:/** @type {'image/png'|'image/jpeg'|'image/webp'|'image/gif'} */(visual.value.mediaType)}})});
       return reviewed.ok?{ok:true,value:reviewed.value?.point??null}:reviewed;
-    }}, scratchpad: { load: loadExtractionScratchpad, save: (scratchpad) => content.saveScratchpad(scratchpad, dependencies.now()) }, knowledge: { append: async (point) => {
+    }}, scratchpad: { load: (scope) => loadExtractionScratchpad(scope, run), save: (scratchpad) => content.saveScratchpad(scratchpad, dependencies.now()) }, knowledge: { append: async (point) => {
       if(material.mode!=="image")return appendKnowledge(run,point);
       const section=sectionsByUrl.get(point.attribution.sourceUrl);
       if(section===undefined)return {ok:false,error:{kind:"WorkflowMaterialSectionNotFound"}};
       const visual=await visualFor({...section,url:point.attribution.sourceUrl});
       if(!visual.ok||visual.value===undefined)return {ok:false,error:{kind:visual.error?.kind??"WorkflowMaterialImageUnavailable"}};
       return appendKnowledge(run,point,visual.value);
-    } }, memory: scraperMemory, now: dependencies.now, nowMs: dependencies.nowMs, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, failureKind: entry.failureKind }), policy: { maximumFrontier: 500, maximumPageBytes: material.mode === "image" ? 20 * 1024 * 1024 : 1_000_000, maximumRedirects: 0, maximumPages: 100, maximumDurationMs: 30 * 60 * 1_000, maximumPagesPerExecution: 5 } }) };
+    } }, memory: scraperMemory, now: dependencies.now, nowMs: dependencies.nowMs, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, failureKind: entry.failureKind }), policy: { maximumFrontier: 500, maximumPageBytes: material.mode === "image" ? 20 * 1024 * 1024 : 1_000_000, maximumRedirects: 0, maximumPages: 100, maximumDurationMs: 30 * 60 * 1_000, maximumPagesPerExecution: 1 } }) };
   }
 
-  /** @param {KnowledgeWorkflowRun} run @returns {ReturnType<typeof createQuizActorCritic>} */
-  function quizzes(run) {
+  /** @param {KnowledgeWorkflowRun} run @param {import("./knowledge-workflow-quiz-failures.js").FailedQuizItem} [retryFailure] @param {{phase:"generation"|"review"}} [phase] @returns {ReturnType<typeof createQuizActorCritic>} */
+  function quizzes(run,retryFailure,phase) {
+    const retryGeneration=run.quizRetryGeneration??0;
+    const generatorGeneration=retryFailure?.phase==="review"?retryFailure.generatorGeneration:retryGeneration;
+    const generatorSuffix=generatorGeneration?`-quiz-retry-${generatorGeneration}`:"";
+    const reviewerSuffix=retryGeneration?`-quiz-retry-${retryGeneration}`:"";
     /** @param {KnowledgePoint} knowledge @returns {Promise<Result<boolean,{kind:string}>>} */
     async function beforeGenerate(knowledge) {
       const context=await content.reviewContext({ownerId:run.ownerId,runId:run.runId,sourceId:run.sourceId,knowledgeId:knowledge.id});
@@ -1276,13 +1380,17 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     }
     /** @type {import("../src/features/knowledge-workflows/quiz.js").QuestionGenerator} */
     const generator = { generate: async (input) => {
+      if(phase)phase.phase="generation";
+      const key=`quiz-draft-ready:${input.knowledge.id}:${input.attempt}`;
+      return stages.run(run,key,await imageHash(new TextEncoder().encode(key)),async()=>{
       const captured=await quizEvidence(input.knowledge);
       if(!captured.ok)return captured;
       const quizSource=record(captured.value.sourceEvidence)?captured.value.sourceEvidence:null;
       const quizHeadings=Array.isArray(quizSource?.headings)?quizSource.headings:[];
       const heading=quizHeadings.find(h=>record(h)&&h.level===1);
       const quizProgress=await progress.save({ownerId:run.ownerId,runId:run.runId,currentUrl:input.knowledge.attribution.sourceUrl,pageTitle:record(heading)&&text(heading.text)?heading.text:null,sectionTitle:record(heading)&&text(heading.text)?heading.text:null,stage:"Generating quizzes",updatedAt:dependencies.now()});if(!quizProgress.ok)return quizProgress;
-      const generated = await generate(run, "question-generator", `quiz-generator-${input.knowledge.id}-${input.attempt}`, questionGeneratorPrompt, {...input,sourceEvidence:captured.value.sourceEvidence,...captured.value.context}, 16384, captured.value.attachments, { responseSchema: quizPairSchema(true) });
+      const {technicalAttempt, ...generationInput}=input;
+      const generated = await generate(run, "question-generator", `quiz-generator-${input.knowledge.id}-${input.attempt}${generatorSuffix}`, questionGeneratorPrompt, {...generationInput,sourceEvidence:captured.value.sourceEvidence,...captured.value.context}, 16384, captured.value.attachments, { responseSchema: quizPairSchema(true),technicalAttempt });
       if (!generated.ok) return generated.error.kind === 'KnowledgeModelResponseInvalid' ? {ok:false,error:{kind:'QuizDraftSchemaInvalid'}} : generated;
       const draftValue = normalizeQuizPairDraftAliases(generated.value);
       if (!isQuizPairDraft(draftValue)) return { ok: false, error: { kind: "QuizDraftSchemaInvalid", validationIssues: quizPairDraftValidationIssues(draftValue) } };
@@ -1290,16 +1398,18 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       const correct = pair.multipleChoice.correctOptionKeys.map((key) => pair.multipleChoice.options.find((option) => option.key === key)?.text);
       if (correct.length !== pair.canonicalAnswers.length || correct.some((answer) => typeof answer !== "string")) return { ok: false, error: { kind: "QuizDraftSchemaInvalid" } };
       const draft = Object.freeze({ id: pair.multipleChoice.id, knowledgeId: input.knowledge.id, knowledgeRevision: input.knowledge.sourceRevision, kind: pair.multipleChoice.kind, prompt: pair.multipleChoice.prompt, options: Object.freeze(pair.multipleChoice.options.map((option) => option.text)), answer: pair.multipleChoice.kind === "single-choice" ? /** @type {string} */ (correct[0]) : Object.freeze(/** @type {string[]} */ (correct)), explanation: pair.multipleChoice.explanation, citedEvidenceUrls: pair.citedEvidenceUrls, pairedQuiz: Object.freeze({ ...pair, canonicalAnswers: pair.fillBlank.canonicalAnswers }) });
-      const validated = await invokeTool(run, "question-generator", `quiz-validate-${input.knowledge.id}-${input.attempt}`, "quiz.question.validate", { draft: draftValue, knowledge: input.knowledge });
+      const validated = await invokeTool(run, "question-generator", `quiz-validate-${input.knowledge.id}-${input.attempt}${generatorSuffix}${(input.technicalAttempt??1)>1?`:technical-${input.technicalAttempt}`:""}`, "quiz.question.validate", { draft: draftValue, knowledge: input.knowledge });
       if (!validated.ok) return { ok: false, error: { kind: validated.error.kind } };
-      const duplicate = await invokeTool(run, "question-generator", `quiz-duplicate-${input.knowledge.id}-${input.attempt}`, "quiz.duplicate.check", { knowledge: input.knowledge, draft });
+      const duplicate = await invokeTool(run, "question-generator", `quiz-duplicate-${input.knowledge.id}-${input.attempt}${generatorSuffix}${(input.technicalAttempt??1)>1?`:technical-${input.technicalAttempt}`:""}`, "quiz.duplicate.check", { knowledge: input.knowledge, draft });
       if (!duplicate.ok) return { ok: false, error: { kind: duplicate.error.kind } };
       if (toolRecord(duplicate.value) && duplicate.value.duplicate === true) return { ok: false, error: { kind: "QuizDuplicate" } };
       return { ok: true, value: draft };
+      },{resumeSafe:true});
     } };
     /** @type {import("../src/features/knowledge-workflows/quiz.js").QuestionReviewer} */
     const reviewer = { evaluate: async (input) => {
-      const evidence = await invokeTool(run, "question-evaluator", `quiz-evidence-${input.draft.id}-${input.attempt}`, "quiz.evidence.lookup", input);
+      if(phase)phase.phase="review";
+      const evidence = await invokeTool(run, "question-evaluator", `quiz-evidence-${input.draft.id}-${input.attempt}${reviewerSuffix}`, "quiz.evidence.lookup", input);
       if (!evidence.ok) return { ok: false, error: { kind: evidence.error.kind } };
       const knowledge=await content.listKnowledgePoints({ownerId:run.ownerId,runId:run.runId,sourceId:run.sourceId,sourceRevision:run.sourceRevision});
       if(!knowledge.ok)return knowledge;
@@ -1307,11 +1417,12 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       if(point===undefined)return {ok:false,error:{kind:'KnowledgeReviewEvidenceUnavailable'}};
       const captured=await quizEvidence(point);
       if(!captured.ok)return captured;
-      const evaluated = await generate(run, "question-evaluator", `quiz-evaluator-${input.draft.id}-${input.attempt}`, questionEvaluatorPrompt, {...input,sourceEvidence:captured.value.sourceEvidence,...captured.value.context}, 2048, captured.value.attachments, { responseSchema: questionEvaluationSchema });
+      const {technicalAttempt, ...reviewInput}=input;
+      const evaluated = await generate(run, "question-evaluator", `quiz-evaluator-${input.draft.id}-${input.attempt}${reviewerSuffix}`, questionEvaluatorPrompt, {...reviewInput,sourceEvidence:captured.value.sourceEvidence,...captured.value.context}, 2048, captured.value.attachments, { responseSchema: questionEvaluationSchema,technicalAttempt });
       if (!evaluated.ok) return evaluated;
       return normalizeKnowledgeQuizEvaluation(evaluated.value, input.knowledge);
     } };
-    return createQuizActorCritic({ generator, reviewer, beforeGenerate, repository: quizRepository, now: dependencies.now, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, failureKind: entry.failureKind }), maxAttempts: QUIZ_MAX_ATTEMPTS });
+    return createQuizActorCritic({ technicalRetries:dependencies.technicalRetries, generator, reviewer, beforeGenerate, repository: quizRepository, now: dependencies.now, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, failureKind: entry.failureKind }), maxAttempts: QUIZ_MAX_ATTEMPTS });
   }
 
   return Object.freeze({
@@ -1338,7 +1449,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     /** @param {KnowledgeWorkflowRun} run @returns {Promise<Result<unknown, KnowledgeWorkflowExecutionFailure>>} */
     async execute(run) {
       if (!isKnowledgeWorkflowRun(run)) return { ok: false, error: { kind: "WorkflowCommandInvalid" } };
-      if (run.state === "source-added" || run.state === "awaiting-rights-review" || run.state === "awaiting-upload" || run.state === "completed" || run.state === "abandoned") return { ok: true, value: { state: run.state, run } };
+      if (run.state === "source-added" || run.state === "awaiting-rights-review" || run.state === "awaiting-upload" || run.state === "paused" || run.state === "awaiting-time-limit-decision" || run.state === "retryable-failure" || run.state === "completed" || run.state === "abandoned") return { ok: true, value: { state: run.state, run } };
       let current = run;
       const navigationHandoff=createRobotsNavigationHandoff({sourceUrl:run.canonicalSourceIdentity,readPage:c=>dependencies.browser.readPage(c),click:async c=>{const clicked=await invokeTool(run,'knowledge-scraper',`navigation-click-${c.targetId}`,'browser.navigation.click',c);return clicked.ok?{ok:true,value:/** @type {import('./hybrid-navigation.js').NavigationPage} */(clicked.value)}:clicked;}});
       /** @type {RightsDecision | undefined} */
@@ -1395,6 +1506,68 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         now: dependencies.now,
         logger: (entry) => dependencies.logger({ event: entry.event, failureKind: entry.failureKind, ...(entry.diagnosticToken === undefined ? {} : { diagnosticToken: entry.diagnosticToken }) }),
       });
+      // These non-model checkpoints cache successes only. Child paid stages keep
+      // their own provider uncertainty and accounting protections on a resume.
+      /** @template T @param {string} key @param {()=>Promise<Result<T,{kind:string}>>} work @returns {Promise<Result<T,{kind:string}>>} */
+      async function successfulCheckpoint(key, work) {
+        const digest = await imageHash(new TextEncoder().encode(key));
+        return stages.run(current, key, digest, work, {resumeSafe:true});
+      }
+      /** @param {readonly KnowledgePoint[]} points */
+      async function classifyQuizBatch(points) {
+        const progress = await content.loadScratchpad(current);
+        if (!progress.ok) return progress;
+        return successfulCheckpoint(`quiz-batch-classification:${current.sourceRevision}:${progress.value.retryGeneration ?? 0}`, () => ensureSourceClassification(current, points));
+      }
+      /** @param {{ownerId:string,runId:string,points:readonly KnowledgePoint[]}} command @returns {Promise<Result<import('../src/features/knowledge-workflows/quiz.js').QuizRunResult & {hasMore:boolean},{kind:string}>>} */
+      async function quizChunk(command) {
+        /** @type {import('../src/features/knowledge-workflows/quiz.js').QuizDisposition[]} */ const dispositions = [];
+        const completedIds = new Set(),pointIds=new Set(command.points.map(point=>point.id));
+        const saved = await dependencies.database.prepare("SELECT s.stage_key,s.result_json,q.status AS publication_status,q.attempt_number AS publication_attempt FROM knowledge_workflow_stages s LEFT JOIN knowledge_workflow_quizzes q ON q.owner_id=s.owner_id AND q.run_id=s.run_id AND q.knowledge_id=substr(s.stage_key,length('quiz-point-completed:')+1) WHERE s.owner_id=? AND s.run_id=? AND s.stage_key LIKE 'quiz-point-completed:%' AND s.status='completed'").bind(current.ownerId,current.runId).all();
+        if (!saved.success) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+        for (const row of saved.results) {
+          let result;
+          try { result = record(row) && text(row.result_json) ? JSON.parse(row.result_json) : null; } catch { return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}}; }
+          if (!record(row) || !text(row.stage_key) || !record(result) || result.ok !== true || !record(result.value) || !Array.isArray(result.value.dispositions) || result.value.dispositions.length !== 1) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+          const disposition = result.value.dispositions[0];
+          if (!record(disposition) || !text(disposition.knowledgeId) || row.stage_key !== `quiz-point-completed:${disposition.knowledgeId}` || completedIds.has(disposition.knowledgeId) || !Number.isSafeInteger(disposition.attempts) || typeof disposition.attempts !== 'number' || disposition.attempts < 0 || disposition.attempts > QUIZ_MAX_ATTEMPTS || !(disposition.failureKind === null || text(disposition.failureKind)) || !(disposition.restrictedUntil === null || timestamp(disposition.restrictedUntil))) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+          if (disposition.status === 'accepted') {
+            if (!pointIds.has(disposition.knowledgeId) || (disposition.publicationStatus !== 'published' && disposition.publicationStatus !== 'pending-review') || disposition.attempts < 1 || disposition.failureKind !== null || disposition.restrictedUntil !== null) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+            if (row.publication_status !== disposition.publicationStatus || row.publication_attempt !== disposition.attempts) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+          } else if (disposition.status === 'abandoned') {
+            if (disposition.publicationStatus !== null) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+            if (!pointIds.has(disposition.knowledgeId)) {
+              const discarded = await dependencies.database.prepare("SELECT knowledge_id FROM knowledge_workflow_purge_tombstones WHERE owner_id=? AND run_id=? AND knowledge_id=? LIMIT 1").bind(current.ownerId,current.runId,disposition.knowledgeId).first();
+              if (!record(discarded) || discarded.knowledge_id !== disposition.knowledgeId) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+            }
+          } else return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+          if (result.value.statistics !== undefined) {
+            const stats = result.value.statistics;
+            if (!record(stats) || stats.inputPoints !== 1 || !['attemptedPoints','retriedPoints','extraAttempts','quizDroppedPoints','exhaustedDropPoints','preferenceDroppedPoints'].every(key=>typeof stats[key]==='number' && Number.isSafeInteger(stats[key]) && stats[key]>=0) || !['retryRate','quizDropRate'].every(key=>typeof stats[key]==='number' && Number.isFinite(stats[key]) && stats[key]>=0 && stats[key]<=1)) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+          }
+          completedIds.add(disposition.knowledgeId);
+          dispositions.push(/** @type {import('../src/features/knowledge-workflows/quiz.js').QuizDisposition} */(disposition));
+        }
+        const deferred=await readFailedQuizItems(dependencies.database,current);if(!deferred.ok)return deferred;
+        const failures=new Map(deferred.value.map(item=>[item.knowledgeId,item]));
+        if(deferred.value.some(item=>!pointIds.has(item.knowledgeId)))return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+        const generation=current.quizRetryGeneration??0;
+        const pending = command.points.filter(point => !completedIds.has(point.id) && (failures.get(point.id)===undefined || (failures.get(point.id)?.generation??generation)<generation));
+        if (pending.length) {
+          const point = pending[0];
+          /** @type {{phase:"generation"|"review"}} */ const phase={phase:"generation"};
+          const prior=failures.get(point.id);
+          const processed = await successfulCheckpoint(`quiz-point-completed:${point.id}`, () => quizzes(current,prior,phase).run({...command,points:[point]}));
+          if (!processed.ok) {
+            if(!exhaustedQuizTechnicalFailure(processed.error))return processed;
+            const error=/** @type {{kind:string,causeKind?:string,status?:number}} */(processed.error);
+            const failure={knowledgeId:point.id,summary:point.summary,failureKind:error.kind,...(error.causeKind?{causeKind:error.causeKind}:{}),...(error.status===undefined?{}:{status:error.status}),attempts:4,failedAt:dependencies.now(),generation,phase:phase.phase,generatorGeneration:prior?.phase==="review"?prior.generatorGeneration:generation};
+            const noted=await successfulCheckpoint(`quiz-point-failed:${point.id}:${generation}`,async()=>({ok:true,value:failure}));
+            if(!noted.ok)return noted;
+          } else dispositions.push(...processed.value.dispositions);
+        }
+        return {ok:true,value:{dispositions,hasMore:pending.length>1}};
+      }
       const executor = createKnowledgeWorkflowExecutor({ transition, robots: { check: (command) => robots.check({ rights: command.rights, userAgent: "knowledge-platform" }) }, extraction: { run: async (command) => { const startedAtMs = command.run.extractionStartedAt === null ? dependencies.nowMs() : Date.parse(command.run.extractionStartedAt); const deadlineAtMs = command.run.extractionDeadlineAt === null ? startedAtMs + 30 * 60 * 1_000 : Date.parse(command.run.extractionDeadlineAt); if (!Number.isFinite(startedAtMs) || !Number.isFinite(deadlineAtMs)) return { ok: false, error: { kind: "WorkflowExtractionClockInvalid" } }; if (command.run.materialId !== null && command.run.materialId !== undefined) { const materialRunner = await authorizedMaterialExtraction(command.run, command.rights); if (!materialRunner.ok) return materialRunner; return materialRunner.value.run({ ownerId: command.run.ownerId, runId: command.run.runId, sourceId: command.run.sourceId, sourceRevision: command.run.sourceRevision, rootUrl: command.run.canonicalSourceIdentity, startedAtMs, deadlineAtMs }); } let navigation=reviewedNavigation;
         if(navigation&&!navigationWithinScope(navigation.sourceRootUrl,command.run.canonicalSourceIdentity))return {ok:false,error:{kind:"ReviewedNavigationScopeInvalid"}};
         if(navigation)navigationHandoff.setRoot(navigation.sourceRootUrl);
@@ -1414,7 +1587,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
           }),{resumeSafe:true});
           if(!discovered.ok)return discovered;navigation=discovered.value;navigationHandoff.setRoot(navigation.sourceRootUrl);
         }
-        return extraction(command.run, command.rights, { status: "allowed" }, check,navigation).run({ ownerId: command.run.ownerId, runId: command.run.runId, sourceId: command.run.sourceId, sourceRevision: command.run.sourceRevision, rootUrl: navigation?.sourceRootUrl??command.run.canonicalSourceIdentity, startedAtMs, deadlineAtMs }); } }, knowledge: { list: (scope) => content.listKnowledgePoints(scope), reviewedEmpty:async(scope)=>{const scratchpad=await content.loadScratchpad(scope);return scratchpad.ok?{ok:true,value:scratchpad.value.acceptedHashes.length===0&&(scratchpad.value.reviewedCandidateCount??0)>0}:scratchpad;} }, classification: { ensure: ({ points }) => ensureSourceClassification(current, points) }, quiz: { run: (command) => quizzes(run).run(command) }, cleanup: { close: () => dependencies.browser.close() }, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, stage: entry.stage, failureKind: entry.failureKind }) });
+        return extraction(command.run, command.rights, { status: "allowed" }, check,navigation).run({ ownerId: command.run.ownerId, runId: command.run.runId, sourceId: command.run.sourceId, sourceRevision: command.run.sourceRevision, rootUrl: navigation?.sourceRootUrl??command.run.canonicalSourceIdentity, startedAtMs, deadlineAtMs }); } }, knowledge: { list: (scope) => content.listKnowledgePoints(scope), reviewedEmpty:async(scope)=>{const scratchpad=await content.loadScratchpad(scope);return scratchpad.ok?{ok:true,value:scratchpad.value.acceptedHashes.length===0&&((scratchpad.value.reviewedCandidateCount??0)>0||(scratchpad.value.failedPages?.length??0)>0)}:scratchpad;} }, classification: { ensure: ({ points }) => classifyQuizBatch(points) }, quiz: { run: (command) => quizChunk(command) }, cleanup: { close: () => dependencies.browser.close() }, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, stage: entry.stage, failureKind: entry.failureKind }) });
       const result = await executor.run({ run: current, rootUrl: current.canonicalSourceIdentity, ...(rights === undefined ? {} : { rightsAssessment: rights }) });
       return result.ok ? result : { ok: false, error: { kind: result.error.causeKind, ...(result.error.detailKind === undefined ? {} : { detailKind: result.error.detailKind }), ...(result.error.detailDiagnosticToken === undefined ? {} : { detailDiagnosticToken: result.error.detailDiagnosticToken }) } };
     },
@@ -1426,6 +1599,12 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       return purged.ok ? purged : { ok: false, error: { kind: purged.error.kind } };
     },
   });
+}
+
+/** @param {{kind:string,causeKind?:string,status?:number,technicalRetriesExhausted?:boolean}} error */
+function retryableTechnicalFailure(error) {
+  if(error.technicalRetriesExhausted || error.causeKind && /Persistence|Ledger|Accounting|Authorization|Credential|Budget|Permission/u.test(error.causeKind))return false;
+  return ['KnowledgeModelTimeout','KnowledgeModelCancelled','KnowledgeModelUnavailable','KnowledgeModelResponseReadFailed','KnowledgeModelResponseInvalid','KnowledgeModelResponseDuplicateKey','WorkflowAgentAgentOutputInvalid','WorkflowStageCallUncertain'].includes(error.kind) || error.kind==='KnowledgeModelRejected' && ((error.status??0)>=200 && (error.status??0)<300 || [408,429,500,502,503,504].includes(error.status??0));
 }
 
 export { boundAuthorizedMaterialPlan, extractionPlanPrompt, extractionPlanRepairPrompt, pageObservationPrompt, pageObservationRepairPrompt, materialBatchPrompt, materialImagePrompt, questionGeneratorPrompt, questionEvaluatorPrompt, questionEvaluationSchema, projectHtml, readRobotsWithFallback };

@@ -103,7 +103,7 @@ Deno.test("raw search preserves query and provider order before the global limit
               ),
               description: "New songs",
             }),
-          ]),
+          ].slice(0, command.limit)),
         };
       },
     },
@@ -126,7 +126,7 @@ Deno.test("raw search preserves query and provider order before the global limit
               "Voice leading explained",
               "https://www.youtube.com/watch?v=lesson-1",
             ),
-          ]),
+          ].slice(0, command.limit)),
         };
       },
     },
@@ -149,14 +149,14 @@ Deno.test("raw search preserves query and provider order before the global limit
       call.query,
       "harmony",
     );
-    equal(call.limit, 20);
+    equal(call.limit, 1);
   }
   if (!result.ok) return;
   equal(result.value.items.length, 2);
   equal(result.value.items[0].providerId, "web");
   equal(
     result.value.items[1].canonicalUrl,
-    "https://noise.example/",
+    "https://music.example/",
   );
   equal(result.value.submittedQuery, "harmony");
   equal(result.value.providerQuery, calls[0].query);

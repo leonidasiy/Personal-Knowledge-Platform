@@ -237,7 +237,7 @@ Deno.test("source approval validates dynamic contracts without filename inferenc
       canonicalUrl: "https://user:secret@publisher.example/learn",
     },
     { ...approval, adapter: { ...approval.adapter, capabilities: [] } },
-    { ...approval, interestAreaIds: [] },
+    { ...approval, interestAreaIds: [""] },
     { ...approval, identityEvidence: [] },
   ];
   for (const command of invalidCommands) {
@@ -343,4 +343,10 @@ Deno.test("Raw source approval preserves an absent provider snippet as empty tex
  const command={ownerId:"owner-a",identityStatus:"resolved",submittedUrl:"https://publisher.example/lesson",canonicalUrl:"https://publisher.example/lesson",title:"Raw title",description:"",idempotencyKey:"raw-empty",adapter:{id:"submitted-link",version:"v1",granularity:"document",capabilities:["metadata"]},interestAreaIds:["area-a"],identityEvidence:[{attribute:"user-submitted-url",value:"https://publisher.example/lesson",provenanceUrl:"https://publisher.example/lesson",observedAt:"2026-10-05T00:00:00.000Z"}]};
  const result=await sourceLibrary.approve(command); if(!result.ok)throw new Error(result.error.kind);assertEquals(result.value.source.description,"");
  const tooLong=await sourceLibrary.approve({...command,title:"x".repeat(301),idempotencyKey:"too-long"});assertEquals(tooLong.ok,false);
+});
+
+Deno.test("source approval allows automatic classification without a learner-selected area", async () => {
+  const result = await service(new SourceLibraryRepository()).approve({...approval,interestAreaIds:[]});
+  assertEquals(result.ok,true);
+  if (result.ok) assertEquals(result.value.source.interestAreaIds.length,0);
 });

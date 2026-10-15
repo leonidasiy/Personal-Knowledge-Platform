@@ -16,9 +16,10 @@ export async function notifyKnowledgeWorkflowOutcome(
   if (!Number.isFinite(Date.parse(instant))) {
     return { ok: false, error: { kind: "ReminderClockInvalid" } };
   }
-  const ready = run.state === "completed" && run.counts.knowledgePoints > 0 &&
+  const partial=run.state==="completed"&&["WorkflowPagesFailed","WorkflowQuizItemsFailed"].includes(run.failureKind??"");
+  const ready = !partial && run.state === "completed" && run.counts.knowledgePoints > 0 &&
     run.counts.acceptedQuizzes > run.counts.pendingQuizzes;
-  const attention = run.state === "awaiting-upload" ||
+  const attention = partial || run.failureKind?.startsWith("WorkflowExtractionFailed:") || run.state === "awaiting-upload" ||
     run.state === "awaiting-rights-review" ||
     run.state === "retryable-failure" ||
     (run.state === "awaiting-time-limit-decision" &&

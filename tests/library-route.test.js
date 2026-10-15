@@ -93,12 +93,6 @@ function baseModel() {
     collection: {
       state: /** @type {const} */ ("success"),
       items: [source],
-      interestAreas: [{
-        id: "area-a",
-        ownerId: "owner-a",
-        title: "Music",
-        provenance: "configured",
-      }],
       nextCursor: "signed",
       query: "",
       pendingSourceId: null,
@@ -168,7 +162,7 @@ Deno.test("Library restores subject selection and reports unavailable or invalid
 Deno.test("Library offers authorized material upload only for an awaiting-upload source", () => {
   const html = renderLibraryRoute({ ...baseModel(), workflowStatuses: [workflowStatus("awaiting-upload")] });
   assert(html.includes('href="#upload?sourceId=source-a&amp;runId=run-source-a'), "Blocked sources must hand off to the dedicated route.");
-  assert(html.includes("title=Harmony+source") && html.includes("revision=2"), "Handoff must preserve displayed title and revision.");
+  assert(html.includes("sourceId=source-a") && html.includes("runId=run-source-a"), "Handoff must load the authoritative source title and revision through Upload context.");
   assert(!html.includes('data-library-upload'), "Cards must not contain upload forms.");
   for (const state of ["completed", "extraction-loop", "abandoned"]) {
     assert(!renderLibraryRoute({ ...baseModel(), workflowStatuses: [workflowStatus(state)] }).includes('href="#upload?'), `${state} must not offer a conflicting source attachment.`);
@@ -318,7 +312,7 @@ Deno.test("Library is source-only and renders a broad related-knowledge overview
     "Open original source",
     "data-library-disable",
     "data-library-load-more",
-    "Processing is automatic",
+    "About this source",
     "Related knowledge",
     "1 retained knowledge point",
   ]) assert(html.includes(expected), `Missing ${expected}.`);
@@ -770,11 +764,12 @@ Deno.test("Library polls active workflow status and stops after completion", asy
   /** @type {{ readonly callback: () => void, readonly delayMs: number }[]} */
   const scheduled = [];
   let statusCalls = 0;
+  let knowledgeCalls = 0;
   const page = createLibraryPage({
     fetch: (input) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/source-library")) return Promise.resolve(Response.json({ result: { items: [source], interestAreas: [], nextCursor: null } }));
-      if (url.pathname.endsWith("/library-knowledge")) return Promise.resolve(Response.json({ result: { items: [] } }));
+      if (url.pathname.endsWith("/library-knowledge")) {knowledgeCalls++;return Promise.resolve(Response.json({ result: { items: [] } }));}
       if (url.pathname.endsWith("/source-status")) {
         statusCalls += 1;
         return Promise.resolve(Response.json({ result: workflowStatus(statusCalls === 1 ? "extraction-loop" : "completed") }));
@@ -805,6 +800,7 @@ Deno.test("Library polls active workflow status and stops after completion", asy
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert(statusCalls === 2, "The scheduled refresh must fetch the latest workflow status.");
+  assert(knowledgeCalls === 2, "Completion must reload classified knowledge and quizzes without a manual refresh.");
   assert(!page.renderProcessingStatus().includes('data-library-processing-status'), "The chip must disappear after the source completes.");
   assert(scheduled.length === 1, "Polling must stop after a terminal workflow state.");
 });
@@ -969,11 +965,19 @@ function sampleProgress(){return {currentUrl:'https://publisher.example/learn/le
 Deno.test('Library source card renders current lesson, section, extracted summaries and actual quiz question count accessibly',()=>{
  const status={...workflowStatus('extraction-loop'),run:{...workflowStatus('extraction-loop').run,progress:sampleProgress()}};
  const html=renderLibraryRoute({...baseModel(),workflowStatuses:[status]});
- for(const label of ['Processing progress','Extracting knowledge','1 knowledge point','2 quiz questions generated','https://publisher.example/learn/lesson-2','Rhythm &lt;lesson>','2.1 Meter &amp; pulse','A beat groups durations into recurring patterns.','1 of 3','Updates every minute while processing.'])assert(html.includes(label),`Missing source progress information: ${label}`);
+ for(const label of ['Extracting knowledge','1 knowledge point','2 quiz questions generated','2.1 Meter &amp; pulse','A beat groups durations into recurring patterns.','1 of 3','Updates every minute while processing.'])assert(html.includes(label),`Missing source progress information: ${label}`);
+ assert(html.includes('<progress aria-label="Pages processed" max="3" value="1"'),'Progress shows measured pages without inventing an overall percentage.');
+ assert(!html.includes('<details open>')&&!html.includes('Rhythm &lt;lesson>')&&!html.includes('https://publisher.example/learn/lesson-2'),'Summaries start collapsed and transport diagnostics stay out of the card.');
+ assert(html.includes('library-processing-spinner'),'An actively processing source has a loading indicator.');
  assert(html.includes('data-library-workflow-progress')&&html.includes('aria-live="polite"')&&html.includes('aria-labelledby="library-progress-source-a"'),'Source-scoped status must be labeled and announced politely.');
  assert(!html.includes('Rhythm <lesson>'),'External page titles must be escaped.');
  assert(html.indexOf('data-library-workflow-progress')>html.indexOf('data-library-source="source-a"'),'Progress must render inside its source card.');
  assert(!renderLibraryRoute({...baseModel(),workflowStatuses:[{...status,run:{...status.run,state:'abandoned'}}]}).includes('A beat groups'),'Canceled run output must disappear from the card.');
+ for(const origin of /** @type {const} */(['web','private-document'])){
+   const card=renderLibraryRoute({...baseModel(),collection:{...baseModel().collection,items:[{...source,origin}]},workflowStatuses:[status]});
+   assert(card.includes('library-processing-spinner')&&card.includes('<progress'),'Web sources and uploaded documents share active progress feedback.');
+   assert(card.includes(origin==='web'?'publisher.example':'Uploaded material'),'Source identity is readable for each origin.');
+ }
 });
 
 Deno.test('Library polls only active source statuses every minute and dispose invalidates scheduled work',async()=>{
@@ -1010,4 +1014,152 @@ Deno.test('Extraction redirect opens a reused source on a later Library page and
   page.bind(/** @type {HTMLElement} */(/** @type {unknown} */({querySelector:()=>null,querySelectorAll:(/** @type {string} */selector)=>selector==='[data-library-source]'?[card]:[]})));
   const focus=scheduled.find(item=>item.delay===0);assert(focus!==undefined,'Card focus follows rendering, without waiting for a status interval.');focus?.callback();assert(focused&&scrolled,'The matching card receives keyboard focus and is brought into view.');page.dispose();
  }finally{if(descriptor)Object.defineProperty(globalThis,'HTMLElement',descriptor);else Reflect.deleteProperty(globalThis,'HTMLElement');}
+});
+
+Deno.test("Library awaiting upload overrides stale progress and does not imply active extraction", () => {
+  for (const message of [null, "Automatic scraping is blocked because permission is not verified."]) {
+    const waiting = workflowStatus("awaiting-upload");
+    const html = renderLibraryRoute({...baseModel(), workflowStatuses:[{...waiting, message, run:{...waiting.run, progress:sampleProgress()}}]});
+    assert(html.includes(message ?? "Processing is paused. Action is required to continue."), "Waiting status must describe the required action.");
+    assert(!html.includes("Extracting knowledge") && !html.includes("completing the knowledge workflow"), "Stale progress cannot imply ongoing extraction.");
+    assert(!html.includes("library-processing-spinner") && !html.includes("Updates every minute"), "Waiting for upload is not active processing.");
+    assert(html.includes("Upload text or documents"), "The recovery action stays available.");
+  }
+});
+
+Deno.test("Library retains failed source and offers a titled upload before removal",async()=>{
+ const errors=/** @type {string[]} */([]);let failed=false;const timers=/** @type {(()=>void)[]} */([]);const uploads=/** @type {string[]} */([]);let prompts=0;let promptedUrl;
+ const page=createLibraryPage({fetch:async input=>{const u=new URL(String(input));if(u.pathname.endsWith("/source-library"))return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});if(u.pathname.endsWith("/library-knowledge"))return Response.json({result:{items:[]}});return Response.json({result:failed?{...workflowStatus("awaiting-upload"),reasonCode:"failed",message:"Automatic processing failed. Would you like to upload source-related text or documents instead?"}:workflowStatus("extraction-loop")});},gatewayBaseUrl:"https://app.example/",escapeHtml:v=>v,formatDate:v=>v,createId:()=>"id",confirmDisable:()=>true,confirmUpload:(_message,url)=>{prompts++;promptedUrl=url;return true;},navigateToUpload:hash=>uploads.push(hash),createObserver:()=>null,schedule:callback=>{timers.push(callback);return timers.length;},cancel:()=>{},onNotice:()=>{},onError:message=>errors.push(message),rerender:()=>{}});
+ await page.load();assert(page.render({}).includes(source.title),"Processing source is visible.");failed=true;timers[0]();await new Promise(r=>setTimeout(r,0));assert(page.render({}).includes(source.title),"Failed source stays until the learner chooses.");assert(errors.length===0,"Popup must not duplicate the failure in a toast.");assert(promptedUrl===source.canonicalUrl,"Confirmation receives the website URL.");const html=page.render({});assert(html.includes("#upload?sourceId=source-a") && html.includes("runId=run-source-a"),"Upload link identifies the source whose title is loaded by Upload.");assert(html.includes("data-library-disable"),"Removal remains an explicit learner choice.");assert(prompts===1 && uploads[0].includes("sourceId=source-a") && uploads[0].includes("runId=run-source-a"),"Confirmed failure popup redirects to the bound Upload route.");page.dispose();
+});
+
+function partialStatus() {
+  const completed = workflowStatus("completed");
+  return { ...completed, reasonCode: "partial-failure", run: { ...completed.run, revision: 4, failureKind: "WorkflowPagesFailed", progress: { ...sampleProgress(), failedItems: [{ url: "https://publisher.example/learn#section=page-3", title: "Page <3>", failureKind: "KnowledgeReviewOutputInvalid", attempts: 2 }] } } };
+}
+Deno.test("Library partial completion lists safe failed-unit links and truthful stopped progress", () => {
+  {
+  const partial = partialStatus();
+  partial.run.progress.processedPageCount = 17; partial.run.progress.totalPages = 23;
+  partial.run.progress.failedItems = Array.from({ length: 6 }, (_, index) => ({ ...partial.run.progress.failedItems[0], title: `Page ${index + 1}` }));
+  const completedReport = renderLibraryRoute({ ...baseModel(), workflowStatuses: [partial] });
+  assert(completedReport.includes('aria-label="Pages attempted" max="23" value="23"') && completedReport.includes("23 of 23 pages attempted · 17 successful · 6 need retry"), "Completed partial work shows all attempted pages with distinct success and retry counts.");
+  assert(partial.run.progress.processedPageCount === 17 && completedReport.includes("Failed items (6)"), "Attempted progress must not change successful counts or hide the failure report.");
+  partial.run.progress.totalPages = 20;
+  assert(renderLibraryRoute({ ...baseModel(), workflowStatuses: [partial] }).includes('max="20" value="20"'), "Attempted progress is capped at the reported total.");
+  partial.run.progress.totalPages = 23;
+  const active = renderLibraryRoute({ ...baseModel(), workflowStatuses: [{ ...partial, run: { ...partial.run, state: "extraction-loop" } }] });
+  assert(active.includes('value="17" class="library-processing-spinner"') && active.includes("17 of 23 pages reviewed"), "Active processing preserves successful counts and motion.");
+  const successful = renderLibraryRoute({ ...baseModel(), workflowStatuses: [{ ...partial, reasonCode: "completed", run: { ...partial.run, progress: { ...partial.run.progress, processedPageCount: 23, failedItems: [] } } }] });
+  assert(successful.includes("23 of 23 pages reviewed") && !successful.includes("need retry") && !successful.includes("library-processing-spinner"), "All-success completion preserves truthful stopped progress without retry wording.");
+  }
+  for (const title of ["https://publisher.example/learn — captured page.pdf.pkpi — Page 3", "My document.pdf — Page 3", "How transformers work — Page 3", "My captured page.pdf.pkpi — Page 3"]) {
+    const state = partialStatus(); state.run.progress.failedItems[0].title = title;
+    const report = renderLibraryRoute({ ...baseModel(), workflowStatuses: [state] });
+    const expected = title.startsWith("https://") ? "Page 3" : title;
+    assert(report.includes(`>${expected}</a>`), "Only the internal URL capture label is shortened; user filenames and ordinary page titles remain intact.");
+    if (title.startsWith("https://")) assert(!report.includes("captured page.pdf.pkpi"), "Legacy internal capture filenames must not clutter the failed item report.");
+  }
+  const html = renderLibraryRoute({ ...baseModel(), workflowStatuses: [partialStatus()] });
+  for (const text of ["Processing complete with failed items", "Failed items (1)", "Page &lt;3>", "The review response was invalid.", "2 attempts", "Retry failed items", "Successful knowledge and quizzes are retained."]) assert(html.includes(text), `Missing partial completion detail: ${text}`);
+  assert(!html.includes("library-processing-spinner") && !html.includes("Updates every minute"), "Partial completion stops processing motion and polling copy.");
+  assert(!html.includes("quality checks"), "Malformed reviewer output is a technical failure, not a negative quality decision.");
+  assert(!html.includes("KnowledgeReviewOutputInvalid") && html.includes('rel="noopener noreferrer"'), "Failure codes stay internal and unit links retain safe external-link attributes.");
+  const partial = partialStatus();
+  const interrupted = renderLibraryRoute({ ...baseModel(), workflowStatuses: [{ ...partial, run: { ...partial.run, progress: { ...partial.run.progress, failedItems: [{ url: "https://publisher.example/learn#section=page-9", title: "Page 9", failureKind: "WorkflowProcessingInterrupted", attempts: 1 }] } } }] });
+  assert(interrupted.includes("Processing was interrupted before this item finished.") && !interrupted.includes("after retries"), "Interruption must not falsely claim exhausted retries.");
+  const active = renderLibraryRoute({ ...baseModel(), workflowStatuses: [{ ...partialStatus(), reasonCode: null, run: { ...partialStatus().run, state: "extraction-loop" } }] });
+  assert(!active.includes("remaining items has finished") && !active.includes("Retry failed items"), "Recorded failures cannot claim completion while remaining extraction is active.");
+});
+
+Deno.test("Library asks once after completion, keeps report on decline, and retries only after approval", async () => {
+  for (const cold of [false, true]) {
+    let completed = cold, approved = false, prompts = 0, posts = 0;
+    /** @type {(()=>void)[]} */ const timers = [];
+    /** @type {string[]} */ const errors = [];
+    /** @type {(()=>void)|null} */ let click = null;
+    const page = createLibraryPage({
+      fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path.endsWith("/source-library")) return Response.json({ result: { items: [source], interestAreas: [], nextCursor: null } });
+        if (path.endsWith("/library-knowledge")) return Response.json({ result: { items: [] } });
+        if (path.endsWith("/control")) {
+          posts++; const command = JSON.parse(String(init?.body));
+          assert(command.action === "resume" && command.expectedRevision === 4 && command.runId === "run-source-a", "Approval must resume the exact failed run revision.");
+          completed = false;
+          return Response.json({ result: { ...workflowStatus("extraction-loop").run, revision: 5 } });
+        }
+        return Response.json({ result: completed ? partialStatus() : workflowStatus("extraction-loop") });
+      }, gatewayBaseUrl: "https://app.example/", escapeHtml: baseModel().escapeHtml, formatDate: v => v,
+      createId: () => "id", confirmDisable: () => true,
+      confirmRetryFailed: count => { prompts++; assert(count === 1, "Modal must report failed count."); assert(page.render({}).includes("Failed items (1)"), "The report must render before asking approval."); return approved; },
+      createObserver: () => null, schedule: callback => { timers.push(callback); return timers.length; }, cancel: () => {},
+      onNotice: () => {}, onError: message => errors.push(message), rerender: () => {},
+    });
+    await page.load();
+    assert(prompts === 0 && posts === 0, "Initial navigation cannot auto-retry or interrupt an already completed report.");
+    if (!cold) { completed = true; timers[0](); await new Promise(r => setTimeout(r, 0)); assert(prompts === 1 && posts === 0, "Declining transition approval must keep successful output and avoid retry."); }
+    page.dispose(); await page.resume();
+    assert(prompts === (cold ? 0 : 1), "Repeated status reads cannot prompt twice for the same completion revision.");
+    assert(page.render({}).includes("Retry failed items") && errors.length === 0, "Decline leaves a retry button and report without a duplicate failure toast.");
+    page.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-library-workflow-retry], [data-library-workflow-cancel]" ? [{ hasAttribute: () => false, getAttribute: (/** @type {string} */ name) => name.endsWith("revision") ? "4" : "run-source-a", addEventListener: (/** @type {string} */ _event, /** @type {()=>void} */ callback) => { click = callback; } }] : [] })));
+    if (click === null) throw new Error("Retry action not bound");
+    approved = true; const retry = /** @type {()=>void} */ (click); retry();
+    await new Promise(r => setTimeout(r, 0));
+    assert(posts === 1, "Explicit approval dispatches one failed-item retry.");
+    page.dispose();
+  }
+});
+
+Deno.test("All-failed public source offers a new manual upload without binding the completed run", async () => {
+  const state = partialStatus();
+  let target = "";
+  /** @type {import('../src/features/uploads/page.js').UploadPrefill|undefined} */ let prefill;
+  /** @type {(()=>void)|null} */ let click = null;
+  const page = createLibraryPage({ fetch: async input => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith("/source-library")) return Response.json({ result: { items: [source], interestAreas: [], nextCursor: null } });
+    if (path.endsWith("/library-knowledge")) return Response.json({ result: { items: [] } });
+    return Response.json({ result: state });
+  }, gatewayBaseUrl: "https://app.example/", escapeHtml: baseModel().escapeHtml, formatDate: v => v,
+  createId: () => "id", confirmDisable: () => false, navigateToUpload: (hash, value) => { target = hash; prefill = value; },
+  createObserver: () => null, schedule: () => 1, cancel: () => {}, onNotice: () => {}, onError: () => {}, rerender: () => {} });
+  await page.load();
+  assert(page.render({}).includes("Upload source content"), "An all-failed website must retain the manual fallback action.");
+  page.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-library-manual-source]" ? [{ getAttribute: () => source.id, addEventListener: (/** @type {string} */ _event, /** @type {()=>void} */ handler) => { click = handler; } }] : [] })));
+  if (click === null) throw new Error("Manual action not bound");
+  const handoff = /** @type {()=>void} */ (click); handoff();
+  assert(target === "#upload" && prefill?.title === source.title && prefill?.url === source.canonicalUrl && prefill?.manual === true, "Manual intake receives the title and URL without sourceId/runId binding.");
+  page.dispose();
+});
+
+Deno.test("Library separates failed quiz and page reports and approves the exact retry target",async()=>{
+ for(const quizzes of [false,true]){
+  const partial=partialStatus();
+  const failedQuizItems=[{knowledgeId:"point-failed",summary:"Retained <point>",failureKind:"KnowledgeModelUnavailable",attempts:4}];
+  const state={...partial,run:{...partial.run,failureKind:"WorkflowQuizItemsFailed",counts:{...partial.run.counts,knowledgePoints:3,acceptedQuizzes:2},progress:{...partial.run.progress,generatedQuizQuestions:4,failedQuizItems}}};
+  let approved=false,posts=0;let promptCount=0;
+  /** @type {(()=>void)|undefined} */ let click;
+  const page=createLibraryPage({fetch:async(input,init)=>{
+   const path=new URL(String(input)).pathname;
+   if(path.endsWith("/source-library"))return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});
+   if(path.endsWith("/library-knowledge"))return Response.json({result:{items:[]}});
+   if(path.endsWith("/control")){posts++;const command=JSON.parse(String(init?.body));assert(command.action===(quizzes?"retry-quizzes":"resume"),"Only the approved quiz/page action is sent.");assert(command.expectedRevision===4,"Approval remains revision-bound.");return Response.json({result:{...state.run,state:quizzes?"per-point-quiz-loop":"extraction-loop",revision:5}});}
+   return Response.json({result:state});
+  },gatewayBaseUrl:"https://app.example/",escapeHtml:baseModel().escapeHtml,formatDate:v=>v,createId:()=>"quiz-fixture",confirmDisable:()=>false,
+  confirmRetryFailed:(count,target)=>{promptCount++;assert(count===1&&!!target===quizzes,"Confirmation count and target match the clicked report.");return approved;},createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
+  await page.load();
+  const html=page.render({});
+  for(const text of ["Failed items (1)","Failed quiz items (1)","Retained &lt;point>","4 attempts","saved drafts are retained","4 quiz questions generated","Retry failed items","Retry failed quizzes"])assert(html.includes(text),`Missing separate report detail ${text}`);
+  assert(!html.includes("KnowledgeModelUnavailable")&&!html.includes("library-processing-spinner"),"Internal codes and processing motion stay absent after partial completion.");
+  assert(promptCount===0&&posts===0,"Cold completed reports do not prompt or retry automatically.");
+  page.bind(/** @type {HTMLElement} */(/** @type {unknown} */({querySelector:()=>null,querySelectorAll:(/** @type {string} */ selector)=>selector==="[data-library-workflow-retry], [data-library-workflow-cancel]"?[{hasAttribute:(/** @type {string} */ name)=>name==="data-library-workflow-quiz"&&quizzes,getAttribute:(/** @type {string} */ name)=>name.endsWith("revision")?"4":"run-source-a",addEventListener:(/** @type {string} */ _event,/** @type {()=>void} */ callback)=>{click=callback;}}]:[]})));
+  if(!click)throw new Error("Retry not bound");click();await new Promise(r=>setTimeout(r,0));
+  assert(posts===0&&page.render({}).includes("Failed quiz items (1)"),"Decline keeps all records and sends no control call.");
+  approved=true;click();await new Promise(r=>setTimeout(r,0));assert(posts===1,"Approval dispatches one retry.");page.dispose();
+  const onlyQuiz=renderLibraryRoute({...baseModel(),workflowStatuses:[{...state,run:{...state.run,progress:{...state.run.progress,failedItems:[]}}}]});
+  assert(onlyQuiz.includes("Retry failed quizzes")&&!onlyQuiz.includes(">Retry failed items</button>"),"Quiz-only failure never offers source extraction retry.");
+  const retryable=renderLibraryRoute({...baseModel(),workflowStatuses:[{...state,reasonCode:"retryable-failure",run:{...state.run,state:"retryable-failure"}}]});
+  assert(!retryable.includes("Retry failed quizzes")&&retryable.includes("Retry processing"),"A retained deferred list cannot offer completed-only quiz control during a general retryable failure.");
+ }
 });

@@ -14,22 +14,35 @@ function text(value) { return typeof value === 'string' && value.trim() !== ''; 
 export class D1WorkflowStageRepository {
   /** @type {Database} */ #database;
   /** @type {()=>string} */ #now;
-  /** @param {{database:Database,now:()=>string}} dependencies */
-  constructor(dependencies) { this.#database = dependencies.database; this.#now = dependencies.now; }
+  /** @type {(entry:{event:string,stage?:string,failureKind?:string,field?:string})=>void} */ #logger;
+  /** @param {{database:Database,now:()=>string,logger?:(entry:{event:string,stage?:string,failureKind?:string,field?:string})=>void}} dependencies */
+  constructor(dependencies) { this.#database = dependencies.database; this.#now = dependencies.now; this.#logger=dependencies.logger??(()=>{}); }
+
+  /** Read retries cannot dispatch a model or repeat an uncertain write.
+   * @param {ReturnType<Database["prepare"]>} statement */
+  async #readFirst(statement) {
+    for(let attempt=1;;attempt++) {
+      try{return await statement.first();}
+      catch(error){
+        if(attempt===4)throw error;
+        this.#logger({event:"workflow-stage-read-retry",stage:"stage-cache",field:`attempt-${attempt+1}`});
+      }
+    }
+  }
 
   /** A claimed call is deliberately never retried: its provider charge/output may be unknown.
    * @template T @param {Scope} scope @param {string} key @param {string} inputDigest
-   * @param {(identity:StageIdentity)=>Promise<Result<T>>} work @param {{resumeSafe?:boolean,modelCall?:boolean,maximumProviderAttempts?:number,recoverFailedModel?:(identity:FailedModelStage)=>Promise<{attemptKey:string,allowAdditionalAttempt?:boolean}|null>,recoverClaimed?:(identity:StageIdentity)=>Promise<boolean>}} [options] @param {number} [recoveryDepth] @returns {Promise<Result<T>>} */
+   * @param {(identity:StageIdentity)=>Promise<Result<T>>} work @param {{resumeSafe?:boolean,modelCall?:boolean,maximumProviderAttempts?:number,cacheProviderRefusals?:boolean,recoverFailedModel?:(identity:FailedModelStage)=>Promise<{attemptKey:string,allowAdditionalAttempt?:boolean}|null>,recoverClaimed?:(identity:StageIdentity)=>Promise<boolean>}} [options] @param {number} [recoveryDepth] @returns {Promise<Result<T>>} */
   async run(scope, key, inputDigest, work, options={}, recoveryDepth=0) {
     if (!text(scope?.ownerId) || !text(scope.runId) || !text(key) || !text(inputDigest)) return {ok:false,error:{kind:'WorkflowStageCommandInvalid'}};
     try {
-      const active=await this.#database.prepare("SELECT state FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=? AND state <> 'abandoned' AND NOT EXISTS (SELECT 1 FROM knowledge_workflow_run_tombstones WHERE owner_id=? AND run_id=?)").bind(scope.ownerId,scope.runId,scope.ownerId,scope.runId).first();
+      const active=await this.#readFirst(this.#database.prepare("SELECT state FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=? AND state <> 'abandoned' AND NOT EXISTS (SELECT 1 FROM knowledge_workflow_run_tombstones WHERE owner_id=? AND run_id=?)").bind(scope.ownerId,scope.runId,scope.ownerId,scope.runId));
       if(!record(active))return {ok:false,error:{kind:'WorkflowStageRunUnavailable'}};
       const claimed = await this.#database.prepare("INSERT INTO knowledge_workflow_stages (owner_id,run_id,stage_key,input_digest,status,created_at) SELECT ?,?,?,?,'claimed',? WHERE EXISTS (SELECT 1 FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=? AND state <> 'abandoned') AND NOT EXISTS (SELECT 1 FROM knowledge_workflow_run_tombstones WHERE owner_id=? AND run_id=?) ON CONFLICT DO NOTHING").bind(scope.ownerId,scope.runId,key,inputDigest,this.#now(),scope.ownerId,scope.runId,scope.ownerId,scope.runId).run();
       let acquiredCleanClaim=claimed.meta?.changes===1;
       if (!claimed.success) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
       if (claimed.meta?.changes !== 1) {
-        const row = await this.#database.prepare('SELECT input_digest,status,result_json,provider_failures,created_at,completed_at,failures_json FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key=?').bind(scope.ownerId,scope.runId,key).first();
+        const row = await this.#readFirst(this.#database.prepare('SELECT input_digest,status,result_json,provider_failures,created_at,completed_at,failures_json FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key=?').bind(scope.ownerId,scope.runId,key));
         if (!record(row)) return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
         if (row.input_digest !== inputDigest) return {ok:false,error:{kind:'WorkflowStageInputChanged'}};
         // Authenticated failed model calls get a separate attempt; the
@@ -46,6 +59,14 @@ export class D1WorkflowStageRepository {
           }
         }
         if(row.status==='not-started') {
+          // Normal runtime technical attempts each own one provider identity.
+          // Replaying a known refusal must advance the caller's retry loop,
+          // never dispatch this identity again or alter its accounting history.
+          if(options.cacheProviderRefusals===true&&typeof row.provider_failures==='number'&&row.provider_failures>=1){
+            const cached=text(row.result_json)?JSON.parse(row.result_json):null;
+            if(!Number.isSafeInteger(row.provider_failures)||!record(cached)||cached.ok!==false||!record(cached.error)||cached.error.kind!=='KnowledgeModelRejected'||![429,503].includes(/** @type {number} */(cached.error.status)))return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
+            return /** @type {Result<T>} */(cached);
+          }
           if(typeof row.provider_failures==='number'&&row.provider_failures>=(options.maximumProviderAttempts??1))return {ok:false,error:{kind:'WorkflowStageProviderRetryLimitReached'}};
           const retry=await this.#database.prepare("UPDATE knowledge_workflow_stages SET status='claimed',result_json=NULL,completed_at=NULL WHERE owner_id=? AND run_id=? AND stage_key=? AND input_digest=? AND status='not-started' AND EXISTS (SELECT 1 FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=? AND state <> 'abandoned') AND NOT EXISTS (SELECT 1 FROM knowledge_workflow_run_tombstones WHERE owner_id=? AND run_id=?)").bind(scope.ownerId,scope.runId,key,inputDigest,scope.ownerId,scope.runId,scope.ownerId,scope.runId).run();
           if(!retry.success)return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
@@ -60,7 +81,7 @@ export class D1WorkflowStageRepository {
         }
       }
       let result;
-      const identityRow=await this.#database.prepare('SELECT created_at FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key=?').bind(scope.ownerId,scope.runId,key).first();
+      const identityRow=await this.#readFirst(this.#database.prepare('SELECT created_at FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key=?').bind(scope.ownerId,scope.runId,key));
       if(!record(identityRow)||!text(identityRow.created_at))return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
       try { result = await work({scope,key,inputDigest,createdAt:identityRow.created_at}); } catch (error) {
         if (error instanceof AgentExecutionBoundaryFailure) {
@@ -76,6 +97,7 @@ export class D1WorkflowStageRepository {
           throw error;
         }
         if (!(error instanceof Error)) throw error;
+        this.#logger({event:'workflow-stage-work-failure',stage:key.split(':')[0],failureKind:'WorkflowStageCallUncertain',field:error instanceof TypeError?'type-error':error instanceof SyntaxError?'syntax-error':'runtime-error'});
         return {ok:false,error:{kind:'WorkflowStageCallUncertain'}};
       }
       if(!result.ok) {
@@ -92,6 +114,7 @@ export class D1WorkflowStageRepository {
     } catch (error) {
       if (error instanceof AgentExecutionBoundaryFailure) throw error;
       if (!(error instanceof Error)) throw error;
+      this.#logger({event:'workflow-stage-persistence-failure',stage:key.split(':')[0],failureKind:'WorkflowStagePersistenceFailed',field:error instanceof TypeError?'type-error':error instanceof SyntaxError?'syntax-error':'database-error'});
       return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
     }
   }

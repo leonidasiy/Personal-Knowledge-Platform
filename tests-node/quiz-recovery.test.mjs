@@ -394,7 +394,7 @@ test("paired quiz canonical-only answers are valid; optional synonyms cannot be 
 });
 
 for (const branch of ["typed-schema-failure", "invalid-draft", "legacy-thrown-generator"]) {
-  test(`invalid quiz feedback keeps aliases optional without extending ${branch} attempts`, async () => {
+  test(`invalid quiz feedback keeps aliases optional using a separate four-attempt ${branch} technical budget`, async () => {
     const inputs = [], attempts = []; let discarded = 0, evaluated = 0;
     const point = {id:"synthetic-point",sourceId:"source",sourceRevision:1,summary:"A synthetic mapping.",evidenceAnchors:[{url:"https://example.test/source",selector:"main"}]};
     const maxAttempts = branch === "legacy-thrown-generator" ? 3 : 2;
@@ -405,17 +405,18 @@ for (const branch of ["typed-schema-failure", "invalid-draft", "legacy-thrown-ge
       reviewer:{evaluate:async()=>{evaluated++;throw Error("Invalid draft must not reach critic.");}},
     });
     const result = await actor.run({ownerId:"owner",runId:"run",points:[point]});
-    if(maxAttempts===2)assert.deepEqual(result,{ok:false,error:{kind:"QuizGeneratorFailed",causeKind:"QuizDraftSchemaInvalid"}});
-    else {assert.equal(result.ok,true);assert.equal(result.value.dispositions[0].status,"abandoned");assert.equal(result.value.dispositions[0].attempts,maxAttempts);}
-    assert.equal(inputs.length,maxAttempts);assert.equal(attempts.length,maxAttempts);
+    assert.deepEqual(result,{ok:false,error:{kind:branch==="legacy-thrown-generator"?"QuizGeneratorFailed":"QuizDraftSchemaInvalid",technicalRetriesExhausted:true,technicalAttempts:4}});
+    assert.equal(inputs.length,4);assert.equal(attempts.length,0);
+    assert.deepEqual(inputs.map(input=>[input.attempt,input.technicalAttempt]),[[1,1],[1,2],[1,3],[1,4]]);
     assert.equal(inputs[0].feedback,null);
     for (const input of inputs.slice(1)) {
+      if(branch==="legacy-thrown-generator"){assert.equal(input.feedback,null);continue;}
       assert.match(input.feedback,/exact canonical answer alone is sufficient/);
       assert.match(input.feedback,/Synonyms are optional/);
       assert.match(input.feedback,/never cosmetic glyph or Unicode variants/);
       assert.match(input.feedback,/NFKC/);
     }
-    assert.equal(evaluated,0);assert.equal(discarded,1);
+    assert.equal(evaluated,0);assert.equal(discarded,0);
   });
 }
 
@@ -459,7 +460,7 @@ test("paired draft reports all alignment and normalized-alias faults to the exis
  const point={id:"synthetic-point",sourceId:"source",sourceRevision:1,summary:"Synthetic checkpoint relationship.",evidenceAnchors:[{url:"https://example.test/source",selector:"main"}]};
  const inputs=[],attempts=[];let discarded=0,evaluated=0;
  const actor=createQuizActorCritic({maxAttempts:2,now:()=>"2026-10-02T12:00:00.000Z",logger:()=>{},generator:{generate:async input=>{inputs.push(input);return {ok:false,error:{kind:"QuizDraftSchemaInvalid",validationIssues:issues}};}},reviewer:{evaluate:async()=>{evaluated++;throw Error("Invalid paired draft must not reach critic.");}},repository:{findPublished:async()=>({ok:true,value:null}),appendAttempt:async a=>{attempts.push(a);return {ok:true,value:null};},publish:async()=>{throw Error("Invalid draft must not publish.");},discard:async()=>{discarded++;return {ok:true,value:null};},purge:async()=>({ok:true,value:null})}});
- const result=await actor.run({ownerId:"owner",runId:"run",points:[point]});assert.deepEqual(result,{ok:false,error:{kind:"QuizGeneratorFailed",causeKind:"QuizDraftSchemaInvalid"}});assert.equal(inputs.length,2);assert.equal(attempts.length,2);assert.equal(evaluated,0);assert.equal(discarded,1);for(const issue of issues)assert(inputs[1].feedback.includes(issue));assert.deepEqual(draft.fillBlank.blanks[0].acceptedAnswers,["L₂","L2"]);
+ const result=await actor.run({ownerId:"owner",runId:"run",points:[point]});assert.deepEqual(result,{ok:false,error:{kind:"QuizDraftSchemaInvalid",validationIssues:issues,technicalRetriesExhausted:true,technicalAttempts:4}});assert.equal(inputs.length,4);assert.equal(attempts.length,0);assert.equal(evaluated,0);assert.equal(discarded,0);for(const issue of issues)assert(inputs[1].feedback.includes(issue));assert.deepEqual(draft.fillBlank.blanks[0].acceptedAnswers,["L₂","L2"]);
 });
 
 // Prompt contract and supplied verdict fixtures; these do not predict real model accuracy.

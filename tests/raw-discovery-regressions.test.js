@@ -47,8 +47,8 @@ Deno.test('review blocker 1: real YouTube provider -> UI approval/rejection -> D
   await page.load();await page.search({query:'harmony',providerIds:['youtube'],limit:5});
   const rendered=page.render({online:true,selectedItemId:null});const itemId=rendered.match(/data-discovery-item-id="([^"]+)"/)?.[1];
   if(!itemId)throw new Error(`No provider result rendered: ${errors.join(',')}`);
-  await page.approve(itemId,'area-a');equal(writes.length,0);await page.reject(itemId);
-  equal(errors,['Extraction is unavailable for this format. Explore the source or provide permitted learning material.']);equal(writes.length,1);
+  await page.approve(itemId);equal(writes.length,0);equal(rendered.includes('data-discovery-reject'),false);
+  equal(errors,['Extraction is unavailable for this format. Explore the source or provide permitted learning material.']);equal(writes.length,0);
   equal(JSON.stringify(writes).includes(preview),false);
   equal(JSON.stringify(writes).includes('youtube-api-description'),false);
 });

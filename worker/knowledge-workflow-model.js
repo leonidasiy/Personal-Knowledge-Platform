@@ -108,7 +108,12 @@ function validAttachment(value) {
   return true;
 }
 /** @param {Uint8Array} bytes @returns {string} */
-function base64(bytes) { const chunks = []; for (let index = 0; index < bytes.byteLength; index += 32_768) chunks.push(String.fromCharCode(...bytes.subarray(index, Math.min(index + 32_768, bytes.byteLength)))); return btoa(chunks.join("")); }
+function base64(bytes) {
+  const native = /** @type {Uint8Array & {toBase64?:()=>string}} */ (bytes);
+  if (typeof native.toBase64 === 'function') return native.toBase64();
+  // Older local runtimes such as Deno 2.0 lack the native Workers operation.
+  const chunks = []; for (let index = 0; index < bytes.byteLength; index += 32_768) chunks.push(String.fromCharCode(...bytes.subarray(index, Math.min(index + 32_768, bytes.byteLength)))); return btoa(chunks.join(""));
+}
 /** @param {readonly KnowledgeModelAttachment[]} attachments @returns {({ readonly type: "image_url", readonly image_url: { readonly url: string } } | {readonly type:"text",readonly text:string})[]} */
 function imageBlocks(attachments) {
   return attachments.flatMap((attachment) => [{type:"text",text:`Attachment ID: ${attachment.id}; mediaType: ${attachment.mediaType}. The following image belongs only to this ID.`}, { type: "image_url", image_url: { url: attachment.bytes instanceof Uint8Array ? `data:${attachment.mediaType};base64,${base64(attachment.bytes)}` : /** @type {string} */ (attachment.url) } }]);
@@ -202,7 +207,7 @@ export function createOpenRouterKnowledgeModel(dependencies) {
         command.signal?.removeEventListener("abort",callerAbort);
       }
       if (requestSignal.aborted) return aborted(responseReceived?"body":"fetch");
-      if(record(document)&&record(document.error))return fail({kind:'KnowledgeModelRejected',status:response.status,providerDiagnostic:projectProviderMessage(document.error.message,[command.input,command.systemPrompt,apiKey])},dependencies,command.role,startedAt,undefined,command.phase);
+      if(record(document)&&record(document.error))return fail({kind:'KnowledgeModelRejected',status:typeof document.error.code==='number'&&Number.isInteger(document.error.code)&&document.error.code>=400&&document.error.code<=599?document.error.code:response.status,providerDiagnostic:projectProviderMessage(document.error.message,[command.input,command.systemPrompt,apiKey])},dependencies,command.role,startedAt,undefined,command.phase);
       if (!record(document) || (!protocol?.receiptOptional&&!text(document.id)||document.id!==undefined&&!text(document.id)) || !Array.isArray(document.choices) || document.choices.length < 1 || !record(document.choices[0])) return fail({ kind: "KnowledgeModelResponseInvalid", field: "choices" }, dependencies, command.role, startedAt, "choices-shape",command.phase);
       const choice = document.choices[0];
       if (isProviderErrorTermination(document)) return fail({kind:"KnowledgeModelRejected",status:response.status,finishReason:"error"},dependencies,command.role,startedAt,"provider-error-termination",command.phase);
@@ -258,4 +263,10 @@ export function createRoleConfiguredKnowledgeModel(dependencies) {
       return adapter.generate({...input,timeoutMs,...(configuredEffort===undefined?{}:{reasoningEffort:configuredEffort})});
     },
   });
+}
+
+/** Classification reuses the configured decision model with a small, low-effort response.
+ * @param {Omit<KnowledgeModelDependencies,'model'|'timeoutMs'|'protocol'> & {configuration:Pick<import('../src/features/knowledge-workflows/config.js').AgentConfigurationSnapshot,'model'|'limits'>,protocol?:KnowledgeModelProtocol}} dependencies */
+export function createSourceDecisionModel({configuration,protocol,...dependencies}) {
+  return createOpenRouterKnowledgeModel({...dependencies,model:configuration.model.name,timeoutMs:configuration.limits.timeoutMs,protocol:protocol===undefined?undefined:{...protocol,reasoningEffort:'low'}});
 }

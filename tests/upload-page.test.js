@@ -568,38 +568,34 @@ Deno.test("PDF pages has a short label and associated examples without changing 
   assert(!/name="imageProcessing"[^>]*checked/.test(html), "PDF stays text-first.");
 });
 
-Deno.test("Upload Link requires editable title, owned interest and safe URL without file/attestation", async () => {
-  let extracts=0, uploads=0;
-  const page=createUploadPage({...deps,upload:async()=>{uploads++;return {ok:true,message:"unused"};},fetch:async(url,init)=>{
-    if(String(url).includes("api/source-library?"))return Response.json({result:{items:[],interestAreas:[{id:"area-a",ownerId:"owner-a",title:"Music",provenance:"configured"}],nextCursor:null}});
-    assert(String(url).endsWith("/extract"),"Link must use the same explicit extraction endpoint as Discover");
-    const command=JSON.parse(String(init?.body));extracts++;
-    assert(command.title==="Edited link" && command.interestAreaId==="area-a" && command.url==="https://publisher.example/lesson","Exact edited link input must be submitted");
-    assert(Object.keys(command).length===4,"Only title, URL, interest and idempotency key reach extraction");
-    return Response.json({result:{source,reused:false},workflow:{runId:"run-a",reused:false}});
+Deno.test("URL capture keeps editable title and URL, enables vision, and excludes stale draft fields", async () => {
+  let captures=0,uploads=0;
+  const page=createUploadPage({...deps,upload:async(id,form,context)=>{
+    uploads++;assert(id===""&&context===null,"Standalone capture creates a URL source");
+    assert(form.get("title")==="Edited link"&&form.get("url")==="https://publisher.example/lesson","Exact title and URL reach upload");
+    assert(form.get("imageProcessing")==="on"&&form.get("file") instanceof File,"Capture enables image processing");
+    assert(!form.has("content")&&!form.has("interest-area"),"Stale fields do not cross the boundary");
+    return {ok:true,message:"Processing started"};
+  },fetch:async function(url,init){
+    assert(this===undefined,"Native fetch is called without a dependency-object receiver");
+    captures++;assert(String(url).endsWith("/url-capture"),"Capture endpoint is used");
+    assert(JSON.parse(String(init?.body)).url==="https://publisher.example/lesson","Only selected URL is captured");
+    return new Response("%PDF-fixture",{headers:{"content-type":"application/pdf"}});
   }});
   await page.load("#upload",{title:"Initial title"});await page.select("link");
-  const html=page.render();assert(html.includes('>Link</option>')&&html.includes('name="url"')&&html.includes('name="interest-area"'),"Link exposes native URL and interest controls");
-  assert(!html.includes('type="file"')&&!html.includes('name="attested"'),"No upload file or additional rights gate");
-  for(const change of [{title:""},{url:"https://127.0.0.1/"},{interest:"foreign"},{url:"javascript:alert(1)"}]){
-    const form=new FormData();form.set("title",change.title??"Edited link");form.set("url",change.url??"https://publisher.example/lesson");form.set("interest-area",change.interest??"area-a");
-    assert(!await page.submit(form),"Invalid Link must not reach transport");
+  const html=page.render();assert(html.includes('>URL/Link</option>')&&html.includes('name="url"')&&!html.includes('name="interest-area"'),"URL intake needs no classification choice");
+  assert(!html.includes('type="file"'),"Conversion is internal");
+  for(const change of [{title:""},{url:"https://127.0.0.1/"},{url:"javascript:alert(1)"}]){
+    const form=new FormData();form.set("title",change.title??"Edited link");form.set("url",change.url??"https://publisher.example/lesson");
+    assert(!await page.submit(form),"Invalid URL stays local");
   }
-  const form=new FormData();form.set("title","Edited link");form.set("url","https://publisher.example/lesson");form.set("interest-area","area-a");form.set("content","stale private text");form.set("attested","on");
-  assert(await page.submit(form),"Valid Link starts extraction");assert(extracts===1&&uploads===0,"Link must never create a private file source");
-  assert(page.render().includes('value="Edited link"'),"Title stays editable after start");
+  const form=new FormData();form.set("title","Edited link");form.set("url","https://publisher.example/lesson");form.set("content","stale text");
+  assert(await page.submit(form),"Valid URL starts processing");assert(captures===1&&uploads===1,"One capture and one upload");
 });
-
-Deno.test("Link help describes URL extraction and other modes preserve upload guidance", async () => {
-  const page=createUploadPage({...deps,fetch:async()=>Response.json({result:{items:[],interestAreas:[],nextCursor:null}})});
-  await page.select("link");
-  const html=page.render();
-  assert(html.includes("Use a public HTTPS page and choose an interest area. Extraction processes this page and linked pages within its source."),"Link-specific help explains the bounded URL workflow.");
-  assert(!html.includes("20 MiB")&&!html.includes("100 MiB")&&!html.includes("vision model"),"Link must not display image/PDF upload guidance.");
-  for(const mode of ["text","documents","pdf","images"]){
-    await page.select(mode);
-    assert(page.render().includes("Images are limited to 20 MiB each; the total upload limit is 100 MiB. Image processing sends selected images or PDF pages to the vision model."),"Preserve existing helper for "+mode);
-  }
+Deno.test("URL intake explains image capture and preserves other upload modes", async () => {
+  const page=createUploadPage(deps);await page.select("link");
+  assert(page.render().includes("Images are included.")&&page.render().includes("Submit each relevant page"),"Capture scope is explicit");
+  for(const mode of ["text","documents","pdf","images"]){await page.select(mode);assert(page.render().includes("the total upload limit is 100 MiB"),"Preserve existing helper");}
 });
 Deno.test("Link errors are actionable typed projections without arbitrary diagnostics or draft loss", async () => {
   const cases=[
@@ -607,7 +603,7 @@ Deno.test("Link errors are actionable typed projections without arbitrary diagno
     [403,"ignored","Your account cannot add this Link. Check your access with the app owner."],
     [422,"KnowledgePageAuthenticationRequired","This source requires sign-in. Use a publicly accessible page or upload material you are authorized to use."],
     [422,"KnowledgePagePaywallDetected","This source is behind a paywall. Use a publicly accessible page or upload material you are authorized to use."],
-    [422,"KnowledgePageBotAccessDenied","This source blocks automated access. Use another public page or upload material you are authorized to use."],
+    [422,"KnowledgePageBotAccessDenied","Web capture is also blocked for this page. Open it in your browser and paste the relevant text or upload a document you saved yourself."],
     [422,"KnowledgePageRateLimited","This source is receiving too many requests. Wait, then retry your Link."],
     [422,"KnowledgePageTypeUnsupported","This page format cannot be extracted. Choose an HTML page or upload a supported document."],
     [422,"SourceExtractionFormatUnsupported","This page format cannot be extracted. Choose an HTML page or upload a supported document."],
@@ -630,7 +626,7 @@ Deno.test("Link errors are actionable typed projections without arbitrary diagno
     const page=createUploadPage({...deps,fetch:async(url)=>{
       if(String(url).includes("api/source-library?"))return Response.json({result:{items:[],interestAreas:[{id:"area-a",ownerId:"owner-a",title:"Music",provenance:"configured"}],nextCursor:null}});
       if(kind==="fetch")throw new TypeError("Internal transport diagnostic");
-      if(kind==="timeout")return await new Promise(()=>{});
+      if(kind==="timeout")throw new DOMException("Timed out","TimeoutError");
       return Response.json({error:kind,diagnosticToken:"internal-auth-token",message:"private arbitrary prose"},{status:Number(status)});
     }});
     await page.select("link");
@@ -639,21 +635,17 @@ Deno.test("Link errors are actionable typed projections without arbitrary diagno
     const html=page.render();
     assert(html.includes(String(expected)),"Actionable error for "+kind+": "+html);
     assert((Number(status)!==422 || !html.includes(String(kind)))&&!html.includes("internal-auth-token")&&!html.includes("private arbitrary prose")&&!html.includes("Internal transport diagnostic"),"Technical diagnostics must stay internal: "+kind);
-    assert(html.includes('value="Draft &lt;title&gt; &amp; &quot;quoted&quot;"')&&html.includes('value="https://publisher.example/lesson"')&&html.includes('value="area-a" selected'),"Failures preserve escaped editable draft.");
+    assert(html.includes('value="Draft &lt;title&gt; &amp; &quot;quoted&quot;"')&&html.includes('value="https://publisher.example/lesson"'),"Failures preserve escaped editable draft.");
   }
 });
 
-Deno.test("Link interest-load errors use readable copy and gateway retains diagnostic identity", async () => {
-  for(const status of [401,403]){
-    const page=createUploadPage({...deps,fetch:async()=>Response.json({error:"Private access diagnostic"},{status})});await page.select("link");
-    const html=page.render();
-    assert(html.includes(status===401 ? "Sign in to this app" : "Check your access with the app owner"),"Interest loader explains access recovery.");
-    assert(!html.includes("SourceGateway")&&!html.includes("Private access diagnostic"),"Interest loader hides technical diagnostics.");
-  }
-  const failureKind='<img src=x onerror="alert(1)"> private failure diagnostic';
+Deno.test("URL intake does not fetch interest areas and gateway retains typed failures", async () => {
+  const page=createUploadPage(deps);await page.select("link");
+  assert(!page.render().includes("Interest area"),"No classification choice or request");
+  const failureKind="private failure diagnostic";
   const gateway=new SourceLibraryGatewayClient({baseUrl:deps.baseUrl,timeoutMs:100,fetch:async()=>Response.json({error:failureKind},{status:422})});
-  const result=await gateway.extract({title:"Draft",url:"https://publisher.example/lesson",interestAreaId:"area-a",idempotencyKey:"fixture"});
-  assert(!result.ok&&result.error.kind==="SourceGatewayRejected"&&result.error.failureKind===failureKind,"Display copy must not overwrite the internal typed failure.");
+  const result=await gateway.extract({title:"Draft",url:"https://publisher.example/lesson",idempotencyKey:"fixture"},true);
+  assert(!result.ok&&result.error.kind==="SourceGatewayRejected"&&result.error.failureKind===failureKind,"Typed diagnostics remain internal");
 });
 
 Deno.test("YouTube transcript handoff starts in text mode with escaped guidance and resets on new Upload", async () => {
@@ -666,4 +658,22 @@ Deno.test("YouTube transcript handoff starts in text mode with escaped guidance 
   assert(html.includes("empty-states.svg#upload"), "Blank intake includes its own Upload artwork.");
   await page.load("#upload");
   assert(!page.render().includes("transcript"), "New Upload does not retain another source's guidance.");
+});
+
+Deno.test("Blocked-source manual handoff opens text intake with title and retained source URL", async () => {
+  let uploaded = false;
+  const page = createUploadPage({ ...deps, upload: async (sourceId, form, context) => {
+    assert(sourceId === "" && context === null, "Manual fallback must create its own material workflow without a completed run binding.");
+    assert(form.get("url") === "https://publisher.example/blocked", "Original source provenance must survive material submission.");
+    uploaded = true;
+    return { ok: true, message: "Uploaded." };
+  } });
+  await page.load("#upload", { title: "Blocked source", url: "https://publisher.example/blocked", manual: true, reason: "Paste content you are authorized to use." });
+  assert(page.render().includes('value="text" selected') && page.render().includes('name="content"'), "Manual fallback must start in text entry rather than recapturing the blocked page.");
+  assert(page.render().includes('value="Blocked source"') && page.render().includes("Paste content you are authorized to use."), "The new manual source retains its title and guidance.");
+  assert(page.render().includes('href="https://publisher.example/blocked"') && page.render().includes("Open original source"), "Manual intake keeps an unobtrusive original source link.");
+  const form = new FormData(); form.set("title", "Blocked source"); form.set("content", "Authorized source content.");
+  assert(await page.submit(form) && uploaded, "Manual content submission retains the original source metadata.");
+  await page.select("link");
+  assert(page.render().includes('value="https://publisher.example/blocked"'), "The source URL remains prefilled without attaching to the completed run.");
 });

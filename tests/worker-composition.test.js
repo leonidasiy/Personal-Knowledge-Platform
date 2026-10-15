@@ -1563,3 +1563,18 @@ Deno.test("concurrent launch duplicate creation verifies and reuses the winning 
  const results=await Promise.all([reconcileKnowledgeWorkflowLaunch(binding,{runId:"same-attempt",state:"source-added"},{},false),reconcileKnowledgeWorkflowLaunch(binding,{runId:"same-attempt",state:"source-added"},{},true)]);
  assertEquals(results.every(result=>result.ok),true);assertEquals(instances.size,1);
 });
+
+Deno.test("approved completed partial workflows restart without delivering events to the completed instance",async()=>{
+ /** @type {string[]} */ const calls=[];
+ for(const action of ["resume","retry-quizzes"]){
+ calls.length=0;
+ await deliverKnowledgeWorkflowControl({restart:async()=>{calls.push("restart");},sendEvent:async()=>{calls.push("event");},resume:async()=>{calls.push("resume");}},action,true);
+ assertEquals(calls.join(","),"restart");
+ }
+ const rollback=workflowControlRollback({action:"retry-quizzes"},{ok:true,value:{ownerId:"owner-a",runId:"run-a",state:"completed",failureKind:"WorkflowQuizItemsFailed"}},{ok:true,value:{state:"per-point-quiz-loop",revision:7}});
+ assertEquals(JSON.stringify(rollback),JSON.stringify({ownerId:"owner-a",runId:"run-a",expectedRevision:7,nextState:"retryable-failure",failureKind:"WorkflowRetryFailedQuizzes"}));
+ const pages=workflowControlRollback({action:"resume"},{ok:true,value:{ownerId:"owner-a",runId:"run-a",state:"completed",failureKind:"WorkflowQuizItemsFailed"}},{ok:true,value:{state:"extraction-loop",revision:7}});
+ assertEquals(pages?.failureKind,"WorkflowRetryFailedPages");
+ let rejected=false;try{await deliverKnowledgeWorkflowControl({},"resume",true);}catch(error){rejected=error instanceof TypeError;}
+ assertEquals(rejected,true);
+});

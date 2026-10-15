@@ -65,11 +65,16 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   let manualUploads = 0;
   let oauthRequests = 0;
   let centralSearchRequests = 0;
+  let moreAttempts = 0;
   /** @type {unknown} */ let centralSearchCommand = null;
   /** @type {Record<string,unknown>[]} */ const approvalCommands = [];
   /** @type {() => void} */
   let approveRelease = () => {};
   let holdApproval = false;
+  let conflict = false;
+  let acceptUpload = false;
+  const prompts = /** @type {string[]} */([]);
+  const promptedUrls = /** @type {(string|undefined)[]} */([]);
   const approvalGate = new Promise((resolve) => {
     approveRelease = () => resolve(undefined);
   });
@@ -103,6 +108,11 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
         centralSearchRequests += 1;
         centralSearchCommand = await request.json();
         const searchCommand = /** @type {{readonly query?:unknown}} */ (centralSearchCommand);
+        if (Object.hasOwn(/** @type {object} */ (centralSearchCommand), "cursors")) {
+          if (++moreAttempts === 1) return Response.json({error:"FixtureUnavailable"},{status:503});
+          const item = {providerId:"web",resultKind:"web",sourceLevel:"document",title:"Next counterpoint lesson",description:"Additional source.",canonicalUrl:"https://counterpoint.example/next",publisherLabel:null,publishedAt:null,identityEvidence:[{attribute:"canonical-url",value:"next",provenanceUrl:"https://counterpoint.example/next"}]};
+          return Response.json({result:{items:[{...item,title:"Duplicate",canonicalUrl:"https://counterpoint.example/"},item],providerFailures:[],submittedQuery:"counterpoint",providerQuery:"counterpoint",policyVersion:"raw-provider-v1"}});
+        }
         if (searchCommand.query === "starter-sources") return Response.json(starterSearchResult());
         if (searchCommand.query === "replacement-failure") {
           return Response.json({ error: "DiscoverySearchFailed" }, { status: 503 });
@@ -173,7 +183,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
           providerFailures: [],
           submittedQuery: "counterpoint",
           providerQuery: "counterpoint",
-          policyVersion: "raw-provider-v1"
+          policyVersion: "raw-provider-v1", nextCursors:{web:"1"}
         } });
       }
       if (path === "/api/discovery/youtube/oauth/connection") {
@@ -202,6 +212,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
         approvalCommands.push(
           /** @type {Record<string,unknown>} */ (await request.json()),
         );
+        if (conflict) return Response.json({error:"SourceStateConflict"},{status:409});
         if (holdApproval) await approvalGate;
         return Response.json({
           result: { source: librarySource, reused: false },workflow:{runId:"run-a",reused:false},
@@ -255,6 +266,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
     now: () => "2026-07-22T08:00:00.000Z",
     onNotice: (message) => notices.push(message),
     onError: (message) => errors.push(message),
+    confirmUpload: (message,url) => { prompts.push(message);promptedUrls.push(url);return acceptUpload; },
     navigateToUpload: ({title, reason}) => { uploadTitles.push(title); uploadReasons.push(reason ?? ""); },
     navigateToLibrary: (sourceId) => destinations.push(sourceId),
     rerender: () => {},
@@ -333,6 +345,18 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
 
   const selectedTitle = list.match(new RegExp(`data-discovery-item-id="${itemIds[0]}"[^>]*>[\\s\\S]*?<strong>([^<]+)</strong>`))?.[1];
   assert(selectedTitle !== undefined, "Selected source has a real title.");
+  conflict = true;
+  const errorsBeforePrompt=errors.length;
+  await page.approve(itemIds[0]);
+  assert(prompts.length===1 && prompts[0].includes("Automatic processing could not start") && !prompts[0].includes("Library") && prompts[0].includes("Would you like to open"),"Conflict explains the cause and asks for manual upload.");
+  assert(uploadTitles.length===0,"Declining upload must retain Discover.");
+  assert(errors.length===errorsBeforePrompt,"The popup must not duplicate the failure as a toast.");
+  assert(promptedUrls[0]!==undefined && promptedUrls[0].startsWith("https://"),"The confirmation receives the original source URL to open.");
+  acceptUpload = true;
+  await page.approve(itemIds[0]);
+  assert(uploadTitles[0]===selectedTitle,"Confirming upload pre-fills the selected source title.");
+  conflict = false;
+  prompts.length=0;uploadTitles.length=0;uploadReasons.length=0;errors.length=0;approvalCommands.length=0;decisionRequests=0;
   const opened = page.openUpload(itemIds[0]);
   assert(opened.ok && uploadTitles[0] === selectedTitle, "Navigate directly with the actual selected title.");
   const missingUpload = page.openUpload("missing-source");
@@ -340,8 +364,8 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   assert(appendCalls === writesAfterLoad && decisionRequests === 0 && manualUploads === 0, "Navigation must not save approval or upload material.");
 
   holdApproval = true;
-  const first = page.approve(itemIds[0], "area-a");
-  const repeated = page.approve(itemIds[0], "area-a");
+  const first = page.approve(itemIds[0]);
+  const repeated = page.approve(itemIds[0]);
   await repeated;
   assert(
     decisionRequests === 1,
@@ -355,21 +379,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
     "Successful approval must confirm and navigate to Library.",
   );
 
-  await page.reject(itemIds[1]);
-  const afterReject = page.render({ selectedItemId: null, online: true });
-  assert(
-    !afterReject.includes(`data-discovery-item-id="${itemIds[1]}"`),
-    "Accepted suppression must hide the source immediately.",
-  );
-
-  rejectFails = true;
-  await page.reject(itemIds[2]);
-  const afterFailure = page.render({ selectedItemId: null, online: true });
-  assert(
-    afterFailure.includes(`data-discovery-item-id="${itemIds[2]}"`) &&
-      errors.includes("Extraction or decision failed: SourceSuppressionFailed."),
-    "Rejected suppression must remain visible with an explicit failure.",
-  );
+  assert(!page.render({selectedItemId:itemIds[1],online:true}).includes("data-discovery-reject"), "Search results must not offer rejection.");
   const searched = await page.search({
     query: "counterpoint",
     providerIds: ["web", "podcasts", "youtube"],
@@ -425,8 +435,8 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
     "Selecting a live search result must preserve that search projection instead of restoring persisted rows.",
   );
   const approvalsBeforeUnsupported = approvalCommands.length;
-  await page.approve(searchedIds[1], "area-a");
-  await page.approve(searchedIds[2], "area-a");
+  await page.approve(searchedIds[1]);
+  await page.approve(searchedIds[2]);
   assert(approvalCommands.length === approvalsBeforeUnsupported, "Unsupported video/feed extraction must not persist provider preview metadata or start ingestion.");
   assert(errors.includes("Extraction is unavailable for this format. Explore the source or provide permitted learning material."), "Unsupported formats must explain their access boundary.");
   assert(searchedHtml.includes("Unreviewed provider results"), "Raw results must visibly disclose that they are unreviewed.");
@@ -439,11 +449,20 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
   assert(restored.includes('value="counterpoint"'), "Load must preserve the query.");
   assert(restored.includes('value="10" selected'), "Load must preserve the limit.");
   assert(restored.includes("Counterpoint course library"), "Load must preserve live results.");
+  assert(restored.includes("data-discovery-more"), "A continuation must offer Load more.");
+  await page.loadMore();
+  const retry = page.render({selectedItemId:searchedIds[0],online:true});
+  assert(retry.includes("Counterpoint course library") && retry.includes('role="alert"') && retry.includes("data-discovery-more"), "Failed pagination must preserve cards and allow retry.");
+  await page.loadMore();
+  const appended = page.render({selectedItemId:searchedIds[0],online:true});
+  assert(appended.includes("Next counterpoint lesson") && appended.includes(`data-discovery-item-id="${searchedIds[0]}"`), "Pagination must append while preserving existing IDs and selection.");
+  assert((appended.match(/data-discovery-item-id=/g) ?? []).length === 4 && !appended.includes("data-discovery-more"), "Pagination must deduplicate URLs and stop when exhausted.");
+  assert(JSON.stringify(centralSearchCommand) === JSON.stringify({query:"counterpoint",limit:10,cursors:{web:"1"},providerIds:["web"]}), "Pagination must use the previous search and provider continuation.");
   const replaced = await page.search({ query: "orchestration", providerIds: ["web"], limit: 5 });
   assert(replaced.ok, "The replacement search must succeed.");
   const replacement = page.render({ selectedItemId: null, online: true });
   assert(!replacement.includes("Counterpoint course library") && replacement.includes("Orchestration lesson archive"), "A successful replacement must atomically replace results.");
-  assert(replacement.includes("SearchProviderTimedOut") && replacement.includes("secondary"),"Partial provider failures must name the provider and cause.");
+  assert(!replacement.includes("SearchProviderTimedOut") && !replacement.includes("Available results are shown"),"Usable results must not display advisory provider failures.");
   const failedReplacement = await page.search({ query: "replacement-failure", providerIds: ["podcasts"], limit: 20 });
   assert(!failedReplacement.ok, "The fixture replacement must fail.");
   const afterFailedReplacement = page.render({ selectedItemId: null, online: true });
@@ -670,7 +689,7 @@ Deno.test("Discovery source actions recover after a transient catalog failure", 
   const recovered = page.render({ selectedItemId, online: true });
   assert(
     !recovered.includes("Connect the private source service") &&
-      recovered.includes('<option value="area-a">Music</option>'),
+      recovered.includes("Extract Knowledge Points") && !recovered.includes('name="interest-area"'),
     "A successful retry must restore configured source decisions.",
   );
 });

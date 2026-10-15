@@ -4,6 +4,8 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {createLearningBatchService} from '../worker/learning-batches-d1.js';
 import {D1KnowledgeContentRepository} from '../worker/knowledge-workflow-content-d1.js';
+import {assembleQuizPair} from '../src/features/knowledge-workflows/quiz-pair.js';
+import {knowledgeReviewAuditInput,knowledgeReviewTokens} from '../src/features/knowledge-workflows/quality-review.js';
 
 function fixture(days=8,due='2026-10-17T00:00:00.000Z',studied='2026-10-09T00:00:00.000Z') {
   const db=new DatabaseSync(':memory:');
@@ -74,5 +76,38 @@ test('see-less review context stays within the source main subject and owner',as
     f.db.prepare("DELETE FROM source_classifications WHERE source_id='music-source'").run();
     const initial=await repository.reviewContext({ownerId:'test-owner',sourceId:'music-source',runId:'initial-run',knowledgeId:'current-point'});
     assert.deepEqual(initial.value.lessOften.map(point=>point.id).sort(),['different-subject','same-source','same-subject']);
+  }finally{f.db.close();}
+});
+
+test('fresh review context preserves quiz meaning without repeated pair bookkeeping',async t=>{
+  const f=fixture();try{
+    f.db.exec(`ALTER TABLE extraction_knowledge_points ADD COLUMN run_id TEXT;
+      ALTER TABLE extraction_knowledge_points ADD COLUMN point_json TEXT;
+      ALTER TABLE extraction_knowledge_points ADD COLUMN created_at TEXT;
+      CREATE TABLE source_classifications(owner_id TEXT,source_id TEXT,main_subject TEXT,status TEXT);
+      CREATE TABLE knowledge_workflow_quizzes(owner_id TEXT,source_id TEXT,knowledge_id TEXT,run_id TEXT,created_at TEXT,quiz_id TEXT,draft_json TEXT);`);
+    f.db.prepare('DELETE FROM extraction_knowledge_points').run();
+    const pair=assembleQuizPair({knowledgeId:'old-point',knowledgeRevision:1,canonicalAnswers:['valve','reservoir'],citedEvidenceUrls:['https://example.test/synthetic-source'],multipleChoice:{prompt:'Which mappings describe the synthetic system?',options:[{key:'A',text:'The valve controls the path.'},{key:'B',text:'The reservoir stores water.'},{key:'C',text:'The path creates water.'}],correctOptionKeys:['A','B'],correctOptionAnswers:[{key:'A',canonicalAnswer:'valve'},{key:'B',canonicalAnswer:'reservoir'}],explanation:'The valve controls the path; the reservoir stores water.'},fillBlank:{prompt:'The ____ controls the path, and the ____ stores water.',blanks:[{id:'blank-1',canonicalAnswer:'valve',acceptedAnswers:['valve','control valve']},{id:'blank-2',canonicalAnswer:'reservoir',acceptedAnswers:['reservoir','water reservoir']}],explanation:'These terms name the two distinct roles.'}},'quiz:synthetic-source:old-point:r1');
+    const paired={id:pair.multipleChoice.id,knowledgeId:'old-point',knowledgeRevision:1,kind:pair.multipleChoice.kind,prompt:pair.multipleChoice.prompt,options:pair.multipleChoice.options.map(option=>option.text),answer:pair.multipleChoice.correctOptionKeys.map(key=>pair.multipleChoice.options.find(option=>option.key===key).text),explanation:pair.multipleChoice.explanation,citedEvidenceUrls:pair.citedEvidenceUrls,pairedQuiz:pair};
+    const legacy={id:'legacy',knowledgeId:'legacy-point',knowledgeRevision:1,kind:'fill-blank',prompt:'A ____ controls a ____.',options:[],answer:['valve','path'],blanks:[{id:'blank-1',acceptedAnswers:['valve','control valve']},{id:'blank-2',acceptedAnswers:['path','flow path']}],explanation:'The control acts on the path.',citedEvidenceUrls:['https://example.test/legacy']};
+    const distinct={...paired,id:'distinct',answer:[paired.options[2]],explanation:'A distinct retained legacy explanation.'};
+    const legacyChoice={...legacy,id:'legacy-choice',knowledgeId:'legacy-choice-point',kind:'single-choice',prompt:'Which control blocks flow?',options:['A closed valve.','An open path.'],answer:'A closed valve.'};delete legacyChoice.blanks;
+    const originals=[paired,legacy,distinct,legacyChoice];
+    for(const draft of originals)f.db.prepare('INSERT INTO knowledge_workflow_quizzes VALUES(?,?,?,?,?,?,?)').run('test-owner','music-source',draft.knowledgeId,'old-run','2026-10-09T00:00:00.000Z',draft.id,JSON.stringify(draft));
+    const before=f.db.prepare('SELECT * FROM knowledge_workflow_quizzes ORDER BY quiz_id').all();
+    const result=await new D1KnowledgeContentRepository({database:f.database,logger:()=>{}}).reviewContext({ownerId:'test-owner',sourceId:'music-source',runId:'current-run',knowledgeId:'current-point'});
+    assert.equal(result.ok,true);
+    const projected=result.value.previousQuizzes.find(item=>item.pairedQuiz&&!Object.hasOwn(item,'answer'));
+    assert.deepEqual(projected,{pairedQuiz:{multipleChoice:{kind:pair.multipleChoice.kind,prompt:pair.multipleChoice.prompt,options:pair.multipleChoice.options,correctOptionKeys:pair.multipleChoice.correctOptionKeys,explanation:pair.multipleChoice.explanation},fillBlank:{kind:pair.fillBlank.kind,prompt:pair.fillBlank.prompt,blanks:pair.fillBlank.blanks,explanation:pair.fillBlank.explanation}}});
+    assert.deepEqual(result.value.previousQuizzes.find(item=>item.prompt===legacy.prompt),{prompt:legacy.prompt,answer:legacy.answer,blanks:legacy.blanks,explanation:legacy.explanation});
+    assert.deepEqual(result.value.previousQuizzes.find(item=>item.prompt===legacyChoice.prompt),{prompt:legacyChoice.prompt,answer:legacyChoice.answer,options:legacyChoice.options,explanation:legacyChoice.explanation});
+    assert.deepEqual(result.value.previousQuizzes.find(item=>item.pairedQuiz&&Object.hasOwn(item,'answer')),{...projected,answer:distinct.answer,explanation:distinct.explanation});
+    assert.deepEqual(f.db.prepare('SELECT * FROM knowledge_workflow_quizzes ORDER BY quiz_id').all(),before);
+    const oldContext={lessOften:[],previousKnowledge:[],previousQuizzes:[{prompt:paired.prompt,answer:paired.answer,pairedQuiz:pair}]};
+    const newContext={...oldContext,previousQuizzes:[projected]},point={summary:'A synthetic source relationship.',evidenceAnchors:[]};
+    const metrics=context=>{const input={...context,auditEvidence:knowledgeReviewAuditInput(point,context,{})},serialized=JSON.stringify(input);return {bytes:Buffer.byteLength(serialized),wordSegments:knowledgeReviewTokens(serialized).length};};
+    const oldMetrics=metrics(oldContext),newMetrics=metrics(newContext);
+    assert(newMetrics.bytes<oldMetrics.bytes);assert(newMetrics.wordSegments<oldMetrics.wordSegments);
+    t.diagnostic('Synthetic quiz context plus unchanged numbered audit: '+JSON.stringify({before:oldMetrics,after:newMetrics}));
   }finally{f.db.close();}
 });

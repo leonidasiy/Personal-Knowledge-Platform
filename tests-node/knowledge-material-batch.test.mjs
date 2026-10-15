@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { createKnowledgeWorkflowRuntime } from "../worker/knowledge-workflow-runtime.js";
 import { createKnowledgeWorkflowService } from "../src/features/knowledge-workflows/workflow.js";
 import { createAgentConfigurationLoader } from "../src/features/knowledge-workflows/config.js";
+import { D1QuizRepository } from "../worker/knowledge-workflow-content-d1.js";
 import { D1KnowledgeWorkflowRepository } from "../worker/knowledge-workflow-d1.js";
 import { D1KnowledgeWorkflowMaterialRepository } from "../worker/knowledge-workflow-material-d1.js";
 import { parseAuthorizedMaterial } from "../src/features/knowledge-workflows/material.js";
@@ -68,9 +69,10 @@ test("production upload runtime resumes text batches and processes selected PDF 
       const message = body.messages[1].content;
       const envelope = Array.isArray(message) ? message[0].text : message;
       const modelInput = JSON.parse(envelope.slice(envelope.indexOf("\n") + 1, envelope.lastIndexOf("\n")));
-      const task = modelInput.task;
-      assert.equal(body.model,configs[modelInput.contract.role].model.name);
-      assert.deepEqual(body.reasoning, { effort: configs[modelInput.contract.role].model.reasoningEffort });
+      const task = modelInput.task ?? modelInput;
+      const config = configs[task.source && task.points ? "rights-assessor" : modelInput.contract.role];
+      assert.equal(body.model,config.model.name);
+      assert.deepEqual(body.reasoning, { effort: task.source && task.points ? "low" : config.model.reasoningEffort });
       if(body.response_format?.json_schema?.name==='quiz_evaluation_v3'){
         assert.equal(body.max_tokens,2048);assert.equal(modelInput.contract.role,'question-evaluator');
         assert.match(body.messages[0].content,/paired-question-evaluator-v8/);
@@ -143,15 +145,27 @@ test("production upload runtime resumes text batches and processes selected PDF 
       else assert.fail("Unexpected synthetic model task");
       if(body.response_format?.json_schema?.name === "paired_quiz_v3") {
         if (!invalidPairedDraftInjected) { invalidPairedDraftInjected=true; output.fillBlank.blanks[0].canonicalAnswer="other";output.fillBlank.blanks[0].acceptedAnswers=["other","ＯＴＨＥＲ"]; }
-        else if(task.feedback?.includes("Paired-quiz validation issues")) { pairedFeedbackSeen=true;assert.match(task.feedback,/canonicalAnswer:/);assert.match(task.feedback,/acceptedAnswers\[0\]:/);assert.match(task.feedback,/NFKC-equivalent/);assert.equal(task.attempt,2);assert(task.sourceEvidence.sections.length>0); }
+        else if(task.feedback?.includes("Paired-quiz validation issues")) { pairedFeedbackSeen=true;assert.match(task.feedback,/canonicalAnswer:/);assert.match(task.feedback,/acceptedAnswers\[0\]:/);assert.match(task.feedback,/NFKC-equivalent/);assert.equal(task.attempt,1,"Schema correction retains its quality attempt");assert(task.sourceEvidence.sections.length>0); }
       }
       return Response.json({ id: `fixture-${modelCalls}`, choices: [{ finish_reason: "stop", message: { content: JSON.stringify(output) } }], usage: { prompt_tokens: 100, completion_tokens: 100 } });
     };
     const forbidden = async () => { assert.fail("Uploads must not use browser acquisition."); };
     let sawInterruption = false;
-    for (let step = 0; step < 8 && run.state !== "completed"; step++) {
+    const quizChunkSizes=[];
+    const extractionClock=run.extractionDeadlineAt;
+    for (let step = 0; step < 16 && run.state !== "completed"; step++) {
       if (run.state === "awaiting-time-limit-decision") run = unwrap(await service.advance({ ownerId, runId, expectedRevision: run.revision, nextState: "extraction-loop" }));
       const runtime = createKnowledgeWorkflowRuntime({imagePolicy:WEBPAGE_IMAGE_POLICY, database, fetch: transport, browser: { readPage: forbidden, readRobots: forbidden, screenshot: forbidden, close: async () => ({ ok: true, value: null }) }, apiKey: "offline-fixture", endpoint: "https://example.test/model", now: clock, nowMs: Date.now, logger, configSnapshots: configs, imageSearch: { search: async () => assert.fail("Do not search for decorative images.") }, fallbackManifest: { entries: [], resolve: () => assert.fail("Do not attach a fallback to a text point.") }, material: materials, transition: ({ run: current, nextState, ...rest }) => service.advance({ ownerId, runId, expectedRevision: current.revision, nextState, ...rest }) });
+      const beforeQuiz=db.prepare("SELECT COUNT(*) count FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-point-completed:%' AND status='completed'").get(runId).count;
+      if (step === 0) {
+        const callsBefore = modelCalls;
+        for (const state of ["paused", "awaiting-time-limit-decision", "retryable-failure"]) {
+          const held = { ...run, state };
+          assert.deepEqual(await runtime.execute(held), { ok: true, value: { state, run: held } });
+        }
+        assert.equal(modelCalls, callsBefore, "A recreated held workflow waits for control without paid work.");
+        assert.deepEqual(unwrap(await repository.findById(ownerId, runId)), run);
+      }
       const executed = await runtime.execute(run);
       if (!executed.ok) {
         assert.equal(sawInterruption, false, JSON.stringify(executed.error));
@@ -159,13 +173,19 @@ test("production upload runtime resumes text batches and processes selected PDF 
         sawInterruption = true;
       }
       run = unwrap(await repository.findById(ownerId, runId));
+      const afterQuiz=db.prepare("SELECT COUNT(*) count FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-point-completed:%' AND status='completed'").get(runId).count;
+      assert(afterQuiz-beforeQuiz<=1,"Each runtime execution processes at most one quiz point");
+      if(afterQuiz>beforeQuiz)quizChunkSizes.push(afterQuiz-beforeQuiz);
+      assert.equal(run.extractionDeadlineAt,extractionClock);
     }
     assert.equal(sawInterruption, true);assert.equal(pairedFeedbackSeen,true);
     assert.equal(run.state, "completed");
-    assert.deepEqual(batchSizes, [5, 2]);
+    assert.deepEqual(batchSizes, [1, 1, 1, 1, 1, 1, 1]);
     assert.equal(run.counts.pages, 7);
     assert.equal(run.counts.knowledgePoints, 6);
     assert.equal(run.counts.acceptedQuizzes, 6);
+    assert.deepEqual(quizChunkSizes,[1,1,1,1,1,1]);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-batch-classification:%' AND status='completed'").get(runId).count,1);
     const scratchpad = JSON.parse(db.prepare("SELECT scratchpad_json FROM extraction_scratchpads").get().scratchpad_json);
     assert.equal(scratchpad.pendingBatch, undefined);
     assert.equal(scratchpad.processedUrls.length, 7);
@@ -181,7 +201,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
     };
     const packed = unwrap(packImageBundle([2, 4, 6].map((number) => ({ name: `Page ${number}`, locator: `page:${number}`, mediaType: "image/png", bytes: png }))));
     const imageRunId = "image-run", imageSourceId = "image-source", imageSourceUrl = "https://example.test/private-figures";
-    const imageMaterial = unwrap(await parseAuthorizedMaterial({ ownerId, runId: imageRunId, sourceId: imageSourceId, sourceRevision: 1, sourceUrl: imageSourceUrl, mode: "image", mediaType: BUNDLE_TYPE, fileName: "figures.pdf.pkpi", bytes: packed, idempotencyKey: imageRunId, rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "test-owned", reference: "synthetic-test" } }, { digest: async (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`, maximumBytes: 104_857_600, maximumCharacters: 1_000_000 }));
+    const imageMaterial = unwrap(await parseAuthorizedMaterial({ ownerId, runId: imageRunId, sourceId: imageSourceId, sourceRevision: 1, sourceUrl: imageSourceUrl, mode: "image", mediaType: BUNDLE_TYPE, fileName: "figures.pdf.pkpi", bytes: packed, idempotencyKey: imageRunId, rightsAttestation: { ownsOrPermitted: true, storageAllowed: true, transformationAllowed: true, processingAllowed: true, basis: "test-owned", reference: "synthetic-test" } }, { digest: async (bytes) => createHash("sha256").update(bytes).digest("hex"), maximumBytes: 104_857_600, maximumCharacters: 1_000_000 }));
     const imageService = createKnowledgeWorkflowService(repository, { now: clock, createId: () => imageRunId, logger });
     let imageRun = unwrap(await imageService.createRun({ ownerId, sourceId: imageSourceId, sourceRevision: 1, canonicalSourceIdentity: imageSourceUrl, contentSignature: imageMaterial.contentDigest, idempotencyKey: imageRunId, sourceOrigin: "private-document", configDigests: Object.fromEntries(Object.entries(configs).map(([role, config]) => [role, config.digest])) })).run;
     unwrap(await materials.persist({ ownerId, runId: imageRunId, materialId: "image-material", idempotencyKey: imageRunId, fingerprint: imageMaterial.contentDigest, objectKey: "synthetic-images", material: imageMaterial, createdAt: clock() }));
@@ -197,6 +217,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
     const reviewMedia={readOriginal:async scope=>{assert.equal(scope.ownerId,ownerId);assert.equal(scope.runId,imageRunId);assert.equal(scope.sourceRevision,1);return {ok:true,value:originals.get(scope.knowledgeId)??null};}};
     let reviewRuntime;
     for (let step = 0; step < 8 && imageRun.state !== "completed"; step++) {
+      if (imageRun.state === "awaiting-time-limit-decision") imageRun = unwrap(await imageService.advance({ ownerId, runId:imageRunId, expectedRevision:imageRun.revision, nextState:"extraction-loop" }));
       const runtime = createKnowledgeWorkflowRuntime({imagePolicy:WEBPAGE_IMAGE_POLICY, database, fetch: transport, browser: { readPage: forbidden, readRobots: forbidden, screenshot: forbidden, close: async () => ({ ok: true, value: null }) }, apiKey: "offline-fixture", endpoint: "https://example.test/model", now: clock, nowMs: Date.now, logger, configSnapshots: configs, material: materials, media, reviewMedia, decodeImage, materialContent: { read: async () => { imageReads++; return { ok: true, value: packed }; } }, transition: ({ run: current, nextState, ...rest }) => imageService.advance({ ownerId, runId: imageRunId, expectedRevision: current.revision, nextState, ...rest }) });
       reviewRuntime=runtime;
       const executed = await runtime.execute(imageRun);
@@ -209,7 +230,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
     assert.deepEqual(materialReviews, []); // The new verdict-only critic replaces the legacy rewriting normalizer.
     assert.deepEqual(qualityReviews,[...Array(6).fill('text'),...Array(3).fill('image')]); // Interrupted text checkpoint replays completed review decisions.
     assert.equal(originals.size,3);
-    assert.equal(imageReads, 1);
+    assert.equal(imageReads, 3); // One acquisition unit per durable execution.
     assert.equal(decodeCalls, 12); // Acquisition, attachment, independent review and media handoff each validate original pixels.
     assert.equal(imageRun.counts.pages, 3);
     assert.equal(imageRun.counts.knowledgePoints, 3);
@@ -225,6 +246,42 @@ test("production upload runtime resumes text batches and processes selected PDF 
     assert.equal((await actor.run({ownerId:'another-owner',runId:imageRunId,points:[stage.point]})).error.kind,'QuizCommandInvalid');
     assert.equal((await reviewRuntime.reviewCapturedCandidate({run:imageRun,point:{...stage.point,sourceId:'another-source'},sourceEvidence:originalEvidence,sourceMode:'image',supportingImage:originals.get(stage.point.id)})).error.kind,'KnowledgeReviewCommandInvalid');
     assert.equal(modelCalls,beforeReplay); // Both shared public seams replay actual completed application stages.
+
+    // Cached non-model checkpoints are untrusted JSON: malformed results must
+    // not skip a point or complete the run without its actual paired quiz.
+    const cached=db.prepare("SELECT stage_key,result_json FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-point-completed:%' ORDER BY stage_key LIMIT 1").get(imageRunId);
+    const cachedValue=JSON.parse(cached.result_json).value;
+    db.prepare("UPDATE knowledge_workflow_runs SET state='per-point-quiz-loop',run_json=json_set(run_json,'$.state','per-point-quiz-loop') WHERE owner_id=? AND run_id=?").run(ownerId,imageRunId);
+    const replayRun={...imageRun,state:'per-point-quiz-loop'};
+    for(const change of [{knowledgeId:'other-point'},{status:'unknown'},{publicationStatus:null},{attempts:-1},{attempts:1.5},{attempts:5},{failureKind:42},{restrictedUntil:'not-a-date'},{publicationStatus:'pending-review'}]) {
+      const corrupted={ok:true,value:{...cachedValue,dispositions:[{...cachedValue.dispositions[0],...change}]}};
+      db.prepare("UPDATE knowledge_workflow_stages SET result_json=? WHERE owner_id=? AND run_id=? AND stage_key=?").run(JSON.stringify(corrupted),ownerId,imageRunId,cached.stage_key);
+      const checked=await reviewRuntime.execute(replayRun);
+      assert.equal(checked.ok,false,JSON.stringify(change));assert.equal(checked.error.detailKind,'WorkflowStagePersistenceFailed');
+      assert.equal(modelCalls,beforeReplay);
+    }
+    for(const value of [{dispositions:[]},{dispositions:[cachedValue.dispositions[0],cachedValue.dispositions[0]]},{...cachedValue,statistics:{...cachedValue.statistics,inputPoints:2}},{...cachedValue,statistics:{...cachedValue.statistics,retryRate:2}}]) {
+      db.prepare("UPDATE knowledge_workflow_stages SET result_json=? WHERE owner_id=? AND run_id=? AND stage_key=?").run(JSON.stringify({ok:true,value}),ownerId,imageRunId,cached.stage_key);
+      const checked=await reviewRuntime.execute(replayRun);assert.equal(checked.ok,false);assert.equal(checked.error.detailKind,'WorkflowStagePersistenceFailed');assert.equal(modelCalls,beforeReplay);
+    }
+    db.prepare("UPDATE knowledge_workflow_stages SET result_json=? WHERE owner_id=? AND run_id=? AND stage_key=?").run(cached.result_json,ownerId,imageRunId,cached.stage_key);
+    const recovered=unwrap(await reviewRuntime.execute(replayRun));assert.equal(recovered.state,'completed');assert.equal(modelCalls,beforeReplay);
+    const knowledgeId=cachedValue.dispositions[0].knowledgeId;
+    const pendingValue={ok:true,value:{...cachedValue,dispositions:[{...cachedValue.dispositions[0],publicationStatus:'pending-review'}]}};
+    db.prepare("UPDATE knowledge_workflow_stages SET result_json=? WHERE owner_id=? AND run_id=? AND stage_key=?").run(JSON.stringify(pendingValue),ownerId,imageRunId,cached.stage_key);
+    db.prepare("UPDATE knowledge_workflow_quizzes SET status='pending-review' WHERE owner_id=? AND run_id=? AND knowledge_id=?").run(ownerId,imageRunId,knowledgeId);
+    db.prepare("UPDATE knowledge_workflow_runs SET state='per-point-quiz-loop',run_json=json_set(run_json,'$.state','per-point-quiz-loop') WHERE owner_id=? AND run_id=?").run(ownerId,imageRunId);
+    const pendingResult=unwrap(await reviewRuntime.execute(unwrap(await imageService.status({ownerId,runId:imageRunId}))));
+    assert.equal(pendingResult.state,'completed');assert.equal(pendingResult.run.counts.pendingQuizzes,1);assert.equal(modelCalls,beforeReplay);
+    unwrap(await new D1QuizRepository({database,logger,now:clock}).discard({ownerId,runId:imageRunId,knowledgeId,reason:'no-meaningful-quiz'}));
+    const restrictedUntil=new Date(Date.now()+7*86400000).toISOString();
+    const discardedValue={ok:true,value:{dispositions:[{knowledgeId,status:'abandoned',publicationStatus:null,attempts:0,failureKind:'QuizSeeLessOften',restrictedUntil}]}};
+    db.prepare("UPDATE knowledge_workflow_stages SET result_json=? WHERE owner_id=? AND run_id=? AND stage_key=?").run(JSON.stringify(discardedValue),ownerId,imageRunId,cached.stage_key);
+    db.prepare("UPDATE knowledge_workflow_runs SET state='per-point-quiz-loop',run_json=json_set(run_json,'$.state','per-point-quiz-loop') WHERE owner_id=? AND run_id=?").run(ownerId,imageRunId);
+    const discardedResult=unwrap(await reviewRuntime.execute(unwrap(await imageService.status({ownerId,runId:imageRunId}))));
+    assert.equal(discardedResult.state,'completed');assert.equal(discardedResult.restrictedUntil,restrictedUntil);assert(discardedResult.restrictedKnowledgeIds.includes(knowledgeId));assert.equal(modelCalls,beforeReplay);
+
+
 
   } finally { db.close(); }
 });

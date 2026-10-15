@@ -195,12 +195,16 @@ Deno.test("source workflow status exposes a retryable planner failure with an ac
 });
 
 Deno.test("source workflow status does not mislabel a non-planner retryable failure", async () => {
-  const fixture = makeFixture({ sourceState: "retryable-failure", sourceFailureKind: "WorkflowExtractionFailed" });
-  const response = await fixture.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a", { headers: { origin: "https://app.example" } }));
-  assertEquals(response.status, 200);
-  const body = /** @type {{ readonly result: Record<string, unknown> }} */ (await response.json());
-  assertEquals(body.result.reasonCode, "retryable-failure");
-  assertEquals(body.result.message, "Automatic extraction stopped because the workflow encountered a retryable error. Retry processing to try again.");
+  for (const failure of ["WorkflowExtractionFailed", "WorkflowStageCallUncertain"]) {
+    const fixture = makeFixture({ sourceState: "retryable-failure", sourceFailureKind: failure });
+    const response = await fixture.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a", { headers: { origin: "https://app.example" } }));
+    assertEquals(response.status, 200);
+    const body = /** @type {{ readonly result: Record<string, unknown> }} */ (await response.json());
+    assertEquals(body.result.reasonCode, "retryable-failure");
+    assertEquals(body.result.message, failure === "WorkflowStageCallUncertain"
+      ? "Processing paused because a request's result could not be confirmed. Your extracted knowledge and completed quizzes have been retained."
+      : "Processing stopped because the workflow encountered a retryable error. Retry processing to try again.");
+  }
 });
 
 Deno.test("source workflow status explains an expired extraction as retryable", async () => {
@@ -292,4 +296,40 @@ Deno.test("explicit Link extraction validates URL and starts the shared owner-bo
   const response=await fixture.worker.fetch(request(command));assertEquals(response.status,200);assertEquals(fixture.started.length,1);
   const authorization=/** @type {Record<string,unknown>} */(fixture.started[0].userAuthorization);
   assertEquals(authorization.kind,"user-authorized-link");assertEquals(authorization.ownerId,"owner-a");assertEquals(fixture.legacyIngestion.length,0);
+});
+
+Deno.test("source workflow status distinguishes bot and rate limits from missing rights", async () => {
+  for (const [sourceFailureKind, explanation] of [["KnowledgePageBotAccessDenied", "blocked automated access"], ["KnowledgePageRateLimited", "rate-limited automated access"]]) {
+    const fixture = makeFixture({sourceFailureKind});
+    const response = await fixture.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a"));
+    const body = await response.json();
+    assertEquals(response.status, 200);
+    assertEquals(body.result.reasonCode, "upload-content");
+    assertEquals(body.result.message.includes(explanation), true);
+    assertEquals(body.result.message.includes("permission or access evidence is not verified"), false);
+  }
+});
+
+Deno.test("failed empty source status offers upload instead of removing the source",async()=>{
+ for(const sourceFailureKind of ["WorkflowPagesFailed","WorkflowQuizItemsFailed"]){
+ const completed=makeFixture({sourceState:"completed",sourceFailureKind});
+ const result=await (await completed.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a"))).json();
+ assertEquals(result.result.reasonCode,"partial-failure");
+ assertEquals(result.result.message.includes("remaining content"),true);
+ }
+ const f=makeFixture({sourceState:"awaiting-upload",sourceFailureKind:"WorkflowExtractionFailed:KnowledgeBrowserNavigationFailed"});
+ const response=await f.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a"));const body=await response.json();
+ assertEquals(body.result.reasonCode,"failed");assertEquals(body.result.message.includes("Would you like to open"),true);assertEquals(body.result.message.includes("cancel to keep this source in Library"),true);assertEquals(body.result.message.includes("Remove"),false);
+ const retained=makeFixture({sourceState:"failed",sourceFailureKind:"WorkflowExtractionFailed:KnowledgeModelUnavailable"});
+ const retainedBody=await (await retained.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a"))).json();
+ assertEquals(retainedBody.result.message.includes("saved knowledge or quiz drafts remain in Library"),true);assertEquals(retainedBody.result.message.includes("was removed"),false);
+ const blocked=makeFixture({sourceState:"awaiting-upload",sourceFailureKind:"WorkflowExtractionFailed:KnowledgePageBotAccessDenied"});
+ const detail=await (await blocked.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a"))).json();
+ assertEquals(detail.result.message.includes("blocked automated access"),true);
+});
+
+Deno.test("URL material starts a separate upload workflow, retains the web identity, and needs no interest choice",async()=>{
+ const fixture=makeFixture();const gateway=new SourceLibraryGatewayClient({baseUrl:"https://worker.example/",timeoutMs:100,fetch:(request,init)=>fixture.worker.fetch(new Request(request,init))});
+ const result=await gateway.extract({title:"Learning source",url:"https://example.test/learn",idempotencyKey:"capture-a"},true);
+ assertEquals(result.ok,true);assertEquals(fixture.started[0].sourceOrigin,"url-material");assertEquals(fixture.started[0].canonicalSourceIdentity,"https://example.test/learn");assertEquals(fixture.legacyIngestion.length,0);
 });

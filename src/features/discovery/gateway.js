@@ -6,7 +6,7 @@ const freeze = Object.freeze;
 /** @typedef {{readonly kind:"DiscoveryGatewayCommandInvalid",readonly field:string}|{readonly kind:"DiscoveryGatewayUnauthenticated"}|{readonly kind:"DiscoveryGatewayUnauthorized"}|{readonly kind:"DiscoveryGatewayRateLimited"}|{readonly kind:"DiscoveryGatewayUnavailable"}|{readonly kind:"DiscoveryGatewayTimedOut"}|{readonly kind:"DiscoveryGatewayResponseInvalid"}|{readonly kind:"DiscoveryGatewayRejected",readonly failureKind:string}} DiscoveryGatewayFailure */
 /** @typedef {{readonly id:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean}} GatewaySearchCapability */
 /** @typedef {{readonly providerId:string,readonly resultKind:string,readonly sourceLevel:"site"|"document"|"feed"|"episode"|"video"|"unknown",readonly title:string,readonly description:string|null,readonly canonicalUrl:string,readonly publisherLabel:string|null,readonly publishedAt:string|null,readonly identityEvidence:readonly {readonly attribute:string,readonly value:string,readonly provenanceUrl:string}[]}} GatewayCentralCandidate */
-/** @typedef {{readonly items:readonly GatewayCentralCandidate[],readonly providerFailures:readonly {readonly providerId:string,readonly failure:{readonly kind:string}}[],readonly submittedQuery:string,readonly providerQuery:string,readonly policyVersion:string}} GatewayCentralSearchResult */
+/** @typedef {{readonly items:readonly GatewayCentralCandidate[],readonly providerFailures:readonly {readonly providerId:string,readonly failure:{readonly kind:string}}[],readonly submittedQuery:string,readonly providerQuery:string,readonly policyVersion:string,readonly nextCursors?:Readonly<Record<string,string>>}} GatewayCentralSearchResult */
 /** @typedef {{readonly canonicalUrl:string,readonly text:string}} GatewayPublisherTranscript */
 
 export class DiscoverySearchGatewayClient {
@@ -51,7 +51,7 @@ export class DiscoverySearchGatewayClient {
 
   /** @param {unknown} command @returns {Promise<Result<GatewayCentralSearchResult,DiscoveryGatewayFailure>>} */
   async search(command) {
-    if (!centralCommand(command)) return invalid("command");
+    if (!validCentralSearchCommand(command)) return invalid("command");
     const response = await this.post("api/discovery/search", command);
     if (!response.ok) return response;
     const value = record(response.value) ? response.value.result : null;
@@ -210,9 +210,9 @@ function capability(value) {
     typeof value.enabled === "boolean";
 }
 
-/** @param {unknown} value */
-function centralCommand(value) {
-  return record(value) && Object.keys(value).length === 3 && text(value.query) !== null &&
+/** @param {unknown} value @returns {value is {query:string,providerIds:readonly string[],limit:number,cursors?:Readonly<Record<string,string>>}} */
+export function validCentralSearchCommand(value) {
+  return record(value) && Object.keys(value).every(key => ["query","providerIds","limit","cursors"].includes(key)) && (value.cursors === undefined || cursorMap(value.cursors) && Object.keys(value.cursors).every(id => Array.isArray(value.providerIds) && value.providerIds.includes(id))) && text(value.query) !== null &&
     Array.isArray(value.providerIds) && value.providerIds.length > 0 && value.providerIds.length <= 20 &&
     value.providerIds.every((providerId) => text(providerId) !== null) &&
     new Set(value.providerIds).size === value.providerIds.length &&
@@ -221,7 +221,7 @@ function centralCommand(value) {
 
 /** @param {unknown} value @returns {Result<GatewayCentralSearchResult,DiscoveryGatewayFailure>} */
 function centralResult(value) {
-  if (!record(value) || Object.keys(value).length !== 5 || !Array.isArray(value.items) || value.items.length > 20 ||
+  if (!record(value) || Object.keys(value).some(key => !["items","providerFailures","submittedQuery","providerQuery","policyVersion","nextCursors"].includes(key)) || (value.nextCursors !== undefined && !cursorMap(value.nextCursors)) || !Array.isArray(value.items) || value.items.length > 20 ||
     !Array.isArray(value.providerFailures) || value.providerFailures.length > 20 ||
     text(value.submittedQuery) === null || text(value.providerQuery) === null || text(value.policyVersion) === null ||
     !value.items.every(centralCandidate) || !value.providerFailures.every(failure => record(failure) && Object.keys(failure).length === 2 && text(failure.providerId) !== null && record(failure.failure) && text(failure.failure.kind) !== null)) return bad();
@@ -287,3 +287,6 @@ function invalid(field) {
 }
 
 export {};
+
+/** @param {unknown} value @returns {value is Record<string,string>} */
+function cursorMap(value) { return record(value) && Object.entries(value).every(([id,cursor]) => text(id) !== null && text(cursor) !== null); }

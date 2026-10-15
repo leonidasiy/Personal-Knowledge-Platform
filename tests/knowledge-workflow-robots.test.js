@@ -83,7 +83,7 @@ function rights() {
 
 Deno.test("robots is checked only after allowed rights and denies matching paths", async () => {
   let calls = 0;
-  const gate = createRobotsGate({ fetch: async () => { calls += 1; return new Response("User-agent: *\nDisallow: /private\nAllow: /private/public\n", { status: 200 }); }, resolveAddresses: publicResolver, now: () => "2026-08-13T12:00:00.000Z", logger: () => {} });
+  const gate = createRobotsGate({ fetch: async (_url,init) => { assertEquals(init?.redirect,"manual"); calls += 1; return new Response("User-agent: *\nDisallow: /private\nAllow: /private/public\n", { status: 200 }); }, resolveAddresses: publicResolver, now: () => "2026-08-13T12:00:00.000Z", logger: () => {} });
   const denied = await gate.check({ rights: { ...rights(), canonicalUrl: "https://example.test/private/lesson" }, userAgent: "knowledge-platform" });
   assertEquals(denied.ok, false);
   if (!denied.ok) assertEquals(denied.error.kind, "RobotsDenied");

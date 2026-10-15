@@ -260,7 +260,7 @@ export function createKnowledgeWorkflowAgentRuntime(dependencies) {
         maxTurns: contract.limits.maxTurns,
         maxToolCalls: contract.limits.maxToolCalls,
         now: dependencies.now,
-        logger: (entry) => dependencies.logger({ event: entry.event, ownerId: command.ownerId, runId: command.runId, role: command.role, failureKind: entry.failureKind }),
+        logger: (entry) => dependencies.logger({ event: entry.event, ownerId: command.ownerId, runId: command.runId, role: command.role, failureKind: entry.failureKind,diagnosticToken:entry.diagnosticToken }),
       });
       const outcome = await harness.run({ namespace: namespace.value, taskId: executionTaskId, input: modelInput });
       if (!outcome.ok) return { ok: false, error: { kind: `WorkflowAgent${outcome.error.kind}` } };

@@ -38,10 +38,10 @@
  *   readonly items: readonly DiscoverRouteItem[],
  *   readonly selectedItemId: string | null,
  *   readonly maxVisibleItems: number,
- *   readonly areas: readonly { readonly id: string, readonly title: string }[],
  *   readonly pendingId: string | null,
  *   readonly canAct: boolean,
  *   readonly search: { readonly query:string, readonly limit:number, readonly capabilities:readonly {readonly id:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean}[], readonly selectedProviderIds:readonly string[], readonly available:boolean },
+ *   readonly loadMore?: {readonly available:boolean,readonly pending:boolean,readonly error:string|null},
  *   readonly markup: DiscoverMarkup,
  *   readonly escapeHtml: (value: string) => string
  * }} DiscoverRouteModel
@@ -155,9 +155,12 @@ function renderResults(model) {
       evidence: evidenceLabel(item.evidenceStatus),
     });
   }).join("");
+  const more = model.loadMore;
+  const footer = more?.available ? `<div class="discover-actions"><button class="button secondary" type="button" data-discovery-more data-focus-key="discovery-more" ${more.pending ? 'aria-disabled="true" aria-busy="true"' : ""}>${more.pending ? "Loading…" : "Load more"}</button>${more.error === null ? "" : `<p role="alert">${remoteText(model,more.error)}</p>`}</div>` : "";
   return template(model, "results", {
     count: String(model.items.length),
     rows,
+    more: footer,
   });
 }
 
@@ -205,33 +208,18 @@ function renderDecisionActions(model, item, offline) {
   const pending = model.pendingId === item.id;
   const unsupported = item.youtubeWatchUrl !== null || ["video", "feed", "episode", "unknown"].includes(item.candidate.adapter.granularity);
   const unavailable = offline || !model.canAct || pending;
-  const areas = model.areas.map((area) =>
-    `<option value="${remoteText(model, area.id)}">${
-      remoteText(model, area.title)
-    }</option>`
-  ).join("");
-  const youtubePolicy = item.youtubeWatchUrl === null
-    ? ""
-    : model.markup.youtubePolicy;
   const manualUpload = template(model, "manualUpload", {
     itemId: remoteText(model, item.id),
     submitDisabled: pending ? "disabled" : "",
     label: item.youtubeWatchUrl !== null ? "Upload video transcript" : "Provide permitted learning material",
   });
-  if (item.youtubeWatchUrl !== null) return youtubePolicy + template(model, "youtubeActions", {
-    upload: manualUpload,
-    itemId: remoteText(model, item.id),
-    rejectDisabled: unavailable ? "disabled" : "",
-  });
+  if (item.youtubeWatchUrl !== null) return model.markup.youtubePolicy + manualUpload;
   return template(model, "decisionActions", {
     itemId: remoteText(model, item.id),
     sourceGranularity: remoteText(model, item.candidate.adapter.granularity),
     sourceCapabilities: remoteText(model, item.candidate.adapter.capabilities.join(",")),
-    areas,
-    areaDisabled: model.areas.length === 0 ? "disabled" : "",
-    submitDisabled: unsupported || unavailable || model.areas.length === 0 ? "disabled" : "",
+    submitDisabled: unsupported || unavailable ? "disabled" : "",
     submitLabel: pending ? "Starting…" : "Extract Knowledge Points",
-    rejectDisabled: unavailable ? "disabled" : "",
     unavailable: unsupported
       ? model.markup.extractionUnavailable
       : model.canAct
@@ -306,7 +294,6 @@ function validateModel(model) {
     !ROUTE_STATES.has(model.state) ||
     (model.page !== "list" && model.page !== "detail") ||
     !Array.isArray(model.items) ||
-    !Array.isArray(model.areas) ||
     typeof model.canAct !== "boolean" ||
     !validSearch(model.search) ||
     (model.pendingId !== null && typeof model.pendingId !== "string") ||

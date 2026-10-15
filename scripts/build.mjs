@@ -22,7 +22,8 @@ export const ARTIFACT_BUDGETS = Object.freeze({
     // Final production measurement: test-results/link-copy-closure/build.log.
     // Initial and lazy-chunk limits remain unchanged.
     rawBytes: 226_669,
-    gzipBytes: 73_591,
+    // Quiz-failure report/control: measured 73,825 gzip (+234); other caps unchanged.
+    gzipBytes: 73_825,
   }),
   stylesheet: Object.freeze({
     label: "CSS",

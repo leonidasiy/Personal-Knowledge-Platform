@@ -1,4 +1,4 @@
-import {knowledgeReviewTokens,knowledgeReviewerPrompt,knowledgeRepairPrompt,knowledgeCriticRepairContextPrompt} from '../src/features/knowledge-workflows/quality-review.js';
+import {knowledgeReviewAuditInput,knowledgeReviewTokens,knowledgeReviewerPrompt,knowledgeRepairPrompt,knowledgeRepairSchemaFor,knowledgeCriticRepairContextPrompt} from '../src/features/knowledge-workflows/quality-review.js';
 import {syntheticAssessment,syntheticReviewAudit,auditedVerdict} from './fixtures/knowledge-review-audit.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -13,6 +13,7 @@ import { createKnowledgeWorkflowService } from '../src/features/knowledge-workfl
 import { createAgentConfigurationLoader } from '../src/features/knowledge-workflows/config.js';
 import { D1KnowledgeWorkflowRepository } from '../worker/knowledge-workflow-d1.js';
 import { WEBPAGE_IMAGE_POLICY } from '../worker/webpage-image-budget.js';
+import {AgentExecutionBoundaryFailure} from '../src/features/knowledge-workflows/harness.js';
 
 const point={id:'knowledge:source:1:original',sourceId:'source',sourceRevision:1,summary:'An unsupported and duplicated broad claim.',normalizedHash:'original',evidenceAnchors:[{url:'https://example.test/',selector:'p',blockId:'b',quote:'Captured immutable relationship.',clause:'Unsupported claim.',quoteDigest:'sha256:original'}],coverageGoalIds:['core'],mediaCandidates:[],attribution:{sourceUrl:'https://example.test/'},extractionVersion:'v1'};
 const context={lessOften:[{id:'unwanted',summary:'An unwanted concept.'}],previousKnowledge:[{id:'previous',summary:'A previously covered idea.'}],previousQuizzes:[]};
@@ -20,12 +21,12 @@ const verdict=(decision,other={})=>({decision,reasons:['Source-backed concrete r
 const repair={summary:'A supported distinct relationship.',coverageGoalIds:['core'],useSupportingImage:false,evidenceClauses:['Captured immutable relationship.']};
 const reviewer=(evaluate,regenerate,mode='text')=>createKnowledgeQualityReviewer({context,sourceMode:mode,evaluate:async(p,attempt)=>{const r=await evaluate(p,attempt);return r.ok?{ok:true,value:auditedVerdict(p,r.value,mode)}:r;},regenerate,digest:async()=> 'sha256:repaired'});
 
-test('unknown response fields spend at most the existing second critique without stripping or repairing',async()=>{
+test('unknown response fields use four technical critiques without spending a quality revision',async()=>{
  for(const validSecond of [true,false]) {
   let calls=0;
   const extra={...auditedVerdict(point,verdict('pass')),'':''};
-  const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=>assert.fail('No repair'),regenerate:async()=>assert.fail('No repair'),evaluate:async(_point,attempt,history)=>{calls++;assert.equal(history,undefined);return {ok:true,value:attempt===2&&validSecond?auditedVerdict(point,verdict('pass')):extra};}}).review(point);
-  assert.equal(calls,2);assert.equal(result.ok,validSecond);
+  const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=>assert.fail('No repair'),regenerate:async()=>assert.fail('No repair'),evaluate:async(_point,attempt,history,technicalAttempt)=>{calls++;assert.equal(attempt,1);assert.equal(technicalAttempt,calls);assert.equal(history,undefined);return {ok:true,value:calls===2&&validSecond?auditedVerdict(point,verdict('pass')):extra};}}).review(point);
+  assert.equal(calls,validSecond?2:4);assert.equal(result.ok,validSecond);
   if(!validSecond)assert.equal(result.error.kind,'KnowledgeReviewOutputInvalid');
   assert.equal(extra[''],'');
  }
@@ -33,7 +34,7 @@ test('unknown response fields spend at most the existing second critique without
 test('unknown fields cannot renew an assessment with invalid evidence spans',async()=>{
  let calls=0;const invalid={...auditedVerdict(point,verdict('pass')),'':''};invalid.audit.finalClause.textEvidence[0].end=99999;
  const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=>assert.fail('No repair'),regenerate:async()=>assert.fail('No repair'),evaluate:async()=>{calls++;return {ok:true,value:invalid};}}).review(point);
- assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid'}});assert.equal(calls,1);
+ assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});assert.equal(calls,4);
 });
 
 test('owner see-less meaning match drops immediately without regeneration',async()=>{
@@ -54,19 +55,22 @@ test('second quality failure drops rather than generating a third output',async(
 });
 
 // Synthetic responses exercise production dispatch and validation, not model accuracy.
-const productionCases=[...[1,3].flatMap(anchors=>[false,true].map(mismatch=>({anchors,mismatch,media:'none'}))),...['text-remove','text-keep','raster-keep','raster-remove','reasoning-only','raw-pass-gap-keep','raw-pass-gap-remove','reliability-only','both-negative','basis-null','history-negative','history-gap','history-null-basis','legacy-config-claims'].map(media=>({anchors:1,mismatch:false,media}))];
+const productionCases=[...[1,3].flatMap(anchors=>[false,true].map(mismatch=>({anchors,mismatch,media:'none'}))),...['text-remove','text-keep','raster-keep','raster-remove','reasoning-only','raw-pass-gap-keep','raw-pass-gap-remove','reliability-only','both-negative','basis-null','history-negative','history-gap','history-null-basis','legacy-config-claims','cached-legacy-context','deadline-before','deadline-expired','deadline-null-valid','deadline-null-invalid','deadline-null-read-failure','deadline-inflight','repair-technical-feedback','legacy-repair-technical-feedback','repair-legacy-read-failure'].map(media=>({anchors:1,mismatch:false,media}))];
 for(const {anchors,mismatch,media} of productionCases)test(`production repair schema fixes ${anchors} immutable anchors; mismatched count=${mismatch}; media=${media}`,async()=>{
   const db=new DatabaseSync(':memory:');
   try {
     for(const name of (await readdir('worker/migrations')).filter(name=>name.endsWith('.sql')).sort())db.exec(await readFile('worker/migrations/'+name,'utf8'));
-    const database={prepare(sql){let values=[];const execute=()=>({success:true,meta:{changes:Number(db.prepare(sql).run(...values).changes)}});return {bind(...v){values=v;return this;},first:async()=>db.prepare(sql).get(...values)??null,all:async()=>({success:true,results:db.prepare(sql).all(...values)}),run:async()=>execute(),execute};},async batch(statements){db.exec('BEGIN IMMEDIATE');try{const result=statements.map(s=>s.execute());db.exec('COMMIT');return result;}catch(error){db.exec('ROLLBACK');throw error;}}};
+    const database={prepare(sql){let values=[];const execute=()=>({success:true,meta:{changes:Number(db.prepare(sql).run(...values).changes)}});return {bind(...v){values=v;return this;},first:async()=>{if(media==='deadline-null-read-failure'&&sql.startsWith('SELECT extraction_deadline_at FROM knowledge_workflow_runs'))throw new Error('Constructed clock read failure');if(media==='repair-legacy-read-failure'&&sql.startsWith('SELECT stage_key FROM knowledge_workflow_stages'))throw new Error('Synthetic legacy lookup read failure');return db.prepare(sql).get(...values)??null;},all:async()=>({success:true,results:db.prepare(sql).all(...values)}),run:async()=>execute(),execute};},async batch(statements){db.exec('BEGIN IMMEDIATE');try{const result=statements.map(s=>s.execute());db.exec('COMMIT');return result;}catch(error){db.exec('ROLLBACK');throw error;}}};
     const unwrap=result=>{assert.equal(result.ok,true,JSON.stringify(result.error));return result.value;};
-    const now=()=> '2026-10-09T00:00:00.000Z',nowMs=()=>Date.parse(now()),logger=()=>{};
+    const now=()=> '2026-10-09T00:00:00.000Z';let dispatchNow=Date.parse(now());const nowMs=()=>dispatchNow,logger=()=>{};
     const loader=createAgentConfigurationLoader({sha256:async value=>'sha256:'+createHash('sha256').update(value).digest('hex')}),configs={};
     for(const role of ['rights-assessor','knowledge-scraper','question-generator','question-evaluator'])configs[role]=unwrap(await loader.load({source:await readFile('agent-config/'+role+'.yaml','utf8'),expectedRole:role}));
     const repository=new D1KnowledgeWorkflowRepository({database,logger}),service=createKnowledgeWorkflowService(repository,{now,createId:()=> 'synthetic-run',logger});
     let run=unwrap(await service.createRun({ownerId:'synthetic-owner',sourceId:point.sourceId,sourceRevision:1,canonicalSourceIdentity:point.attribution.sourceUrl,contentSignature:'synthetic-source',idempotencyKey:'synthetic-run',configDigests:Object.fromEntries(Object.entries(configs).map(([role,config])=>[role,config.digest]))})).run;
     for(const nextState of ['rights-assessment','robots-check','extraction-loop'])run=unwrap(await service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState}));
+    if(media==='deadline-before')dispatchNow=Date.parse(run.extractionDeadlineAt)-10000;
+    if(media==='deadline-expired')dispatchNow=Date.parse(run.extractionDeadlineAt);
+    if(media.startsWith('deadline-null')){run={...run,extractionDeadlineAt:null};if(media==='deadline-null-invalid')db.prepare('UPDATE knowledge_workflow_runs SET extraction_deadline_at=NULL WHERE run_id=?').run(run.runId);}
     const candidate={...point,evidenceAnchors:Array.from({length:anchors},(_,index)=>({...point.evidenceAnchors[0],blockId:'block-'+index,quote:'Immutable passage '+index,quoteDigest:'sha256:passage-'+index}))};
     const findOuter=()=>db.prepare('SELECT stage_key,input_digest,result_json FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key LIKE ?').get(run.ownerId,run.runId,'knowledge-quality:%:'+candidate.id);
     let legacyRows,legacySignature;
@@ -83,7 +87,16 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
     const image={id:sourceMode==='image'?'source-image':'optional-image',mediaType:'image/png',bytes:Uint8Array.from([137,80,78,71,13,10,26,10])};
     if(attached)candidate.mediaCandidates=[{visualId:image.id}];
     const sourceEvidence={passages:candidate.evidenceAnchors.map(anchor=>anchor.quote),images:[{id:'source-only-image',alt:'Captured source image metadata is not an attachment.'}]};
-    let criticCalls=0,repairCalls=0,firstRaw,firstCanonical;
+    const legacyContext={lessOften:[],previousKnowledge:[],previousQuizzes:[{prompt:'Which synthetic control stops flow?',answer:'The closed valve.',pairedQuiz:{multipleChoice:{id:'quiz:legacy:mcq',kind:'single-choice',prompt:'Which synthetic control stops flow?',options:[{key:'A',text:'The closed valve.'},{key:'B',text:'An open path.'}],correctOptionKeys:['A'],canonicalAnswers:['valve'],explanation:'A closed valve blocks the synthetic flow.'},fillBlank:{id:'quiz:legacy:fill',kind:'fill-blank',prompt:'The closed ____ stops flow.',blanks:[{id:'blank-1',canonicalAnswer:'valve',acceptedAnswers:['valve']}],canonicalAnswers:['valve'],explanation:'The valve is the control.'},canonicalAnswers:['valve'],citedEvidenceUrls:['https://example.test/synthetic-legacy']}}]};
+    let legacyContextRow;
+    if(media==='cached-legacy-context'){
+      const digest=value=>'sha256:'+createHash('sha256').update(value).digest('hex');
+      const signature=digest(JSON.stringify({point:candidate,evidenceDigest:digest(JSON.stringify(sourceEvidence)),sourceMode,imagePurpose:'evidence',retrySuffix:'',protocol:{review:knowledgeReviewerPrompt,repair:knowledgeRepairPrompt,repairContext:knowledgeCriticRepairContextPrompt,maximumCriticOutputTokens:4096},config:run.configDigests,attachments:[]}));
+      const key=`knowledge-quality-context:${signature}:${candidate.id}`;
+      db.prepare("INSERT INTO knowledge_workflow_stages(owner_id,run_id,stage_key,input_digest,status,result_json,created_at,completed_at) VALUES(?,?,?,?,'completed',?,?,?)").run(run.ownerId,run.runId,key,signature,JSON.stringify({ok:true,value:legacyContext}),now(),now());
+      legacyContextRow=db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(key);
+    }
+    let criticCalls=0,repairCalls=0,firstRaw,firstCanonical,firstRepairInput,legacyRepairRows;
     const fetch=async(_url,init)=>{
       const body=JSON.parse(init.body),message=body.messages[1].content;
       const envelope=Array.isArray(message)?message[0].text:message,input=JSON.parse(envelope.slice(envelope.indexOf('\n')+1,envelope.lastIndexOf('\n'))),task=input.task;
@@ -99,6 +112,14 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
       let output;
       if(schema.name==='knowledge_quality_repair_v1') {
         repairCalls++;
+        if(repairCalls===1){assert.equal(Object.hasOwn(task,'technicalRetryFeedback'),false);firstRepairInput=structuredClone(task);}
+        if(media==='repair-technical-feedback'&&repairCalls===2){const {technicalRetryFeedback,...unchanged}=task;assert.deepEqual(unchanged,firstRepairInput);assert.equal(technicalRetryFeedback.failureKind,'KnowledgeRepairOutputInvalid');assert.deepEqual(technicalRetryFeedback.issues,['RepairEvidenceClausesInvalid']);assert.match(technicalRetryFeedback.instructions,/exactly 1 nonempty strings/);}
+        if(media==='legacy-repair-technical-feedback'&&repairCalls===1){
+          const signature='sha256:'+createHash('sha256').update(JSON.stringify({sourceSignature:run.contentSignature,configDigest:configs['knowledge-scraper'].digest,systemPrompt:knowledgeRepairPrompt,input:task,maxOutputTokens:16384,responseSchema:knowledgeRepairSchemaFor(candidate),attachments:[]})).digest('hex');
+          // Constructed pre-patch history: attempt two returned malformed data; attempt three was dispatched with unknown outcome.
+          for(const attempt of [2,3])db.prepare('INSERT INTO knowledge_workflow_stages(owner_id,run_id,stage_key,input_digest,status,result_json,created_at,completed_at) VALUES(?,?,?,?,?,?,?,?)').run(run.ownerId,run.runId,`knowledge-scraper:knowledge-repair-${candidate.id}:technical-${attempt}:${signature}`,signature,attempt===2?'completed':'claimed',attempt===2?JSON.stringify({ok:true,value:{...repair,useSupportingImage:false,evidenceClauses:[]}}):null,now(),attempt===2?now():null);
+        }
+        if(media==='legacy-repair-technical-feedback'&&repairCalls===2){assert.equal(task.technicalRetryFeedback.failureKind,'KnowledgeRepairOutputInvalid');assert.deepEqual(task.technicalRetryFeedback.issues,['RepairEvidenceClausesInvalid']);}
         firstCanonical=structuredClone(task.review);assert.deepEqual(task.retrievalComparison,firstRaw.retrievalComparison);
         assert.equal(body.model,'z-ai/glm-5.3-flash');
         assert.equal(body.reasoning.effort,'high');
@@ -117,6 +138,7 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
         assert.deepEqual(task.knowledge.evidenceAnchors,candidate.evidenceAnchors);
         if(media==='reasoning-only')return Response.json({id:'synthetic-reasoning-only',choices:[{finish_reason:'length',message:{content:null}}],usage:{prompt_tokens:1,completion_tokens:16384,completion_tokens_details:{reasoning_tokens:16384}}});
         output={...repair,useSupportingImage:keep,evidenceClauses:clauses};
+        if(['repair-technical-feedback','legacy-repair-technical-feedback','repair-legacy-read-failure'].includes(media)&&repairCalls===1)output.evidenceClauses=[];
       } else {
         assert.equal(schema.name,'knowledge_quality_review_v11');assert.match(body.messages[0].content,/relevant domain knowledge solely to flag a likely source error or unsupported certainty/);assert.match(body.messages[0].content,/model memory is not evidence, external verification or a certain correction/);criticCalls++;assert(schema.schema.required.includes('sourceReliability'));assert(schema.schema.required.includes('retrievalComparison'));assert.deepEqual(schema.schema.properties.retrievalComparison.anyOf[0].required,['question','answer','priorAnswer','priorEvidence','reason']);assert.match(body.messages[0].content,/then the answer actually taught by cited prior content/);assert.equal(Object.keys(schema.schema.properties)[0],'retrievalComparison');assert.deepEqual(schema.schema.properties.sourceReliability.anyOf[0].required,['basis','decision','reason']);assert.equal(Object.keys(schema.schema.properties.sourceReliability.anyOf[0].properties)[0],'basis');assert.equal(schema.schema.properties.sourceReliability.anyOf.length,1);assert.match(body.messages[0].content,/null basis or sourceReliability=revise remains a negative independently of qualityDecision/);
         assert.equal(body.max_tokens,4096,'critic uses existing reviewer4096 ceiling');
@@ -129,7 +151,8 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
         assert.equal(Object.hasOwn(clauseProperties,'claim'),false);
         assert.equal(clauseProperties.claimEnd.maximum,task.auditEvidence.summaryNonFinalEndMaximum);
         assert.equal(clauseProperties.claimEnd.type,'integer');assert.deepEqual(schema.schema.properties.audit.properties.finalClause.anyOf[0].required,['textEvidence','pixelEvidence','previousEvidence','supportsWholeClaim']);assert.equal(Object.hasOwn(schema.schema.properties.audit.properties.finalClause.anyOf[0].properties,'claimEnd'),false);
-        assert.deepEqual(task.auditEvidence.previousContent,[]);
+        assert.deepEqual(task.auditEvidence.previousContent,media==='cached-legacy-context'?knowledgeReviewAuditInput(task.knowledge,legacyContext,sourceEvidence).previousContent:[]);
+        if(media==='cached-legacy-context')assert.deepEqual(task.previousQuizzes,legacyContext.previousQuizzes);
         assert.deepEqual(schema.schema.properties.audit.properties.clauses.items.properties.textEvidence.items.properties.anchorIndex.enum,Array.from({length:anchors},(_,index)=>index));assert.deepEqual(schema.schema.properties.audit.properties.finalClause.anyOf[0].properties.textEvidence.items.anyOf.map(branch=>({anchorIndex:branch.properties.anchorIndex.enum[0],startMaximum:branch.properties.start.maximum,endMaximum:branch.properties.end.maximum})),candidate.evidenceAnchors.map((anchor,anchorIndex)=>({anchorIndex,startMaximum:knowledgeReviewTokens(anchor.quote).length-1,endMaximum:knowledgeReviewTokens(anchor.quote).length})));assert.match(body.messages[0].content,/summaryTokenCount bounds only the summary/);
         const expectedAttached=attached&&(criticCalls===1||keep);
         assert.deepEqual(task.currentAttachmentIds,expectedAttached?[image.id]:[]);
@@ -155,12 +178,34 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
       if(schema.name==='knowledge_quality_review_v11'&&(media==='reliability-only'||media==='both-negative')&&criticCalls===1){output.qualityDecision=media==='reliability-only'?'pass':'revise';output.sourceReliability={basis:'Constructed captured relationship basis; not a model accuracy claim.',decision:'revise',reason:'Synthetic captured evidence does not establish the claimed causal strength.'};output.feedback='Keep everything; no regeneration needed.';}
       if(schema.name==='knowledge_quality_review_v11'&&media==='basis-null'&&criticCalls===1){output.qualityDecision='pass';output.sourceReliability={basis:null,decision:'pass',reason:'Synthetic positive assertion fidelity is not a captured basis.'};output.feedback='Keep everything; no regeneration needed.';}
       if(schema.name==='knowledge_quality_review_v11'){if(criticCalls===1)firstRaw=structuredClone(output);if(criticCalls===2&&media==='history-negative')output.qualityDecision='revise';if(criticCalls===2&&media==='history-gap')output.audit.finalClause.textEvidence=[];if(criticCalls===2&&media==='history-null-basis')output.sourceReliability.basis=null;}
+      if(media==='deadline-inflight'&&schema.name==='knowledge_quality_review_v11'&&criticCalls===1)dispatchNow=Date.parse(run.extractionDeadlineAt)+1;
       return Response.json({id:'synthetic-response-'+(criticCalls+repairCalls),choices:[{finish_reason:'stop',message:{content:JSON.stringify(output)}}],usage:{prompt_tokens:1,completion_tokens:1}});
     };
     const forbidden=async()=>assert.fail('Captured review must not acquire external source data.');
-    const runtime=createKnowledgeWorkflowRuntime({imagePolicy:WEBPAGE_IMAGE_POLICY,database,fetch,browser:{readPage:forbidden,readRobots:forbidden,screenshot:forbidden,close:async()=>({ok:true,value:null})},apiKey:'synthetic-not-a-secret',endpoint:'https://unexecuted.invalid/model',now,nowMs,logger,configSnapshots:configs,transition:forbidden});
+    let interruptedLegacy=false;
+    const runtimeOptions={imagePolicy:WEBPAGE_IMAGE_POLICY,database,fetch,browser:{readPage:forbidden,readRobots:forbidden,screenshot:forbidden,close:async()=>({ok:true,value:null})},apiKey:'synthetic-not-a-secret',endpoint:'https://unexecuted.invalid/model',now,nowMs,logger,configSnapshots:configs,transition:forbidden,preflightModelWork:(_role,scope)=>{if(media==='legacy-repair-technical-feedback'&&!interruptedLegacy&&scope.stageKey.startsWith('knowledge-scraper:knowledge-repair-')&&scope.stageKey.includes(':technical-4:')){interruptedLegacy=true;const error=new AgentExecutionBoundaryFailure({kind:'EvaluationCancelled'});error.notStarted=true;throw error;}}};
+    let runtime=createKnowledgeWorkflowRuntime(runtimeOptions);
     const command={run,point:candidate,sourceEvidence,sourceMode,...(attached?{supportingImage:image}:{})};
+    if(media==='legacy-repair-technical-feedback'){
+      await assert.rejects(()=>runtime.reviewCapturedCandidate(command),AgentExecutionBoundaryFailure);
+      assert.equal(repairCalls,1);assert.equal(criticCalls,1);assert.equal(db.prepare("SELECT status FROM knowledge_workflow_stages WHERE stage_key LIKE 'knowledge-quality:%'").get().status,'claimed');
+      legacyRepairRows=db.prepare("SELECT * FROM knowledge_workflow_stages WHERE stage_key LIKE 'knowledge-scraper:knowledge-repair-%' AND stage_key NOT LIKE '%:technical-4:%' ORDER BY stage_key").all();assert.equal(legacyRepairRows.length,3);assert.deepEqual(legacyRepairRows.map(row=>row.status).sort(),['claimed','completed','completed']);
+      runtime=createKnowledgeWorkflowRuntime(runtimeOptions);
+    }
     const result=await runtime.reviewCapturedCandidate(command);
+    if(['deadline-expired','deadline-null-invalid','deadline-null-read-failure'].includes(media)){
+      assert.deepEqual(result,{ok:false,error:{kind:media==='deadline-expired'?'WebpageImageRunDeadlineExceeded':media==='deadline-null-invalid'?'WorkflowExtractionClockInvalid':'WorkflowStagePersistenceFailed'}});
+      assert.equal(criticCalls,0);assert.equal(repairCalls,0);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:%' OR stage_key LIKE 'knowledge-scraper:%'").get().n,0,'Expired or invalid extraction clocks cannot claim paid model work');return;
+    }
+    if(media==='deadline-inflight'){
+      assert.deepEqual(result,{ok:false,error:{kind:'WebpageImageRunDeadlineExceeded'}});assert.equal(criticCalls,1);assert.equal(repairCalls,0);
+      const nativeBefore=db.prepare("SELECT * FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:%'").all();assert.equal(nativeBefore.length,1);assert.equal(nativeBefore[0].status,'completed','An in-flight accepted response is retained');
+      dispatchNow=Date.parse(now());assert.equal((await runtime.reviewCapturedCandidate(command)).ok,true);assert.equal(criticCalls,2,'Resume reuses the first critic and dispatches only the final review');assert.equal(repairCalls,1);assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(nativeBefore[0].stage_key),nativeBefore[0]);return;
+    }
+    if(media==='repair-legacy-read-failure'){assert.deepEqual(result,{ok:false,error:{kind:'WorkflowStagePersistenceFailed'}});assert.equal(repairCalls,1);assert.equal(criticCalls,1);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_stages WHERE stage_key LIKE 'knowledge-scraper:knowledge-repair-%'").get().n,1);return;}
+    if(media==='reasoning-only'){assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeModelResponseInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});assert.equal(repairCalls,4);assert.equal(criticCalls,1);assert.deepEqual(await runtime.reviewCapturedCandidate(command),result);assert.equal(repairCalls,4);return;}
+    const invalidRepair=mismatch||media==='raster-remove'||media==='raw-pass-gap-remove';
+    if(invalidRepair){assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeRepairOutputInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});assert.equal(repairCalls,4);assert.equal(criticCalls,1);assert.deepEqual(await runtime.reviewCapturedCandidate(command),result);assert.equal(repairCalls,4);return;}
     assert.equal(result.ok,true,JSON.stringify(result.error));
     const secondRejected=media.startsWith('history-');
     const rejected=mismatch||media==='raster-remove'||media==='reasoning-only'||media==='raw-pass-gap-remove';
@@ -171,9 +216,21 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
     if(media.startsWith('raw-pass-')){const first=JSON.parse(db.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:knowledge-quality-%-1:%'").get().result_json).value;assert.equal(first.qualityDecision,'pass');assert.equal(first.allowTextOnly,true);assert.deepEqual(first.audit.finalClause.pixelEvidence,[]);assert.equal(Object.hasOwn(first.audit,'revisionReason'),false);assert.equal(first.feedback,'Keep everything; no regeneration needed.');}
     if(media==='reliability-only'||media==='both-negative'){const raw=JSON.parse(db.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:knowledge-quality-%-1:%'").get().result_json).value;assert.equal(raw.feedback,'Keep everything; no regeneration needed.');assert.equal(raw.sourceReliability.decision,'revise');assert.equal(raw.sourceReliability.reason,'Synthetic captured evidence does not establish the claimed causal strength.');assert.equal(raw.qualityDecision,media==='reliability-only'?'pass':'revise');assert.equal(Object.hasOwn(result.value.verdict,'sourceReliability'),false);}
     if(media==='basis-null'){const raw=JSON.parse(db.prepare("SELECT result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:knowledge-quality-%-1:%'").get().result_json).value;assert.deepEqual(raw.sourceReliability,{basis:null,decision:'pass',reason:'Synthetic positive assertion fidelity is not a captured basis.'});assert.equal(raw.qualityDecision,'pass');assert.equal(raw.feedback,'Keep everything; no regeneration needed.');assert.equal(Object.hasOwn(result.value.verdict,'sourceReliability'),false);}
-    assert.equal(repairCalls,1);assert.equal(criticCalls,rejected?1:2);
+    const expectedRepairCalls=['repair-technical-feedback','legacy-repair-technical-feedback'].includes(media)?2:1;
+    assert.equal(repairCalls,expectedRepairCalls);assert.equal(criticCalls,rejected?1:2);
     assert.deepEqual(await runtime.reviewCapturedCandidate(command),result);
-    assert.equal(repairCalls,1);assert.equal(criticCalls,rejected?1:2);
+    assert.equal(repairCalls,expectedRepairCalls);assert.equal(criticCalls,rejected?1:2);
+    if(media==='repair-technical-feedback'){const rows=db.prepare("SELECT stage_key,status,result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'knowledge-scraper:knowledge-repair-%' ORDER BY stage_key").all();assert.equal(rows.length,2);assert(rows.every(row=>row.status==='completed'));assert.equal(rows.filter(row=>row.stage_key.includes(':technical-2')).length,1);assert(rows.some(row=>JSON.parse(row.result_json).value.evidenceClauses.length===0),'Original malformed response remains immutable');}
+    if(media==='legacy-repair-technical-feedback'){const rows=db.prepare("SELECT * FROM knowledge_workflow_stages WHERE stage_key LIKE 'knowledge-scraper:knowledge-repair-%' ORDER BY stage_key").all();assert.equal(rows.length,4);assert.equal(repairCalls+2,4,'Two historic dispatched calls plus current transport calls total four');assert.deepEqual(rows.filter(row=>!row.stage_key.includes(':technical-4:')),legacyRepairRows,'All historic native rows including unknown attempt three stay byte-identical');assert.equal(rows.filter(row=>row.stage_key.includes(':technical-4:')).length,1);}
+    if(media==='cached-legacy-context'){
+      const nativeRows=db.prepare("SELECT * FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:%' OR stage_key LIKE 'knowledge-scraper:%' ORDER BY stage_key").all();
+      const outer=findOuter();db.prepare("UPDATE knowledge_workflow_stages SET status='claimed',result_json=NULL,completed_at=NULL WHERE stage_key=?").run(outer.stage_key);
+      runtime=createKnowledgeWorkflowRuntime(runtimeOptions);
+      assert.deepEqual(await runtime.reviewCapturedCandidate(command),result);
+      assert.equal(criticCalls,2);assert.equal(repairCalls,1);
+      assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(legacyContextRow.stage_key),legacyContextRow);
+      assert.deepEqual(db.prepare("SELECT * FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:%' OR stage_key LIKE 'knowledge-scraper:%' ORDER BY stage_key").all(),nativeRows);
+    }
     if(media==='legacy-config-claims'){
       assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key IN (?,?) ORDER BY stage_key').all('knowledge-quality:'+candidate.id,'knowledge-quality-context:'+candidate.id),legacyRows);
       const outer=findOuter();assert.notEqual(outer.input_digest,legacySignature);assert.equal(outer.stage_key,'knowledge-quality:'+outer.input_digest+':'+candidate.id);
@@ -199,7 +256,7 @@ test('forged preference IDs and missing image proof cannot pass the review bound
 });
 test('image-source repair cannot remove pixels to evade quality review',async()=>{
   const result=await reviewer(async()=>({ok:true,value:verdict('revise')}),async()=>({ok:true,value:repair}),'image').review({...point,mediaCandidates:[{visualId:'pixel'}]});
-  assert.deepEqual(result,{ok:true,value:null});
+  assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeRepairOutputInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});
 });
 test('unsupported optional image is removed only through one permitted repair and a second text-only review',async()=>{
   const original={...point,mediaCandidates:[{visualId:'optional-structure'}]},seen=[];let repairs=0;
@@ -214,10 +271,10 @@ test('unsupported optional image is removed only through one permitted repair an
   assert.deepEqual(original.mediaCandidates,[{visualId:'optional-structure'}]);assert.equal(original.evidenceAnchors[0].quoteDigest,point.evidenceAnchors[0].quoteDigest);
   assert.deepEqual(seen,[1,2]);assert.equal(repairs,1);
 });
-test('text-only permission in a malformed attached-image pass never strips the image or renews attempts',async()=>{
+test('text-only permission in a malformed attached-image pass never strips the image during technical retries',async()=>{
   const original={...point,mediaCandidates:[{visualId:'optional-structure'}]};let critics=0,repairs=0;
   const result=await reviewer(async()=>{critics++;return {ok:true,value:verdict('pass',{allowTextOnly:true,supportingImageEvidence:''})};},async()=>{repairs++;assert.fail('Malformed pass is not a repair instruction.');}).review(original);
-  assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid'}});assert.equal(critics,1);assert.equal(repairs,0);
+  assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});assert.equal(critics,4);assert.equal(repairs,0);
   assert.deepEqual(original.mediaCandidates,[{visualId:'optional-structure'}]);assert.deepEqual(original.evidenceAnchors,point.evidenceAnchors);
 });
 test('review transport uncertainty stops separately from the semantic regeneration budget',async()=>{
@@ -227,12 +284,10 @@ test('review transport uncertainty stops separately from the semantic regenerati
   for(const kind of ['KnowledgeModelResponseInvalid','KnowledgeModelResponseDuplicateKey','KnowledgeModelUsageInvalid','KnowledgeModelTimeout','KnowledgeModelUnavailable','WorkflowStageCallUncertain']) {
     let regenerationCalls=0;
     const regenerated=await reviewer(async()=>({ok:true,value:verdict('revise')}),async()=>{regenerationCalls++;return {ok:false,error:{kind}};}).review(point);
-    if(['KnowledgeModelResponseInvalid','KnowledgeModelResponseDuplicateKey'].includes(kind)) {
-      assert.deepEqual(regenerated,{ok:true,value:null});
-      const continued=await reviewer(async()=>({ok:true,value:verdict('pass')}),async()=>{throw new Error('No further regeneration');}).review({...point,id:'next-source-point'});
-      assert.equal(continued.ok,true);assert.equal(continued.value.point.id,'next-source-point');
-    } else assert.deepEqual(regenerated,{ok:false,error:{kind}});
-    assert.equal(regenerationCalls,1);
+    const retryable=kind!=='KnowledgeModelUsageInvalid';
+    assert.deepEqual(regenerated,{ok:false,error:{kind,...(retryable?{attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}:{})}});
+    assert.equal(regenerationCalls,retryable?4:1);
+
   }
 });
 
@@ -311,23 +366,23 @@ test('known nondispatch failures can recover while provider refusals retain a fi
 test('new quiz mode returns evaluator outage without regeneration, discard or publication',async()=>{
   let generators=0;
   const f=quizzes({generator:{generate:async()=>{generators++;return {ok:true,value:{id:'draft',knowledgeId:point.id,knowledgeRevision:1,kind:'single-choice',prompt:'A specific concept?',options:['yes','no'],answer:'yes',citedEvidenceUrls:['https://example.test/']}};}},reviewer:{evaluate:async()=>({ok:false,error:{kind:'WorkflowStageCallUncertain'}})}});
-  const result=await f.actor.run({ownerId:'owner',runId:'run',points:[point]});assert.equal(result.ok,false);assert.equal(result.error.causeKind,'WorkflowStageCallUncertain');assert.equal(generators,1);assert.equal(f.audit.length,0);assert.equal(f.dropped.length,0);assert.equal(f.published.length,0);
+  const result=await f.actor.run({ownerId:'owner',runId:'run',points:[point]});assert.equal(result.ok,false);assert.equal(result.error.kind,'WorkflowStageCallUncertain');assert.equal(result.error.technicalAttempts,4);assert.equal(result.error.technicalRetriesExhausted,true);assert.equal(generators,1);assert.equal(f.audit.length,0);assert.equal(f.dropped.length,0);assert.equal(f.published.length,0);
 });
 
 // Optional imagery can be removed only after the independent critic explicitly finds no source-relevant educational support.
 test('meaningful supporting image cannot be discarded by a repair without critic permission',async()=>{
   let calls=0;
   const result=await reviewer(async()=>{calls++;return {ok:true,value:verdict('revise',{allowTextOnly:false})};},async()=>({ok:true,value:repair})).review({...point,mediaCandidates:[{visualId:'pixel'}]});
-  assert.deepEqual(result,{ok:true,value:null});assert.equal(calls,1);
+  assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeRepairOutputInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});assert.equal(calls,1);
 });
 
 import {knowledgeReviewSchema,knowledgeReviewSchemaFor,isKnowledgeReviewVerdict} from '../src/features/knowledge-workflows/quality-review.js';
-test('saved public critic using learned duplicate as unwanted preference stays terminal after one critic without repair',async()=>{
+test('saved public critic using learned duplicate as unwanted preference stays technical after four critiques without repair',async()=>{
  const path='test-results/architecture-recovery/continued-repair/diagnosed-v13-dev023-review/diagnosis.json',bytes=await readFile(path),saved=JSON.parse(bytes);
  assert.equal(createHash('sha256').update(bytes).digest('hex'),'902d58c4b30b4473fadedc4d34bf3cbe6e4131440bef5aa805dea425d49dcdcb');
  assert.deepEqual(saved.context.lessOften,[]);assert.equal(saved.context.previousKnowledge.some(p=>p.id===saved.verdict.matchedLessOftenIds[0]),true);assert.equal(isKnowledgeReviewVerdict(saved.verdict,saved.context),false);
  let critics=0,repairs=0;const result=await createKnowledgeQualityReviewer({context:saved.context,sourceMode:'text',digest:async()=>assert.fail('No repair hash'),evaluate:async()=>{critics++;return {ok:true,value:saved.verdict};},regenerate:async()=>{repairs++;assert.fail('Malformed verdict stays terminal');}}).review(point);
- assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid'}});assert.equal(critics,1);assert.equal(repairs,0);
+ assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});assert.equal(critics,4);assert.equal(repairs,0);
 });
 test('review schema derives a unique owner ID domain without mutating the public base or emitting empty enum',()=>{
  const before=JSON.stringify(knowledgeReviewSchema),context={lessOften:[{id:'owner-choice',summary:'First'},{id:'owner-choice',summary:'Duplicate projection'},{id:'second-choice',summary:'Second'}],previousKnowledge:[{id:'learned-only',summary:'Prior'}],previousQuizzes:[{id:'quiz-only'}]};
@@ -371,11 +426,11 @@ test('historical repair context snapshots the validated canonical downgrade and 
  },regenerate:async(p,v)=>{repairs++;canonical=structuredClone(v);v.reasons.push('Mutated after snapshot');return {ok:true,value:repair};}}).review(point);
  assert.deepEqual(result,{ok:true,value:null});assert.equal(count,2);assert.equal(repairs,1);assert.equal(first.qualityDecision,'pass');assert.equal(first.sourceReliability.basis,null);
 });
-test('invalid first assessment and typed repair failure never obtain a historical second critique',async()=>{
- for(const malformed of [true,false]){let critics=0,repairs=0;const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=>assert.fail('No successful repair'),evaluate:async(p,attempt,history)=>{critics++;assert.equal(attempt,1);assert.equal(history,undefined);return {ok:true,value:malformed?{qualityDecision:'revise'}:auditedVerdict(p,verdict('revise'))};},regenerate:async()=>{repairs++;return {ok:false,error:{kind:'KnowledgeModelProviderRefused'}};}}).review(point);assert.deepEqual(result,{ok:false,error:{kind:malformed?'KnowledgeReviewOutputInvalid':'KnowledgeModelProviderRefused'}});assert.equal(critics,1);assert.equal(repairs,malformed?0:1);}
+test('invalid assessments use four technical critiques while non-retryable repair failures remain terminal',async()=>{
+ for(const malformed of [true,false]){let critics=0,repairs=0;const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=>assert.fail('No successful repair'),evaluate:async(p,attempt,history)=>{critics++;assert.equal(attempt,1);assert.equal(history,undefined);return {ok:true,value:malformed?{qualityDecision:'revise'}:auditedVerdict(p,verdict('revise'))};},regenerate:async()=>{repairs++;return {ok:false,error:{kind:'KnowledgeModelProviderRefused'}};}}).review(point);assert.deepEqual(result,{ok:false,error:{kind:malformed?'KnowledgeReviewOutputInvalid':'KnowledgeModelProviderRefused',...(malformed?{attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}:{})}});assert.equal(critics,malformed?4:1);assert.equal(repairs,malformed?0:1);}
 });
 test('a malformed second assessment remains terminal with historical context present',async()=>{
- let critics=0,repairs=0;const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=> 'sha256:context-fixture',evaluate:async(p,attempt,history)=>{critics++;assert.equal(history===undefined,attempt===1);return {ok:true,value:attempt===1?auditedVerdict(p,verdict('revise')):{qualityDecision:'pass',repairContext:history}};},regenerate:async()=>{repairs++;return {ok:true,value:repair};}}).review(point);assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid'}});assert.equal(critics,2);assert.equal(repairs,1);
+ let critics=0,repairs=0;const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',digest:async()=> 'sha256:context-fixture',evaluate:async(p,attempt,history)=>{critics++;assert.equal(history===undefined,attempt===1);return {ok:true,value:attempt===1?auditedVerdict(p,verdict('revise')):{qualityDecision:'pass',repairContext:history}};},regenerate:async()=>{repairs++;return {ok:true,value:repair};}}).review(point);assert.deepEqual(result,{ok:false,error:{kind:'KnowledgeReviewOutputInvalid',attempts:4,technicalAttempts:4,technicalRetriesExhausted:true}});assert.equal(critics,5);assert.equal(repairs,1);
 });
 
 // Constructed source gap: exercises correction delivery, bounded calls and immutable provenance.
@@ -386,4 +441,26 @@ for(const oversized of [false,true])test(`source-audit repair preserves specific
   if(critics===1)response.audit.finalClause.textEvidence=[];return {ok:true,value:response};
  },regenerate:async(p,v)=>{repairs++;assert.match(v.feedback,/requiredRevisions.sourceClauses/);assert(v.feedback.includes(correction));assert(v.feedback.length<=2000);assert.equal(v.allowTextOnly,true);return {ok:true,value:repair};}}).review(point);
  assert.equal(result.ok,true);assert(result.value);assert.equal(critics,2);assert.equal(repairs,1);assert.equal(result.value.point.evidenceAnchors[0].quote,point.evidenceAnchors[0].quote);
+});
+
+test('normal technical identities replay known refusals without redispatch while credential repair remains available',async()=>{
+ const {db,repository}=await stages(),scope={ownerId:'owner',runId:'run'};
+ try{
+  for(const status of [429,503]){
+   const key=`cached-provider-${status}`,failure={ok:false,error:{kind:'KnowledgeModelRejected',status}},options={modelCall:true,maximumProviderAttempts:4,cacheProviderRefusals:true};let calls=0;
+   assert.deepEqual(await repository.run(scope,key,'input',async()=>{calls++;return failure;},options),failure);
+   const original=db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(key);
+   for(let replay=0;replay<5;replay++)assert.deepEqual(await repository.run(scope,key,'input',async()=>assert.fail('A cached provider refusal cannot dispatch again'),options),failure);
+   assert.equal(calls,1);assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(key),original);
+   assert.equal((await repository.run(scope,key,'changed',async()=>assert.fail('Changed input cannot replay'),options)).error.kind,'WorkflowStageInputChanged');
+   db.prepare('UPDATE knowledge_workflow_stages SET result_json=? WHERE stage_key=?').run(JSON.stringify({ok:false,error:{kind:'KnowledgeModelRejected',status:401}}),key);
+   assert.equal((await repository.run(scope,key,'input',async()=>assert.fail('Corrupt refusal cannot dispatch'),options)).error.kind,'WorkflowStagePersistenceFailed');
+  }
+  for(const status of [401,403]){
+   const key=`credential-${status}`,options={modelCall:true,maximumProviderAttempts:4,cacheProviderRefusals:true};
+   assert.equal((await repository.run(scope,key,'input',async()=>({ok:false,error:{kind:'KnowledgeModelRejected',status}}),options)).error.status,status);
+   assert.equal(db.prepare('SELECT provider_failures FROM knowledge_workflow_stages WHERE stage_key=?').get(key).provider_failures,0);
+   assert.deepEqual(await repository.run(scope,key,'input',async()=>({ok:true,value:{credential:'restored'}}),options),{ok:true,value:{credential:'restored'}});
+  }
+ }finally{db.close();}
 });

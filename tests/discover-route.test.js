@@ -314,7 +314,7 @@ Deno.test("YouTube timestamp fragments retain their existing safe watch behavior
   assert(html.includes(`href="${url}"`), "Preserve safe timestamp fragments on YouTube watch links.");
 });
 
-Deno.test("Discovery exposes only source approval and rejection without learning claims", () => {
+Deno.test("Discovery exposes source extraction without manual subject or rejection controls", () => {
   const html = renderDiscoverRoute(model("success", [item()], {
     page: "detail",
     selectedItemId: "observed-item-1",
@@ -342,7 +342,7 @@ Deno.test("Discovery exposes only source approval and rejection without learning
       html.includes("Watch on YouTube") &&
       html.includes("Upload video transcript") &&
       !html.includes("data-discovery-approve") &&
-      html.includes("data-discovery-reject"),
+      !html.includes("data-discovery-reject"),
     "The attributed source and the two approved Library decisions must remain available.",
   );
   assert(

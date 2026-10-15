@@ -173,7 +173,16 @@ export class D1KnowledgeContentRepository {
         if(!isRecord(row)||!text(row.draft_json))return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
         const draft=JSON.parse(row.draft_json);
         if(!isDraft(draft))return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
-        previousQuizzes.push({prompt:draft.prompt,answer:draft.answer,pairedQuiz:draft.pairedQuiz??null});
+        const pair=draft.pairedQuiz;
+        if(pair===undefined)previousQuizzes.push({prompt:draft.prompt,answer:draft.answer,...(draft.options.length===0?{}:{options:draft.options}),...(draft.blanks===undefined?{}:{blanks:draft.blanks}),...(draft.explanation===undefined?{}:{explanation:draft.explanation})});
+        else {
+          const correctAnswers=pair.multipleChoice.correctOptionKeys.map(key=>pair.multipleChoice.options.find(option=>option.key===key)?.text);
+          const pairedAnswer=pair.multipleChoice.kind==='single-choice'?correctAnswers[0]:correctAnswers;
+          previousQuizzes.push({pairedQuiz:{
+            multipleChoice:{kind:pair.multipleChoice.kind,prompt:pair.multipleChoice.prompt,options:pair.multipleChoice.options,correctOptionKeys:pair.multipleChoice.correctOptionKeys,explanation:pair.multipleChoice.explanation},
+            fillBlank:{kind:pair.fillBlank.kind,prompt:pair.fillBlank.prompt,blanks:pair.fillBlank.blanks,explanation:pair.fillBlank.explanation},
+          },...(JSON.stringify(draft.answer)===JSON.stringify(pairedAnswer)?{}:{answer:draft.answer}),...(draft.explanation===undefined||draft.explanation===pair.multipleChoice.explanation?{}:{explanation:draft.explanation})});
+        }
       }
       return {ok:true,value:{lessOften,previousKnowledge,previousQuizzes}};
     }catch(error){this.#logger({event:'knowledge-review-context-failure',ownerId:scope.ownerId,runId:scope.runId,failureKind:'KnowledgeReviewContextFailed'});return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};}
