@@ -1,4 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="loading" viewBox="0 0 480 260">
+    <ellipse cx="240" cy="227" rx="146" ry="10" fill="var(--surface-subtle)"/>
+    <circle cx="240" cy="122" r="88" fill="var(--action-soft)"/>
+    <path d="M111 154C78 76 185 28 272 42s135 73 93 128" fill="none" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="4 8"/>
+    <g stroke="var(--text)" stroke-width="2.5" stroke-linejoin="round">
+      <path d="M132 157c35-8 72-3 108 17 36-20 73-25 108-17v58c-36-7-72-4-108 14-36-18-72-21-108-14Z" fill="var(--action)"/>
+      <path d="M143 144c35-3 67 5 97 25 30-20 62-28 97-25v58c-33-2-65 7-97 25-32-18-64-27-97-25Z" fill="var(--surface)"/>
+      <path d="M240 169v58" fill="none"/>
+      <path d="m155 69 52-14 16 60-52 14Z" fill="var(--surface)"/>
+      <path d="m279 60 54 12-13 60-54-12Z" fill="var(--signal-three)"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-width="3">
+      <path d="m163 169 51 13m-51 1 38 10m67-11 49-13m-36 25 36-11" stroke="var(--border)"/>
+      <path d="m169 85 26-7m-22 21 21-6" stroke="var(--action)"/>
+      <path d="m282 93 8 12 21-17" stroke="var(--text)"/>
+    </g>
+    <path d="m240 59 5 15 15 5-15 5-5 15-5-15-15-5 15-5Z" fill="var(--action)"/>
+    <path d="m362 108 4 11 11 4-11 4-4 11-4-11-11-4 11-4Z" fill="var(--signal-three)"/>
+    <circle cx="113" cy="121" r="5" fill="var(--signal-two)"/>
+    <circle cx="326" cy="38" r="4" fill="var(--signal-two)"/>
+  </symbol>
   <symbol id="feed" viewBox="0 0 480 260">
     <ellipse cx="240" cy="224" rx="166" ry="12" fill="var(--surface-subtle)"/>
     <circle cx="239" cy="127" r="91" fill="var(--action-soft)"/>

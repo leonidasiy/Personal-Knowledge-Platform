@@ -70,6 +70,8 @@ Deno.test("loading markup is accessible, has restrained art, and excludes failur
   assert(copy.panelLoading.includes('role="status"') && copy.panelLoading.includes('aria-busy="true"') && copy.panelLoading.includes('aria-hidden="true"'), "Loading status must be announced and decoration hidden from assistive technology.");
   assert(!copy.panelLoading.includes("could not") && copy.panelFailed.includes('role="alert"'), "Pending and failed states must remain distinct.");
   assert(shell.includes('<div id="app"><main id="main-content" class="loading-screen"'), "The first paint must contain a loading state before module loading.");
+  assert([copy.panelLoading, copy.openingApp, shell.match(/<div id="app">(.*?)<\/div>/s)?.[1] ?? ""].every(markup => markup.includes("empty-states.svg#loading") && !markup.includes("empty-states.svg#discover")), "Initial and panel loading use dedicated artwork instead of Discover's telescope.");
+  assert(copy.discoverMarkup.neverRunState.includes("empty-states.svg#discover"), "Discover keeps its distinct empty-state artwork.");
 });
 Deno.test("desktop Discover navigation starts loading before the detail-preservation path can apply", async () => {
   let click = () => {}, hashchange = () => {}, loads = 0;
