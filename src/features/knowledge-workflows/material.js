@@ -2,15 +2,16 @@
 
 import { getResolvedPDFJS } from "unpdf";
 import { BUNDLE_TYPE, imageSignature, parseImageBundle } from "./image-upload.js";
+import { URL_CAPTURE_TYPE, parseUrlCapture } from "./url-capture.js";
 
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
 /** @typedef {{ readonly ownsOrPermitted: true, readonly storageAllowed: true, readonly transformationAllowed: true, readonly processingAllowed: true, readonly basis: string, readonly reference: string }} MaterialRightsAttestation */
-/** @typedef {{ readonly path: string, readonly mediaType: string, readonly bytes: Uint8Array }} MaterialMedia */
+/** @typedef {{ readonly path: string, readonly mediaType: string, readonly bytes: Uint8Array, readonly url?: string, readonly caption?: string, readonly alt?: string, readonly context?: string }} MaterialMedia */
 /** @typedef {{ readonly id: string, readonly title: string, readonly text: string, readonly locator: string }} MaterialSection */
 /** @typedef {{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number, readonly sourceUrl: string, readonly mediaType: string, readonly fileName: string, readonly mode: "text" | "image", readonly contentDigest: string, readonly sections: readonly MaterialSection[], readonly media: readonly MaterialMedia[], readonly provenance: { readonly kind: "authorized-user-material", readonly attestationReference: string, readonly basis: string, readonly processingAllowed?: true } }} AuthorizedMaterial */
 
-/** @typedef {{ readonly kind: "MaterialCommandInvalid", readonly field: string } | { readonly kind: "MaterialRightsAttestationMissing" } | { readonly kind: "MaterialContentTypeUnsupported", readonly mediaType: string } | { readonly kind: "MaterialImageModeUnsupported", readonly mediaType: string } | { readonly kind: "MaterialImageInvalid" | "MaterialImageBundleInvalid" } | { readonly kind: "MaterialByteLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialTextLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialEncodingInvalid" } | { readonly kind: "MaterialDigestUnavailable" } | { readonly kind: "MaterialPdfInvalid" } | { readonly kind: "MaterialPdfEncrypted" } | { readonly kind: "MaterialPdfCleanupFailed" } | { readonly kind: "MaterialPdfPageLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialPdfTextExtractionUnavailable" } | { readonly kind: "MaterialPdfSelectionMissing" | "MaterialPdfSelectionAmbiguous" } | { readonly kind: "MaterialPdfSelectionInvalid" | "MaterialPdfSelectionConflict", readonly field: string } | { readonly kind: "MaterialPptxInvalid" } | { readonly kind: "MaterialPptxTextExtractionUnavailable" } | { readonly kind: "MaterialPptxCompressionUnsupported" } | { readonly kind: "MaterialArchiveTooLarge" }} MaterialFailure */
+/** @typedef {{ readonly kind: "MaterialCommandInvalid", readonly field: string } | { readonly kind: "MaterialRightsAttestationMissing" } | { readonly kind: "MaterialContentTypeUnsupported", readonly mediaType: string } | { readonly kind: "MaterialImageModeUnsupported", readonly mediaType: string } | { readonly kind: "MaterialImageInvalid" | "MaterialImageBundleInvalid" | "MaterialUrlCaptureInvalid" } | { readonly kind: "MaterialByteLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialTextLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialEncodingInvalid" } | { readonly kind: "MaterialDigestUnavailable" } | { readonly kind: "MaterialPdfInvalid" } | { readonly kind: "MaterialPdfEncrypted" } | { readonly kind: "MaterialPdfCleanupFailed" } | { readonly kind: "MaterialPdfPageLimitExceeded", readonly maximum: number } | { readonly kind: "MaterialPdfTextExtractionUnavailable" } | { readonly kind: "MaterialPdfSelectionMissing" | "MaterialPdfSelectionAmbiguous" } | { readonly kind: "MaterialPdfSelectionInvalid" | "MaterialPdfSelectionConflict", readonly field: string } | { readonly kind: "MaterialPptxInvalid" } | { readonly kind: "MaterialPptxTextExtractionUnavailable" } | { readonly kind: "MaterialPptxCompressionUnsupported" } | { readonly kind: "MaterialArchiveTooLarge" }} MaterialFailure */
 
 /** @typedef {{ readonly sourceDigest: string, readonly physicalPage: number, readonly textCodepointRange: readonly [number, number], readonly excerptDigest: string }} PdfTextSelection */
 
@@ -84,13 +85,21 @@ export async function parseAuthorizedMaterial(command, dependencies) {
   const value = parsed.value;
   if (value.bytes.byteLength > dependencies.maximumBytes) return { ok: false, error: { kind: "MaterialByteLimitExceeded", maximum: dependencies.maximumBytes } };
   if (value.mode === "image" && value.mediaType !== BUNDLE_TYPE && value.bytes.byteLength > MAXIMUM_IMAGE_BYTES) return { ok: false, error: { kind: "MaterialByteLimitExceeded", maximum: MAXIMUM_IMAGE_BYTES } };
-  if (!textTypes.has(value.mediaType) && value.mediaType !== pdfType && value.mediaType !== pptxType && value.mediaType !== BUNDLE_TYPE && !imageTypes.has(value.mediaType)) return { ok: false, error: { kind: "MaterialContentTypeUnsupported", mediaType: value.mediaType } };
+  if (!textTypes.has(value.mediaType) && value.mediaType !== pdfType && value.mediaType !== pptxType && value.mediaType !== BUNDLE_TYPE && value.mediaType !== URL_CAPTURE_TYPE && !imageTypes.has(value.mediaType)) return { ok: false, error: { kind: "MaterialContentTypeUnsupported", mediaType: value.mediaType } };
   if (value.mode === "image" && value.mediaType !== BUNDLE_TYPE && !imageTypes.has(value.mediaType)) return { ok: false, error: { kind: "MaterialImageModeUnsupported", mediaType: value.mediaType } };
   if (value.mode === "text" && value.mediaType === BUNDLE_TYPE) return { ok: false, error: { kind: "MaterialImageModeUnsupported", mediaType: value.mediaType } };
   if (Object.hasOwn(/** @type {object} */ (command), "pdfTextSelection") && value.mediaType !== pdfType) return invalid("pdfTextSelection/mediaType");
   let digest;
   try { digest = await dependencies.digest(value.bytes); } catch (error) { return { ok: false, error: { kind: "MaterialDigestUnavailable" } }; }
   if (!text(digest)) return { ok: false, error: { kind: "MaterialDigestUnavailable" } };
+  if (value.mediaType === URL_CAPTURE_TYPE) {
+    if (value.mode !== "text") return invalid("mode");
+    const captured = parseUrlCapture(value.bytes);
+    if (!captured.ok) return captured;
+    if (captured.value.sourceUrl !== value.sourceUrl) return invalid("sourceUrl");
+    const parsedPdf = await parsePdf({ ...value, bytes: captured.value.pdf }, digest, dependencies);
+    return parsedPdf.ok ? { ok: true, value: freeze({ ...parsedPdf.value, media: freeze(captured.value.images) }) } : parsedPdf;
+  }
   if (value.mode === "image") return value.mediaType === BUNDLE_TYPE ? parseBundledImages(value, digest) : parseImage(value, digest);
   if (textTypes.has(value.mediaType)) return parseText(value, digest, dependencies.maximumCharacters);
   if (value.mediaType === pdfType) {

@@ -109,7 +109,7 @@ export function createKnowledgeWorkflowMaterialService(dependencies) {
         dependencies.logger({ event: "knowledge-workflow-material-failure", ownerId: material.ownerId, runId: material.runId, failureKind: staged.error.kind });
         return { ok: false, error: { kind: "WorkflowMaterialStorageFailed" } };
       }
-      const stored = freeze({ materialId, ownerId: material.ownerId, runId: material.runId, idempotencyKey, fingerprint, objectKey: staged.value.objectKey, material: freeze({ ...material, media: freeze(material.media.map((entry) => freeze({ path: entry.path, mediaType: entry.mediaType, bytes: new Uint8Array() }))) }), createdAt });
+      const stored = freeze({ materialId, ownerId: material.ownerId, runId: material.runId, idempotencyKey, fingerprint, objectKey: staged.value.objectKey, material: freeze({ ...material, media: freeze(material.media.map((entry) => freeze({ ...entry, bytes: new Uint8Array() }))) }), createdAt });
       const persisted = await dependencies.repository.persist(stored);
       if (!persisted.ok) {
         const removed = await dependencies.contentStore.remove(staged.value.objectKey);

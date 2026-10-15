@@ -2,6 +2,7 @@
 
 import { parseAuthorizedMaterial } from "../src/features/knowledge-workflows/material.js";
 import { BUNDLE_TYPE, packImageBundle } from "../src/features/knowledge-workflows/image-upload.js";
+import { URL_CAPTURE_TYPE, packUrlCapture, parseUrlCapture } from "../src/features/knowledge-workflows/url-capture.js";
 
 const base = Object.freeze({
   ownerId: "owner-a",
@@ -218,5 +219,27 @@ Deno.test("Single and bundled images force image mode with absent or stale input
  for (const mode of [undefined,"text","image"]) for (const mediaType of ["image/png",BUNDLE_TYPE]) {
   const result=await parseAuthorizedMaterial({...base,rightsAttestation:undefined,mode,mediaType,fileName:"image",bytes:mediaType===BUNDLE_TYPE?bundled.value:image},dependencies());
   if(!result.ok || result.value.mode!=="image") throw new Error("Image mode must be unconditional.");
+ }
+});
+
+Deno.test("URL capture parses complete PDF text and retains original asset metadata independently",async()=>{
+ const image={path:"image:1",url:"https://cdn.example.test/figure.png",caption:"Figure by author",alt:"Transformer diagram",context:"Encoder and decoder",mediaType:"image/png",bytes:base64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1S8AAAAASUVORK5CYII=")};
+ const packed=packUrlCapture({sourceUrl:base.sourceUrl,responseUrl:base.sourceUrl,pdf:pdf(["Attention processes tokens.","Encoders create context."]),images:[image]});
+ if(!packed.ok)throw new Error(packed.error.kind);
+ const command={...base,mode:"text",mediaType:URL_CAPTURE_TYPE,fileName:"article.pkpc",bytes:packed.value};
+ const result=await parseAuthorizedMaterial(command,dependencies());
+ if(!result.ok)throw new Error(result.error.kind);
+ if(result.value.mode!=="text"||result.value.sections.length!==2||!result.value.sections[1].text.includes("Encoders create context."))throw new Error("PDF must retain full text across sheets without OCR or raster processing");
+ const retained=result.value.media[0];if(retained.url!==image.url||retained.caption!==image.caption||retained.bytes.length!==image.bytes.length)throw new Error("Original image and provenance must survive parsing");
+ const mismatch=await parseAuthorizedMaterial({...command,sourceUrl:"https://another.example.test/lesson"},dependencies());if(mismatch.ok)throw new Error("Cross-source capture must fail");
+ if(parseUrlCapture(packed.value.slice(0,-1)).ok)throw new Error("Truncated assets must fail");
+ const extra=new Uint8Array(packed.value.length+1);extra.set(packed.value);if(parseUrlCapture(extra).ok)throw new Error("Trailing unaccounted bytes must fail");
+});
+Deno.test("URL capture without assets uses full-text PDF and rejects scan-only input without switching to vision",async()=>{
+ for(const text of ["A complete source paragraph.",""]){
+  const packed=packUrlCapture({sourceUrl:base.sourceUrl,responseUrl:base.sourceUrl,pdf:pdf([text]),images:[]});if(!packed.ok)throw new Error(packed.error.kind);
+  const result=await parseAuthorizedMaterial({...base,mediaType:URL_CAPTURE_TYPE,fileName:"article.pkpc",bytes:packed.value},dependencies());
+  if(text){if(!result.ok||result.value.mode!=="text"||result.value.media.length!==0)throw new Error("Expected text-only fallback");}
+  else if(result.ok||result.error.kind!=="MaterialPdfTextExtractionUnavailable")throw new Error("Do not silently rasterize a PDF without text");
  }
 });

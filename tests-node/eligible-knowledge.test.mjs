@@ -202,3 +202,23 @@ test('media multiplicity cannot consume the 1000 distinct knowledge candidate li
     assert.equal(db.prepare('SELECT COUNT(*) n FROM knowledge_workflow_media_assets').get().n,1001);
   } finally { db.close(); }
 });
+
+
+test('legacy URL PDF screenshots are hidden while points, quizzes and manual PDF images remain', async()=>{
+  const {db,seed,learning}=fixture();
+  try{
+    for(const id of ['url-capture','manual-pdf']){
+      seed(id);
+      const point=JSON.parse(db.prepare('SELECT point_json FROM extraction_knowledge_points WHERE knowledge_id=?').get(id).point_json);
+      const binding={kind:'uploaded-source',purpose:'evidence',ownerId:'owner',runId:id,sourceRevision:1,factHash:'sha256:'+createHash('sha256').update(JSON.stringify({summary:point.summary,normalizedHash:point.normalizedHash,evidenceAnchors:point.evidenceAnchors})).digest('hex'),originalDigest:'sha256:original',imageId:'page-1',evidence:'Synthetic page',locator:'page:1',sourceDigest:'sha256:source'};
+      db.prepare('INSERT INTO knowledge_workflow_media_assets VALUES(?,?,?,?,?,?,?,?,?,?)').run('owner',id,null,id,'screenshot','Author',id,1,JSON.stringify(binding),binding.originalDigest);
+      db.prepare('INSERT INTO knowledge_workflow_materials VALUES(?,?,?)').run('owner',id,JSON.stringify({sourceUrl:'https://example.test/',fileName:id==='url-capture'?'https://example.test/ — captured page.pdf.pkpi':'manual.pdf.pkpi'}));
+    }
+    const before=db.prepare('SELECT * FROM knowledge_workflow_media_assets').all();
+    const result=await learning.listKnowledge('owner');assert.equal(result.ok,true);assert.equal(result.value.items.length,2);
+    assert.equal(result.value.items.find(p=>p.knowledgeId==='url-capture').media,null);
+    assert.equal(result.value.items.find(p=>p.knowledgeId==='manual-pdf').media.kind,'screenshot');
+    assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_media_assets').all(),before);
+    assert.equal(db.prepare('SELECT count(*) n FROM knowledge_workflow_quizzes').get().n,2);
+  }finally{db.close();}
+});

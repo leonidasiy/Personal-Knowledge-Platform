@@ -464,7 +464,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         if(!isRecord(document)||Object.keys(document).length!==1||!validatePublisherDestination(document.url).ok)return json({error:"SourceExtractionUrlInvalid"},400);
         if(!dependencies.urlCapture)return json({error:"KnowledgeBrowserUnavailable"},503);
         const result=await dependencies.urlCapture({ownerId:authenticated.value.ownerId,url:/** @type {string} */(document.url)});
-        return result.ok ? new Response(result.value,{headers:{"content-type":"application/pdf","cache-control":"private, no-store","x-content-type-options":"nosniff"}}) : json({error:result.error.kind},422);
+        return result.ok ? new Response(result.value,{headers:{"content-type":new TextDecoder().decode(result.value.subarray(0,4))==='PKPC'?"application/x-knowledge-url-capture":"application/pdf","cache-control":"private, no-store","x-content-type-options":"nosniff"}}) : json({error:result.error.kind},422);
       }
       if (sourceClassification) {
         if (dependencies.sourceClassification == null) return sourceClassificationFailureResponse({ kind: "SourceClassificationPersistenceFailed" });

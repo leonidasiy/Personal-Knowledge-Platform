@@ -3,6 +3,7 @@ import { emptyArt } from "../../empty-state.js";
 import { createShellMarkup } from "../../shell-markup.js";
 import { validatePublisherDestination } from "../source-library/contracts.js";
 import { SourceLibraryGatewayClient } from "../source-library/gateway.js";
+import { URL_CAPTURE_TYPE } from "../knowledge-workflows/url-capture.js";
 /** @typedef {"text"|"documents"|"pdf"|"images"|"link"} UploadInput */
 /** @typedef {{readonly title:string,readonly url?:string,readonly manual?:true,readonly reason?:string}} UploadPrefill */
 /** @typedef {{readonly source:import('../source-library/contracts.js').LibrarySource,readonly runId:string,readonly reason:string}} UploadContext */
@@ -147,9 +148,10 @@ export function createUploadPage(dependencies) {
         const failure=await response.json();
         message=shellMarkup(32,linkFailureMessage(response.status===401?{kind:"SourceGatewayUnauthenticated"}:response.status===403?{kind:"SourceGatewayUnauthorized"}:{kind:"SourceGatewayRejected",failureKind:typeof failure?.error==="string"?failure.error:"unknown"}));return false;
       }
-      if(!response.headers.get("content-type")?.startsWith("application/pdf")){message=shellMarkup(50);return false;}
+      const contentType=response.headers.get("content-type")?.split(';')[0];
+      if(contentType!=="application/pdf"&&contentType!==URL_CAPTURE_TYPE){message=shellMarkup(50);return false;}
       const material=new FormData();material.set("title",title);material.set("url",url);
-      material.set("file",new File([await response.blob()],`${url} — captured page.pdf`,{type:"application/pdf"}));material.set("imageProcessing","on");
+      material.set("file",new File([await response.blob()],`${url} — captured page.${contentType===URL_CAPTURE_TYPE?'pkpc':'pdf'}`,{type:contentType}));material.set("imageProcessing","off");
       if(context!==null && !await saveTitle(form))return false;
       const result=await dependencies.upload(context?.source.id??"",material,context);
       if(current!==generation)return false;

@@ -62,3 +62,10 @@ Deno.test("workflow material D1 repository persists and removes one immutable re
   const removed = await repository.remove(record);
   assertEquals(removed.ok, true);
 });
+
+Deno.test("workflow material D1 preserves captured image provenance without serializing pixels",async()=>{
+ const database=new Database(),repository=new D1KnowledgeWorkflowMaterialRepository({database,logger:()=>{}});
+ database.rows.push({...row(),material_json:JSON.stringify({...material,mode:'text',mediaType:'application/x-knowledge-url-capture',media:[{path:'image:1',mediaType:'image/png',bytes:{},url:'https://cdn.example.org/diagram.png',caption:'Original caption',alt:'Original diagram',context:'Surrounding source text'}]})});
+ const read=await repository.read('owner-a','run-a');assertEquals(read.ok,true);if(!read.ok||!read.value)throw new Error('Missing material');
+ const image=read.value.material.media[0];assertEquals(image.url,'https://cdn.example.org/diagram.png');assertEquals(image.caption,'Original caption');assertEquals(image.alt,'Original diagram');assertEquals(image.context,'Surrounding source text');assertEquals(image.bytes.length,0);
+});

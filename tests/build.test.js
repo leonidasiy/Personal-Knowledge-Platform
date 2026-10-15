@@ -194,16 +194,16 @@ Deno.test("artifact budgets accept exact production boundaries", async () => {
   );
   assertEquals(javascript.ok, true);
   assertEquals(stylesheet.ok, true);
-  assertEquals(ARTIFACT_BUDGETS.stylesheet.rawBytes, 37_000);
-  assertEquals(ARTIFACT_BUDGETS.stylesheet.gzipBytes, 8_000);
+  assertEquals(ARTIFACT_BUDGETS.stylesheet.rawBytes, 41_164);
+  assertEquals(ARTIFACT_BUDGETS.stylesheet.gzipBytes, 8_966);
   const oversizedStylesheet = validateArtifactBudget(
-    { path: "src/styles.css", rawBytes: 37_001, gzipBytes: 1 },
+    { path: "src/styles.css", rawBytes: 41_165, gzipBytes: 1 },
     ARTIFACT_BUDGETS.stylesheet,
   );
   assertEquals(oversizedStylesheet.ok, false);
   if (!oversizedStylesheet.ok) assertEquals(oversizedStylesheet.error.kind, "ArtifactRawBudgetExceeded");
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 226_669);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 73_825);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 230_099);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 76_027);
   /** @type {string[]} */
   const manifest = JSON.parse(await Deno.readTextFile("dist/asset-manifest.json"));
   const measured = { path: "src/*.js", rawBytes: 0, gzipBytes: 0 };
@@ -397,7 +397,7 @@ Deno.test("artifact budgets return distinct raw and gzip failures", () => {
     ARTIFACT_BUDGETS.javascript,
   );
   const gzipFailure = validateArtifactBudget(
-    { path: "src/styles.css", rawBytes: 1, gzipBytes: 8_001 },
+    { path: "src/styles.css", rawBytes: 1, gzipBytes: ARTIFACT_BUDGETS.stylesheet.gzipBytes + 1 },
     ARTIFACT_BUDGETS.stylesheet,
   );
   assertEquals(rawFailure.ok, false);

@@ -568,12 +568,12 @@ Deno.test("PDF pages has a short label and associated examples without changing 
   assert(!/name="imageProcessing"[^>]*checked/.test(html), "PDF stays text-first.");
 });
 
-Deno.test("URL capture keeps editable title and URL, enables vision, and excludes stale draft fields", async () => {
+Deno.test("URL capture keeps editable title and URL, uses PDF text, and excludes stale draft fields", async () => {
   let captures=0,uploads=0;
   const page=createUploadPage({...deps,upload:async(id,form,context)=>{
     uploads++;assert(id===""&&context===null,"Standalone capture creates a URL source");
     assert(form.get("title")==="Edited link"&&form.get("url")==="https://publisher.example/lesson","Exact title and URL reach upload");
-    assert(form.get("imageProcessing")==="on"&&form.get("file") instanceof File,"Capture enables image processing");
+    assert(form.get("imageProcessing")==="off"&&form.get("file") instanceof File,"Capture uses PDF text without page rasterization");
     assert(!form.has("content")&&!form.has("interest-area"),"Stale fields do not cross the boundary");
     return {ok:true,message:"Processing started"};
   },fetch:async function(url,init){
@@ -594,7 +594,7 @@ Deno.test("URL capture keeps editable title and URL, enables vision, and exclude
 });
 Deno.test("URL intake explains image capture and preserves other upload modes", async () => {
   const page=createUploadPage(deps);await page.select("link");
-  assert(page.render().includes("Images are included.")&&page.render().includes("Submit each relevant page"),"Capture scope is explicit");
+  assert(page.render().includes("Available source images are included; otherwise, we process the text on its own.")&&page.render().includes("Submit each relevant page"),"Capture scope is explicit");
   for(const mode of ["text","documents","pdf","images"]){await page.select(mode);assert(page.render().includes("the total upload limit is 100 MiB"),"Preserve existing helper");}
 });
 Deno.test("Link errors are actionable typed projections without arbitrary diagnostics or draft loss", async () => {
@@ -676,4 +676,10 @@ Deno.test("Blocked-source manual handoff opens text intake with title and retain
   assert(await page.submit(form) && uploaded, "Manual content submission retains the original source metadata.");
   await page.select("link");
   assert(page.render().includes('value="https://publisher.example/blocked"'), "The source URL remains prefilled without attaching to the completed run.");
+});
+
+Deno.test('URL capture carries original-asset bundles through upload in text-only mode',async()=>{
+ const page=createUploadPage({...deps,fetch:async()=>new Response(new Uint8Array([80,75,80,67,1]),{headers:{'content-type':'application/x-knowledge-url-capture'}}),upload:async(_id,form)=>{
+  const file=form.get('file');if(!(file instanceof File))throw new Error('Captured material is uploaded');assert(file.type==='application/x-knowledge-url-capture'&&file.name.endsWith('.pkpc'),'Original assets keep their capture type');assert(form.get('imageProcessing')==='off','PDF sheets never become images');return {ok:true,message:'Processing started'};
+ }});await page.select('link');const form=new FormData();form.set('url','https://publisher.example/lesson');form.set('title','Captured lesson');assert(await page.submit(form),'Captured figures and PDF use normal source upload');
 });

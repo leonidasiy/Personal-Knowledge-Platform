@@ -139,13 +139,31 @@ export function createJevAnswerGrader(dependencies) {
       if (!validCommand(input)) return failure(logger, "JevCommandInvalid");
       if (apiKey === null || apiKey.trim() === "") return failure(logger, "JevCredentialMissing");
       const answers = input.answers;
-      const ids = answers.map((answer) => answer.id);
       const state = Object.freeze({ prompt: input.prompt, answers: Object.freeze(answers.map((answer) => Object.freeze({ id: answer.id, response: answer.response, canonicalAnswers: Object.freeze([...answer.canonicalAnswers]) }))) });
       const questions = Object.fromEntries(answers.map((answer) => [answer.id, Object.freeze({
         type: "noul",
         instructions: `Does the response in state.answers for ${answer.id} communicate the canonical answer to the stated prompt accurately, without contradiction or extra incorrect claims?`,
         criteria: Object.freeze({ true: "The response gives the canonical answer or a correct paraphrase, is materially complete, and does so without contradiction or extra incorrect claims.", false: "The response is wrong, partial, contradictory, materially incomplete, or includes an extra incorrect claim." }),
       })]));
+      const decision=await createJevDecisionModel(dependencies).decide({state,questions});
+      return decision.ok?{ok:true,value:Object.freeze({...decision.value,accepted:Object.freeze(decision.value.probabilities.map(probability=>probability>=configuration.acceptanceThreshold))})}:decision;
+    },
+  });
+}
+
+/** @param {(entry: { readonly event: string, readonly failureKind?: JevFailure["kind"] }) => void} logger @param {JevFailure["kind"]} kind @returns {Result<never, JevFailure>} */
+function failure(logger, kind) { logger({ event: "jev-answer-grading-failure", failureKind: kind }); return { ok: false, error: { kind } }; }
+
+/** Typed probabilistic decisions shared by answer grading and captured-image association.
+ * @param {Parameters<typeof createJevAnswerGrader>[0]} dependencies */
+export function createJevDecisionModel(dependencies) {
+  if (!validConfiguration(dependencies?.configuration) || typeof dependencies.fetch !== "function" || !Number.isSafeInteger(dependencies.timeoutMs) || dependencies.timeoutMs < 1) throw new TypeError("Jev decision dependencies are invalid.");
+  const { apiKey, fetch: request, timeoutMs, logger, configuration } = dependencies;
+  return Object.freeze({
+    /** @param {{state:unknown,questions:Record<string,{type:'noul',instructions:string,criteria:{true:string,false:string}}>}} input @returns {Promise<Result<{readonly model:string,readonly probabilities:readonly number[]},JevFailure>>} */
+    async decide({state,questions}) {
+      if(!record(questions)||!Object.keys(questions).length||!Object.entries(questions).every(([id,q])=>/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(id)&&record(q)&&q.type==='noul'&&text(q.instructions)&&record(q.criteria)&&text(q.criteria.true)&&text(q.criteria.false))) return failure(logger,'JevCommandInvalid');
+      if(apiKey===null||apiKey.trim()==='')return failure(logger,'JevCredentialMissing');
       logger({ event: "jev-answer-grading-entry" });
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -154,7 +172,7 @@ export function createJevAnswerGrader(dependencies) {
         const response = await request(configuration.endpoint, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: configuration.requestedModel, state, questions }), signal: controller.signal });
         if (response.status === 429 || response.status === 529) return failure(logger, "JevRateLimited");
         if (response.status === 401 || response.status === 403) return failure(logger, "JevCredentialMissing");
-        if (!response.ok) return failure(logger, "JevProviderRejected");
+        if (!response.ok) return failure(logger, response.status >= 500 ? "JevProviderUnavailable" : "JevProviderRejected");
         let body;
         try { body = await response.text(); } catch (error) { throw error; }
         try {
@@ -166,13 +184,10 @@ export function createJevAnswerGrader(dependencies) {
         if (error instanceof TypeError) return failure(logger, "JevProviderUnavailable");
         throw error;
       } finally { clearTimeout(timer); }
-      const decision = parseDecision(document, ids, configuration.servedModel);
+      const decision = parseDecision(document, Object.keys(questions), configuration.servedModel);
       if (decision === null) return failure(logger, "JevResponseInvalid");
       logger({ event: "jev-answer-grading-success" });
-      return { ok: true, value: Object.freeze({ model: decision.model, probabilities: decision.probabilities, accepted: Object.freeze(decision.probabilities.map((probability) => probability >= configuration.acceptanceThreshold)) }) };
+      return {ok:true,value:decision};
     },
   });
 }
-
-/** @param {(entry: { readonly event: string, readonly failureKind?: JevFailure["kind"] }) => void} logger @param {JevFailure["kind"]} kind @returns {Result<never, JevFailure>} */
-function failure(logger, kind) { logger({ event: "jev-answer-grading-failure", failureKind: kind }); return { ok: false, error: { kind } }; }

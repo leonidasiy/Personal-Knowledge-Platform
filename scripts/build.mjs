@@ -16,20 +16,16 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   }),
   aggregateJavascript: Object.freeze({
     label: "Aggregate JavaScript",
-    // Settings/reminders aggregate allowance approved 2026-09-19.
-    // Owner-approved minimal aggregate raise, 2026-10-06 blocker-fixes request.
-    // Link copy closure: measured +679 raw / +240 gzip; no per-file/CSS raise.
-    // Final production measurement: test-results/link-copy-closure/build.log.
+    // Measured Bright Spark / URL capture allowance approved 2026-10-15.
     // Initial and lazy-chunk limits remain unchanged.
-    rawBytes: 226_669,
-    // Quiz-failure report/control: measured 73,825 gzip (+234); other caps unchanged.
-    gzipBytes: 73_825,
+    rawBytes: 230_099,
+    gzipBytes: 76_027,
   }),
   stylesheet: Object.freeze({
     label: "CSS",
-    // All 22 subject identities: owner-approved CSS allowance 2026-10-05.
-    rawBytes: 37_000,
-    gzipBytes: 8_000,
+    // Bright Spark: measured owner-approved CSS allowance 2026-10-15.
+    rawBytes: 41_164,
+    gzipBytes: 8_966,
   }),
   pdfRenderer: Object.freeze({
     label: "On-demand PDF renderer",

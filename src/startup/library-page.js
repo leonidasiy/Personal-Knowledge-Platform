@@ -9,6 +9,7 @@ import { renderLibraryRoute, renderProcessingStatus, librarySourceSubjects } fro
 import { isSubjectId } from "../features/knowledge-subjects/public.js";
 import { BUNDLE_TYPE, packImageBundle } from "../features/knowledge-workflows/image-upload.js";
 import { renderPdfPageImages } from "./pdf-image-pages.js";
+import { URL_CAPTURE_TYPE } from "../features/knowledge-workflows/url-capture.js";
 
 /** @import { LibrarySource, SourceInterestArea, SourceSearchScope } from "../features/source-library/contracts.js" */
 /** @import { WorkflowSourceStatus } from "../features/source-library/gateway.js" */
@@ -538,7 +539,7 @@ export function createLibraryPage(dependencies) {
     if (files.length > 1 && mode !== "image") return uploadFailure(uploadCopy(5));
     const extension = file?.name.split(".").at(-1)?.toLowerCase();
     // Closed upload-format contract; content interpretation belongs to the model.
-    const mediaType = file === null || extension === "txt"
+    const mediaType = extension === "pkpc" && file?.type === URL_CAPTURE_TYPE && typeof form.get("url") === "string" ? URL_CAPTURE_TYPE : file === null || extension === "txt"
       ? "text/plain"
       : extension === "md"
       ? "text/markdown"

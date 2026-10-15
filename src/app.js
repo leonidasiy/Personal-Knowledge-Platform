@@ -9,6 +9,7 @@ import { FeedbackAudioService } from "./features/experience/audio.js";
 import { applyPresentationUpdate, resolveTheme } from "./features/experience/presentation.js";
 import { SettingsRepository } from "./features/experience/settings.js";
 import { revealCards } from "./features/experience/reveal.js";
+import { cancelSparkEffects } from "./features/experience/spark.js";
 import { PreferenceRepository } from "./features/preference/repository.js";
 import { PreferenceService } from "./features/preference/service.js";
 import { RecallRepository } from "./features/recall/repository.js";
@@ -981,6 +982,7 @@ function restoreTransientViewState(state) {
  * @param {string | null} [fallbackHeadingId]
  */
 function render(preferredFocusKey = null, fallbackHeadingId = null) {
+  cancelSparkEffects();
   cardObserver?.disconnect();
   if (revealView !== activeView) { revealedCards.clear(); revealView = activeView; }
   const transientState = captureTransientViewState();

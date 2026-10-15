@@ -1,4 +1,5 @@
 // @ts-check
+import { playSpark } from "./spark.js";
 /** Content is visible by default; observation adds a one-time entrance.
  * @param {HTMLElement} root @param {Set<string>} seen
  * @param {typeof IntersectionObserver|null} Observer
@@ -11,9 +12,11 @@ export function revealCards(root, seen, Observer) {
       if (!entry.isIntersecting || !(entry.target instanceof HTMLElement)) continue;
       const key = entry.target.dataset.reveal;
       if (key && !seen.has(key)) {
-        entry.target.addEventListener("animationend", () => seen.add(key), { once: true });
+        // Consume on entry: reduced motion and rerenders may never fire animationend.
+        seen.add(key);
         entry.target.classList.remove("reveal-pending");
         entry.target.classList.add("reveal-enter");
+        if (entry.target.matches(".learning-card")) playSpark(entry.target, "card");
       }
       observer.unobserve(entry.target);
     }

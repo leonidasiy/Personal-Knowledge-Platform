@@ -204,3 +204,55 @@ Deno.test("Empty Feed and Review offer artwork and a next action without invente
   assert(feed.includes("empty-states.svg#feed") && feed.includes('href="#discover"') && !feed.includes('data-knowledge-id'), "Empty Feed uses its own artwork and guides discovery without sample cards.");
   assert(review.includes("empty-states.svg#review") && review.includes('href="#feed"') && !review.includes('data-question-id'), "Empty Review guides study without sample questions.");
 });
+
+Deno.test("preference motion follows actual settlement, rejects duplicate pending clicks and consumes success once", async () => {
+  const originalElement = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement");
+  const originalFrame = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
+  class Button {
+    /** @type {Record<string, string>} */ dataset = { knowledgeId: "knowledge-1", preference: "more", sparkEvent: "preference:knowledge-1:more" };
+    /** @type {Map<string, () => void>} */ listeners = new Map();
+    /** @param {string} type @param {() => void} listener */
+    addEventListener(type, listener) { this.listeners.set(type, listener); }
+    removeAttribute() { delete this.dataset.sparkEvent; }
+  }
+  /** @type {FrameRequestCallback[]} */ const frames = [];
+  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: Button });
+  Object.defineProperty(globalThis, "requestAnimationFrame", { configurable: true, value: (/** @type {FrameRequestCallback} */ callback) => frames.push(callback) });
+  try {
+    /** @type {(response:Response) => void} */ let settle = () => { throw new Error("No pending request"); };
+    let requests = 0;
+    let changed = () => {};
+    const card = { knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: true };
+    const controller = createLearnerController({ fetch: async (_url, init) => {
+      if (init?.method === "GET") return response({ result: { batch: { ...review.batch, batchId: "feed:motion" }, items: [card] } });
+      requests++;
+      return await new Promise(resolve => { settle = resolve; });
+    }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-10-15T00:00:00.000Z", createId: () => "motion", onChange: () => changed() });
+    await controller.loadFeed();
+    const button = new Button();
+    /** @type {Button[]} */ let events = [];
+    const root = /** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-spark-event]" ? events : selector === "[data-action='learner-preference']" ? [button] : [] }));
+    controller.bind(root);
+    button.listeners.get("click")?.();
+    button.listeners.get("click")?.();
+    assert(requests === 1, "A pending action must send only one request.");
+    assert(controller.renderFeed().includes('aria-busy="true"') && !controller.renderFeed().includes('data-spark-event='), "Pending is real request state, never success.");
+    let completed = new Promise(resolve => { changed = () => resolve(undefined); });
+    settle(response({ result: { saved: true } }));
+    await completed;
+    assert(controller.renderFeed().includes('data-spark-event="preference:knowledge-1:more"'), "Only a settled success schedules a celebration.");
+    events = [button];
+    controller.bind(root);
+    controller.bind(root);
+    assert(frames.length === 1 && !controller.renderFeed().includes('data-spark-event='), "Rerender/bind must not repeat a consumed success.");
+    events = [];
+    button.listeners.get("click")?.();
+    completed = new Promise(resolve => { changed = () => resolve(undefined); });
+    settle(new Response(JSON.stringify({ error: "Unavailable" }), { status: 503 }));
+    await completed;
+    assert(!controller.renderFeed().includes('data-spark-event=') && !controller.renderFeed().includes('aria-busy="true"') && controller.renderFeed().includes('role="alert"'), "Failure must clear pending, expose the error and never celebrate.");
+  } finally {
+    if (originalElement) Object.defineProperty(globalThis, "HTMLElement", originalElement); else Reflect.deleteProperty(globalThis, "HTMLElement");
+    if (originalFrame) Object.defineProperty(globalThis, "requestAnimationFrame", originalFrame); else Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+  }
+});

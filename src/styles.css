@@ -1,5 +1,6 @@
 @import "./features/knowledge-subjects/styles.css";
 @import "./features/progress/styles.css";
+@import "./features/experience/spark.css";
 
 @font-face {
   font-family: "Fraunces";

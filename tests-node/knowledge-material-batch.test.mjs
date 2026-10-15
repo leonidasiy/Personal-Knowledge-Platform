@@ -12,6 +12,7 @@ import { D1QuizRepository } from "../worker/knowledge-workflow-content-d1.js";
 import { D1KnowledgeWorkflowRepository } from "../worker/knowledge-workflow-d1.js";
 import { D1KnowledgeWorkflowMaterialRepository } from "../worker/knowledge-workflow-material-d1.js";
 import { parseAuthorizedMaterial } from "../src/features/knowledge-workflows/material.js";
+import { packUrlCapture, URL_CAPTURE_TYPE } from "../src/features/knowledge-workflows/url-capture.js";
 import { packImageBundle, BUNDLE_TYPE } from "../src/features/knowledge-workflows/image-upload.js";
 import { createRenderer } from "../acquisition/renderer.ts";
 import { ACQUISITION_POLICY } from "../worker/acquisition-policy.js";
@@ -62,18 +63,27 @@ test("production upload runtime resumes text batches and processes selected PDF 
     const imageObservationSizes = [];
     const materialReviews = [];
     const qualityReviews = [];
+    let captionCalls=0, decisionCalls=0, decisionRefused=false;
     let modelCalls = 0; let invalidPairedDraftInjected = false, pairedFeedbackSeen = false;
     const transport = async (_url, init) => {
-      assert(++modelCalls < 80, "Bound the synthetic model fixture.");
+      assert(++modelCalls < 120, "Bound the synthetic model fixture.");
       const body = JSON.parse(init.body);
+      if(String(_url).endsWith('/alpha/decisions')){
+        decisionCalls++;assert.equal(db.prepare("SELECT COUNT(*) n FROM extraction_knowledge_points WHERE run_id='capture-run'").get().n,2,'Association waits for all text points');
+        assert.deepEqual(Object.keys(body.state.knowledge),['point_0','point_1']);assert.equal(body.model,'~typesafe/jev-latest');
+        if(!decisionRefused){decisionRefused=true;return new Response('',{status:429});}
+        const scores=body.state.image.description.includes('image:2')?[0.95,0.79]:[0.85,0.1];
+        return Response.json({model:'typesafe/jev-1.13',answers:{point_0:{type:'noul',noul:scores[0]},point_1:{type:'noul',noul:scores[1]}}});
+      }
       const message = body.messages[1].content;
       const envelope = Array.isArray(message) ? message[0].text : message;
       const modelInput = JSON.parse(envelope.slice(envelope.indexOf("\n") + 1, envelope.lastIndexOf("\n")));
       const task = modelInput.task ?? modelInput;
-      const config = configs[task.source && task.points ? "rights-assessor" : modelInput.contract.role];
+      const config = configs[task.source && task.points || task.operation==='caption-captured-image' ? "rights-assessor" : modelInput.contract.role];
       assert.equal(body.model,config.model.name);
-      assert.deepEqual(body.reasoning, { effort: task.source && task.points ? "low" : config.model.reasoningEffort });
+      assert.deepEqual(body.reasoning, { effort: task.source && task.points || body.response_format?.json_schema?.name==='captured_image_caption_v1' ? "low" : config.model.reasoningEffort });
       if(body.response_format?.json_schema?.name==='quiz_evaluation_v3'){
+        if(task.knowledge.sourceId==='capture-source'&&task.knowledge.mediaCandidates.length){assert.equal(task.imagePurpose,'illustration');assert.match(body.messages[0].content,/Missing depiction alone is not an unpictured knowledge fault/);}
         assert.equal(body.max_tokens,2048);assert.equal(modelInput.contract.role,'question-evaluator');
         assert.match(body.messages[0].content,/paired-question-evaluator-v8/);
         assert.match(body.messages[0].content,/A faithful narrower relationship need not restore an unrelated or nonessential removed qualifier/);
@@ -90,7 +100,10 @@ test("production upload runtime resumes text batches and processes selected PDF 
         assert.match(body.response_format.json_schema.schema.properties.fillBlank.properties.blanks.items.properties.acceptedAnswers.description,/unique after Unicode NFKC/);
       }
       let output;
-      if (body.response_format?.json_schema?.name==='knowledge_quality_review_v11') {
+      if(body.response_format?.json_schema?.name==='captured_image_caption_v1'){
+        captionCalls++;assert.equal(db.prepare("SELECT COUNT(*) n FROM extraction_knowledge_points WHERE run_id='capture-run'").get().n,2);assert(!task.knowledge,'Caption has no knowledge to force-fit');assert.equal(message[2].type,'image_url');output={description:`Fixture original ${task.imageId}`,visibleText:'Q K V'};if(captionCalls===1)output.extra='invalid';
+      } else if(body.response_format?.json_schema?.name==='webpage_image_purpose_v1')output={purpose:'illustration',imageId:task.imageId,imageDigest:task.imageDigest,visibleEvidence:'Synthetic original figure context.'};
+      else if (body.response_format?.json_schema?.name==='knowledge_quality_review_v11') {
         qualityReviews.push(task.sourceMode);
         assert.equal(modelInput.contract.role,'question-evaluator');
         assert(task.sourceEvidence.sections.some(section=>section.locator===task.knowledge.evidenceAnchors[0].selector));
@@ -112,7 +125,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
           assert.equal(message[1].text, `Attachment ID: visual:${imageMaterial.contentDigest}:${task.sections[0].id}; mediaType: image/png. The following image belongs only to this ID.`);
           assert.equal(message[2].type, "image_url");
           assert.equal(message[2].image_url.url, `data:image/png;base64,${Buffer.from(png).toString("base64")}`);
-        } else batchSizes.push(task.sections.length);
+        } else {batchSizes.push(task.sections.length);assert.equal(typeof message,'string','PDF text never travels as an image');}
         assert.equal(body.max_tokens, 16384);
         if (task.operation !== "observe-material-image") assert(body.messages[0].content.includes("selection-v3"));
         if (task.mode === "image") {
@@ -280,6 +293,25 @@ test("production upload runtime resumes text batches and processes selected PDF 
     db.prepare("UPDATE knowledge_workflow_runs SET state='per-point-quiz-loop',run_json=json_set(run_json,'$.state','per-point-quiz-loop') WHERE owner_id=? AND run_id=?").run(ownerId,imageRunId);
     const discardedResult=unwrap(await reviewRuntime.execute(unwrap(await imageService.status({ownerId,runId:imageRunId}))));
     assert.equal(discardedResult.state,'completed');assert.equal(discardedResult.restrictedUntil,restrictedUntil);assert(discardedResult.restrictedKnowledgeIds.includes(knowledgeId));assert.equal(modelCalls,beforeReplay);
+
+    // Synthetic runtime material; actual Chromium PDF parsing is covered separately.
+    const captureRunId='capture-run',captureSourceId='capture-source',captureUrl='https://publisher.example/article';
+    const captureBytes=unwrap(packUrlCapture({sourceUrl:captureUrl,responseUrl:captureUrl,pdf:new TextEncoder().encode('%PDF-fixture'),images:[1,2].map(n=>({path:`image:${n}`,url:`https://cdn.example.org/figure-${n}.png`,caption:`Source caption ${n}`,alt:'Source diagram',context:'Original article context',mediaType:'image/png',bytes:png}))}));
+    const captureMaterial={...material,runId:captureRunId,sourceId:captureSourceId,sourceUrl:captureUrl,mode:'text',mediaType:URL_CAPTURE_TYPE,fileName:'article.pkpc',contentDigest:createHash('sha256').update(captureBytes).digest('hex'),sections:sections.filter(s=>s.text).slice(0,2),media:[]};
+    const captureService=createKnowledgeWorkflowService(repository,{now:clock,createId:()=>captureRunId,logger});
+    let captureRun=unwrap(await captureService.createRun({ownerId,sourceId:captureSourceId,sourceRevision:1,canonicalSourceIdentity:captureUrl,contentSignature:captureMaterial.contentDigest,idempotencyKey:captureRunId,sourceOrigin:'url-material',configDigests:Object.fromEntries(Object.entries(configs).map(([role,config])=>[role,config.digest]))})).run;
+    unwrap(await materials.persist({ownerId,runId:captureRunId,materialId:'capture-material',idempotencyKey:captureRunId,fingerprint:captureMaterial.contentDigest,objectKey:'synthetic-capture',material:captureMaterial,createdAt:clock()}));
+    captureRun=unwrap(await captureService.attachMaterial({ownerId,runId:captureRunId,materialId:'capture-material'}));
+    db.prepare("INSERT INTO library_sources (owner_id,source_id,submitted_url,canonical_url,title,description,adapter_json,identity_evidence_json,state,approved_at,updated_at,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(ownerId,captureSourceId,captureUrl,captureUrl,'Captured URL','Offline captured assets fixture',JSON.stringify({kind:'web'}),'[]','active',clock(),clock(),1);
+    const captureOriginals=new Map();let captureIngests=0;
+    for(let step=0;step<8&&captureRun.state!=='completed';step++){
+      if(captureRun.state==='awaiting-time-limit-decision')captureRun=unwrap(await captureService.advance({ownerId,runId:captureRunId,expectedRevision:captureRun.revision,nextState:'extraction-loop'}));
+      const runtime=createKnowledgeWorkflowRuntime({imagePolicy:WEBPAGE_IMAGE_POLICY,database,fetch:transport,browser:{readPage:forbidden,readRobots:forbidden,screenshot:forbidden,close:async()=>({ok:true,value:null})},apiKey:'offline-fixture',endpoint:'https://example.test/model',now:clock,nowMs:Date.now,logger,configSnapshots:configs,material:materials,materialContent:{read:async()=>({ok:true,value:captureBytes})},media:{ingest:forbidden,ingestBytes:async command=>{captureIngests++;if(captureIngests<=3)return {ok:false,error:{kind:'MediaDerivativeProcessingFailed'}};assert.equal(command.candidate.kind,'image');assert.equal(command.sourceUrl,'https://cdn.example.org/figure-2.png','Highest qualifying image wins');assert.equal(command.binding.kind,'webpage-support');assert.equal(command.binding.purpose,'illustration');assert.equal(command.binding.imageId,'image:2');assert.deepEqual(command.bytes,png);captureOriginals.set(command.knowledgeId,{id:'image:2',mediaType:'image/png',bytes:png,purpose:'illustration'});return {ok:true,value:null};}},reviewMedia:{readOriginal:async scope=>({ok:true,value:captureOriginals.get(scope.knowledgeId)??null})},decodeImage,transition:({run:current,nextState,...rest})=>captureService.advance({ownerId,runId:captureRunId,expectedRevision:current.revision,nextState,...rest})});
+      unwrap(await runtime.execute(captureRun));captureRun=unwrap(await repository.findById(ownerId,captureRunId));
+    }
+    assert.equal(captureRun.state,'completed');assert.equal(captureRun.counts.acceptedQuizzes,2);assert.equal(captureIngests,4,JSON.stringify({captionCalls,decisionCalls,warnings:db.prepare('SELECT warnings_json FROM knowledge_workflow_page_image_warnings WHERE run_id=?').all(captureRunId)}));assert.equal(captionCalls,3,'One invalid caption gets a technical retry; successful captions replay');assert.equal(decisionCalls,3,'One 429 gets a technical retry; scores replay');
+    const capturePoints=db.prepare('SELECT point_json FROM extraction_knowledge_points WHERE run_id=? ORDER BY created_at,knowledge_id').all(captureRunId).map(row=>JSON.parse(row.point_json));
+    assert.equal(capturePoints.filter(p=>p.mediaCandidates.length).length,1);assert.equal(capturePoints.find(p=>p.mediaCandidates.length).imageAssociation.score,0.95);assert.equal(capturePoints.find(p=>p.mediaCandidates.length).imageAssociation.model,'typesafe/jev-1.13');assert.deepEqual(capturePoints.find(p=>!p.mediaCandidates.length).mediaCandidates,[]);assert.deepEqual(capturePoints.map(p=>p.summary).sort(),captureMaterial.sections.map(s=>s.text).sort(),'Images cannot rewrite text-derived knowledge');
 
 
 

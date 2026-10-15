@@ -28,7 +28,8 @@ function parseMaterial(value) {
   const media = [];
   for (const entry of value.media) {
     if (!isRecord(entry) || !text(entry.path) || !text(entry.mediaType)) return null;
-    media.push(Object.freeze({ path: entry.path, mediaType: entry.mediaType, bytes: new Uint8Array() }));
+    if (entry.url !== undefined && (typeof entry.url !== "string" || !URL.canParse(entry.url) || new URL(entry.url).protocol !== "https:" || [entry.caption, entry.alt, entry.context].some(value => typeof value !== "string"))) return null;
+    media.push(Object.freeze({ path: entry.path, mediaType: entry.mediaType, bytes: new Uint8Array(), ...(entry.url === undefined ? {} : { url: entry.url, caption: /** @type {string} */(entry.caption), alt: /** @type {string} */(entry.alt), context: /** @type {string} */(entry.context) }) }));
   }
   return Object.freeze({ ownerId: value.ownerId, runId: value.runId, sourceId: value.sourceId, sourceRevision: value.sourceRevision, sourceUrl: value.sourceUrl, mediaType: value.mediaType, fileName: value.fileName, mode: value.mode === "image" ? "image" : "text", contentDigest: value.contentDigest, sections: Object.freeze(sections), media: Object.freeze(media), provenance: Object.freeze({ kind: "authorized-user-material", attestationReference: value.provenance.attestationReference, basis: value.provenance.basis }) });
 }

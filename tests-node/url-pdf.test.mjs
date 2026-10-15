@@ -1,18 +1,19 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createUrlPdfCapture} from '../worker/url-pdf.mjs';
-function fixture({status=200,privateDns=false,resource=null,challenge=false,pdfFailure=false,robotsDenied=false}={}){
- const callbacks={},events=[],closed=[],reconciliations=[],dns=[];
+import {parseUrlCapture} from '../src/features/knowledge-workflows/url-capture.js';
+function fixture({status=200,privateDns=false,resource=null,challenge=false,pdfFailure=false,robotsDenied=false,images=[],imageReadFailure=false,transientImageFailures=0,normalizedImage=null}={}){
+ const callbacks={},events=[],closed=[],reconciliations=[],dns=[];let imageReads=0;
  const response={status:()=>status,headers:()=>({'content-type':'text/html',...(challenge?{'cf-mitigated':'challenge'}:{})}),remoteAddress:()=>({ip:'[::1]',port:9001})};
  const page={setUserAgent:async()=>{},setRequestInterception:async()=>{},on:(event,callback)=>{callbacks[event]=callback;},url:()=> 'https://example.org/lesson',
- goto:async url=>{for(const target of [url,...resource?[resource]:[]])await callbacks.request({url:()=>target,method:()=> 'GET',isNavigationRequest:()=>target===url,continue:async()=>events.push('continue'),abort:async()=>events.push('abort')});return response;},
- emulateMediaType:async value=>events.push(value),pdf:async options=>{events.push(options);if(pdfFailure)throw new Error('provider prose');return new TextEncoder().encode('%PDF-fixture');}};
+ goto:async url=>{for(const image of images)callbacks.response({request:()=>({resourceType:()=> 'image',redirectChain:()=>[]}),ok:()=>true,url:()=>image.url,headers:()=>({'content-type':image.mediaType??'image/png'}),buffer:async()=>{imageReads++;if(imageReadFailure||imageReads<=transientImageFailures)throw new Error('sensitive');return image.bytes;}});for(const target of [url,...resource?[resource]:[]])await callbacks.request({url:()=>target,method:()=> 'GET',resourceType:()=> 'document',headers:()=>({}),isNavigationRequest:()=>target===url,continue:async()=>events.push('continue'),abort:async()=>events.push('abort')});return response;},
+ evaluate:async(_callback,input)=>Array.isArray(input)?Array.from(normalizedImage):images.map(({bytes,mediaType,...metadata})=>metadata),emulateMediaType:async value=>events.push(value),pdf:async options=>{events.push(options);if(pdfFailure)throw new Error('provider prose');return new TextEncoder().encode('%PDF-fixture');}};
  const capture=createUrlPdfCapture({binding:{},fetch:async url=>{if(String(url).includes('/dns-query'))dns.push(String(url));return String(url).endsWith('/robots.txt')?new Response(robotsDenied?'User-agent: *\nDisallow: /':'User-agent: *\nAllow: /'):Response.json({Status:0,Answer:[{type:1,data:privateDns||String(url).includes('private.example')?'127.0.0.1':'8.8.8.8'}]});},now:()=>Date.now(),logger:entry=>events.push(entry),
  launcher:{launch:async()=>({newPage:async()=>page,close:async()=>closed.push(true)})},
  capacity:{reserve:async()=>({ok:true,value:{reservedMilliseconds:60_000}}),reconcile:async command=>{reconciliations.push(command);return {ok:true,value:null};}}});
- return {capture,events,closed,reconciliations,dns};
+ return {capture,events,closed,reconciliations,dns,imageReads:()=>imageReads};
 }
-test('URL capture retains images, screen layout and valid PDF bytes while closing and reconciling',async()=>{
+test('URL capture keeps full-text PDF fallback, screen layout and closes browser quota',async()=>{
  const f=fixture();const result=await f.capture({ownerId:'owner-a',url:'https://example.org/lesson'});
  assert.equal(result.ok,true);assert.equal(new TextDecoder().decode(result.value),'%PDF-fixture');
  assert.equal(f.dns.length,2,'Repeated page, resource and robots checks share one DNS pair');assert.ok(f.events.includes('screen'));assert.ok(f.events.some(event=>event.printBackground===true));assert.equal(f.closed.length,1);assert.equal(f.reconciliations[0].outcome,'completed');
@@ -47,4 +48,28 @@ test('URL capture migration preserves usage and shares the existing concurrency 
   db.exec("UPDATE source_browser_run_reservations SET charged_milliseconds=60000,state='uncertain' WHERE reservation_id='new'; UPDATE source_browser_run_daily_capacity SET reserved_milliseconds=600000,next_acquisition_at='2026-10-14T00:00:00.000Z'");
   assert.throws(()=>db.prepare(insert).run('over','url-capture:two'),/daily-budget-exceeded/);assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
  }finally{db.close();}
+});
+
+test('URL capture returns original image bytes with captions and URLs, never rasterized PDF pages',async()=>{
+ const original=Uint8Array.from([137,80,78,71,13,10,26,10,0,2,3]);
+ const f=fixture({images:[{url:'https://cdn.example.org/diagram.png',alt:'Transformer diagram',caption:'Image by the author',context:'An encoder diagram',bytes:original}]});
+ const result=await f.capture({ownerId:'owner-a',url:'https://example.org/lesson'});assert.equal(result.ok,true);
+ const parsed=parseUrlCapture(result.value);assert.equal(parsed.ok,true);
+ assert.equal(new TextDecoder().decode(parsed.value.pdf),'%PDF-fixture');assert.equal(parsed.value.sourceUrl,'https://example.org/lesson');
+ assert.deepEqual(parsed.value.images[0].bytes,original);assert.equal(parsed.value.images[0].url,'https://cdn.example.org/diagram.png');assert.equal(parsed.value.images[0].caption,'Image by the author');assert.equal(parsed.value.images[0].alt,'Transformer diagram');
+ assert.equal(f.closed.length,1);assert.equal(f.reconciliations[0].outcome,'completed');
+});
+test('Optional image response failure retains PDF text and safe diagnostics',async()=>{
+ const f=fixture({images:[{url:'https://cdn.example.org/diagram.png',alt:'Figure',caption:'Author',context:'',bytes:new Uint8Array([1])}],imageReadFailure:true});
+ const result=await f.capture({ownerId:'owner-a',url:'https://example.org/lesson'});assert.equal(result.ok,true);assert.equal(new TextDecoder().decode(result.value),'%PDF-fixture');
+ assert.equal(f.imageReads(),4,'Initial failure plus three retries');assert(f.events.some(event=>event.event==='url-capture-image-unavailable'));assert(!JSON.stringify(f.events).includes('sensitive'));
+});
+
+
+test('asset read recovers within three retries and AVIF conversion retains its original URL',async()=>{
+ const png=Uint8Array.from([137,80,78,71,13,10,26,10,0]);
+ const f=fixture({images:[{url:'https://cdn.example.org/diagram.avif',alt:'Figure',caption:'Author',context:'',mediaType:'image/avif',bytes:new Uint8Array([1,2,3])}],transientImageFailures:3,normalizedImage:png});
+ const result=await f.capture({ownerId:'owner-a',url:'https://example.org/lesson'});assert.equal(result.ok,true);
+ const parsed=parseUrlCapture(result.value);assert.equal(parsed.ok,true);assert.equal(f.imageReads(),4);
+ assert.equal(parsed.value.images[0].url,'https://cdn.example.org/diagram.avif');assert.equal(parsed.value.images[0].mediaType,'image/png');assert.deepEqual(parsed.value.images[0].bytes,png);
 });
