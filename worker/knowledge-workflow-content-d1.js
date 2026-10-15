@@ -107,7 +107,7 @@ export class D1KnowledgeContentRepository {
     try{
       const patch={mediaCandidates:[{visualId:command.imageId}],imageAssociation:{score:command.score,model:command.model,imageId:command.imageId,caption:command.caption}};
       const result=await this.#database.prepare("UPDATE extraction_knowledge_points SET point_json=json_patch(point_json,json(?)) WHERE owner_id=? AND run_id=? AND knowledge_id=? AND source_revision=?").bind(JSON.stringify(patch),command.ownerId,command.runId,command.knowledgeId,command.sourceRevision).run();
-      return changed(result)?{ok:true,value:null}:{ok:false,error:{kind:'MediaSelectionPersistenceFailed'}};
+      return result.success&&(result.meta?.changes??0)>0?{ok:true,value:null}:{ok:false,error:{kind:'MediaSelectionPersistenceFailed'}};
     }catch(error){this.#logger({event:'knowledge-media-selection-failure',ownerId:command.ownerId,runId:command.runId,failureKind:'MediaSelectionPersistenceFailed'});if(!(error instanceof Error))throw error;return {ok:false,error:{kind:'MediaSelectionPersistenceFailed'}};}
   }
 

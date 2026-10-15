@@ -27,6 +27,11 @@ Deno.test("knowledge append accepts D1 change counts that include search-index t
   const point = { id: "knowledge-a", sourceId: "source-a", sourceRevision: 1, summary: "A supported claim.", normalizedHash: "hash-a", evidenceAnchors: [{ url: "https://example.test/a", selector: "#a" }] };
   const result = await content.appendKnowledgePoint(point, "owner-a", "run-a", "2026-09-18T00:00:00.000Z");
   assertEquals(result.ok, true);
+  const command={ownerId:'owner-a',runId:'run-a',knowledgeId:'knowledge-a',sourceRevision:1,imageId:'image:1',score:0.8,model:'typesafe/jev',caption:'A supporting diagram.'};
+  assertEquals((await content.attachCapturedImage(command)).ok,true);
+  assertEquals((await content.attachCapturedImage({...command,score:0.79})).ok,false);
+  fixture.prepare = (query) => ({ ...prepare(query), bind() { return this; }, async run() { return { success: true, meta: { changes: 0 } }; } });
+  assertEquals((await content.attachCapturedImage(command)).ok,false);
 });
 
 Deno.test("knowledge append replays only an identical owner/run-scoped point after interrupted checkpoint", async () => {
