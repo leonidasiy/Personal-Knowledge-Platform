@@ -1026,9 +1026,9 @@ function renderStartupRecovery() {
 }
 
 function renderHeader() {
-  return `<header class="topbar"><div class="brand-group"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><svg class="brand-symbol" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M6 28V8h11a7 7 0 0 1 0 14H6m11 0 11 7" stroke="currentColor" stroke-width="3"/><circle cx="29" cy="8" r="3" fill="currentColor"/></svg><span>resonance</span></button><span class="brand-caption">A place for <br>what stays.</span></div><div class="topbar-actions">${libraryPageController?.renderProcessingStatus() ?? ""}<span class="local-badge">${
-    navigator.onLine ? "Personal space" : "Offline"
-  }</span><button class="button quiet" type="button" data-view="settings" data-focus-key="settings-button"${activeView === "settings" ? ' aria-current="page"' : ""}>Settings</button></div></header>`;
+  return `<header class="topbar"><div class="brand-group"><button class="brand" type="button" data-view="feed" data-focus-key="brand" aria-label="Resonance home"><svg class="brand-symbol" viewBox="0 0 40 64" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 2h4v5c0 5 13 8 13 16 0 5-8 8-11 9 3 1 11 4 11 9 0 8-13 11-13 16v5h-4v-5C18 52 5 49 5 41c0-5 8-8 11-9-3-1-11-4-11-9 0-8 13-11 13-16Zm2 9c-3 3-8 7-8 12 0 4 5 6 8 8 3-2 8-4 8-8 0-5-5-9-8-12Zm0 22c-3 2-8 4-8 8 0 5 5 9 8 12 3-3 8-7 8-12 0-4-5-6-8-8Z"/></svg><span>resonance</span></button><span class="brand-caption">A place for <br>what stays.</span></div><div class="topbar-actions">${libraryPageController?.renderProcessingStatus() ?? ""}${
+    navigator.onLine ? "" : '<span class="local-badge">Offline</span>'
+  }<button class="button quiet" type="button" data-view="settings" data-focus-key="settings-button"${activeView === "settings" ? ' aria-current="page"' : ""}>Settings</button></div></header>`;
 }
 
 function renderNavigation() {

@@ -123,7 +123,7 @@ svg { max-width: 100%; }
 button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex="-1"]:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 h1, h2, h3, p, dd { overflow-wrap: anywhere; }
 h1, h2, h3 { margin: 0; text-wrap: balance; line-height: 1.15; letter-spacing: -.035em; }
-h1, h2, .brand { font-family: var(--font-display); font-weight: 600; }
+h1, h2 { font-family: var(--font-display); font-weight: 600; }
 h1 { font-size: clamp(40px, 4.2vw, 58px); letter-spacing: -.035em; line-height: 1.08; }
 h2 { font-size: 28px; }
 h3 { font-size: 21px; }
@@ -154,8 +154,8 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .workspace { min-width: 0; padding-bottom: 24px; }
 .topbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; min-height: 100px; padding: 24px 0; gap: 16px; }
 .brand-group { display: flex; align-items: center; gap: 24px; }
-.brand { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; padding: 0; border: 0; background: transparent; font-size: 29px; font-weight: 700; letter-spacing: -1px; }
-.brand-symbol { width: 36px; height: 36px; color: var(--action); }
+.brand { font-family: "Fraunces", Georgia, serif; display: inline-flex; align-items: center; gap: 12px; min-height: 44px; padding: 0; border: 0; background: transparent; font-size: 29px; font-weight: 700; letter-spacing: -1px; }
+.brand-symbol { width: 20px; height: 32px; flex-shrink: 0; color: var(--action); }
 .brand-caption { border-left: 1px solid var(--border); padding-left: 20px; font-size: 12px; line-height: 1.5; }
 .topbar-actions { display: flex; flex-wrap: wrap; max-width: 100%; gap: 12px; align-items: center; }
 .local-badge { display: inline-flex; gap: 8px; align-items: center; padding: 4px 12px; border: 1px solid var(--text-muted); border-radius: 30px; font-size: 12px; color: var(--text); }
@@ -392,7 +392,7 @@ a.discover-result-action:is(:hover, :focus-visible){text-decoration:underline;ba
 @media (max-width: 560px) {
   .app-shell, :root[data-theme="dark"] .app-shell { padding-inline: 16px; }
   .brand { font-size: 25px; gap: 8px; }
-  .brand-symbol { width: 28px; }
+  .brand-symbol { width: 18px; height: 29px; }
   .nav-icon { display: none; }
   .local-badge { display: none; }
   .library-processing-status { display: inline-flex; }
