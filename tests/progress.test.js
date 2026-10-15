@@ -27,6 +27,7 @@ Deno.test("empty progress replaces unused plots with guidance and keeps real act
   const result = buildProgress(input({ attempts: [] })); if (!result.ok) throw new Error("fixture invalid");
   const page = createProgressPage({ fetch: async () => new Response(JSON.stringify({ result: result.value })), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
   await page.load(); const html = page.render();
+  assert(!html.includes("What these measurements mean") && !html.includes("progress-definitions"), "The removed bottom explanation must not render.");
   assert(html.includes('href="#review">Start reviewing') && html.includes("empty-states.svg#progress"), "Review action and decorative empty-state art");
   assert(!html.includes('aria-label="Daily accuracy chart"') && html.includes('aria-label="Activity calendar chart"'), "no blank accuracy canvas; activity remains");
   assert(html.includes("0/0 attempts") && html.includes("Unavailable") && html.includes("Daily accuracy data table"), "honest empty metrics and accessible table");

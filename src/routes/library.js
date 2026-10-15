@@ -133,7 +133,7 @@ function renderSource(model, source) {
   const workflowStatus = (model.workflowStatuses ?? []).find((status) => status.sourceId === source.id) ?? null;
   const workflowMessage = workflowStatusMessage(source, workflowStatus);
   const progress = renderSourceProgress(workflowStatus,escapeHtml);
-  const workflowNotice = (workflowMessage === null || progress && (!workflowStatus?.message || countProcessingWorkflowStatuses([workflowStatus])===0) ? "" : shellMarkup(16, escapeHtml(workflowMessage))) + progress;
+  const workflowNotice = (workflowStatus?.run?.state === "completed" || workflowMessage === null || progress && (!workflowStatus?.message || countProcessingWorkflowStatuses([workflowStatus])===0) ? "" : shellMarkup(16, escapeHtml(workflowMessage))) + progress;
   const retry = (quizzes=false) => shellMarkup(17, escapeHtml(workflowStatus?.run?.runId??""), workflowStatus?.run?.revision??0, `${pending?"disabled":""} ${quizzes?"data-library-workflow-quiz":""}`, shellMarkup(quizzes?89:workflowStatus?.reasonCode === "partial-failure"?82:83));
   const workflowRetry = workflowStatus?.run && (workflowStatus.reasonCode === "retryable-failure" || workflowStatus.reasonCode === "partial-failure") ? ((workflowStatus.reasonCode === "retryable-failure" || workflowStatus.run.progress?.failedItems?.length ? retry():"") + (workflowStatus.run.state==="completed"&&workflowStatus.run.progress?.failedQuizItems?.length?retry(true):"")) : "";
   const workflowCancel=workflowStatus?.run != null && (model.cancellationRetries?.includes(workflowStatus.run.runId) || !["completed","abandoned"].includes(workflowStatus.run.state)) ? shellMarkup(48,escapeHtml(workflowStatus.run.runId),workflowStatus.run.revision,pending?"disabled":"") : "";
@@ -141,10 +141,10 @@ function renderSource(model, source) {
     ? shellMarkup(18, escapeHtml(`#upload?${new URLSearchParams({sourceId:source.id,runId:workflowStatus.run.runId})}`))
     : workflowStatus?.reasonCode==="partial-failure"&&workflowStatus.run?.counts.knowledgePoints===0&&(source.origin??"web")==="web"?shellMarkup(84,sourceId):"";
   const knowledge = (model.knowledge ?? []).filter((card) => card.sourceId === source.id);
-  const related = knowledge.length === 0
-    ? ""
-    : shellMarkup(19, sourceId, sourceId, escapeHtml(knowledgeOverview(knowledge)));
-  return shellMarkup(20, sourceId, sourceId, sourceId, escapeHtml(source.title), escapeHtml(source.origin==="private-document"?"Uploaded material":new URL(source.canonicalUrl).hostname), formatDate(source.approvedAt), escapeHtml(source.description), workflowNotice + related + upload, workflowRetry + workflowCancel, escapeHtml(source.canonicalUrl), sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
+  const extracted = workflowStatus?.run?.state === "completed" || !progress && knowledge.length > 0
+    ? shellMarkup(19, sourceId, knowledge.length, knowledge.length ? shellMarkup(52, knowledge.map(point => shellMarkup(51, escapeHtml(point.summary))).join("")) : shellMarkup(53))
+    : "";
+  return shellMarkup(20, sourceId, sourceId, sourceId, escapeHtml(source.title), escapeHtml(source.origin==="private-document"?"Uploaded material":new URL(source.canonicalUrl).hostname), formatDate(source.approvedAt), escapeHtml(source.description), extracted + workflowNotice + upload, workflowRetry + workflowCancel, escapeHtml(source.canonicalUrl), sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
 }
 
 /** @param {WorkflowSourceStatus|null} status @param {(value:string)=>string} escapeHtml */
@@ -156,25 +156,18 @@ function renderSourceProgress(status,escapeHtml){
   const completed=run.state==="completed";
   const active=countProcessingWorkflowStatuses([status])>0;
   const knowledgeCount=Math.max(run.counts.knowledgePoints,points.length);
-  const questions=progress?shellMarkup(64,progress.generatedQuizQuestions):shellMarkup(57);
-  const stage=completed?shellMarkup(status.reasonCode==="partial-failure"?72:58):(active?progress?.stage:status.message)??workflowStageMessage(run.state);
-  const pageCount=progress?.processedPageCount??run.counts.pages;
-  const total=progress?.totalPages;
-  const attempted=Math.min(total??Infinity,pageCount+failures.length);
-  const meter=completed&&failures.length?shellMarkup(86,total??attempted,attempted,`${attempted}${total==null?"":` of ${total}`}`,pageCount,failures.length):shellMarkup(69,total??1,total==null?(active?"":`value="${completed?1:0}"`):`value="${pageCount}"`,active?"library-processing-spinner":"",`${pageCount}${total==null?"":` of ${total}`}`,active&&progress?.sectionTitle?` · ${escapeHtml(progress.sectionTitle)}`:"");
   const failureCopy=JSON.parse(shellMarkup(71));
   const report=failures.length&&completed?shellMarkup(73,failures.length,failures.map(item=>shellMarkup(74,escapeHtml(item.url),escapeHtml(item.title.replace(/^https:\/\/\S+ — captured page\.pdf\.pkpi — (Page \d+)$/u,"$1")),shellMarkup(failureCopy[item.failureKind]??81),item.attempts)).join("")):"";
   const quizFailures=progress?.failedQuizItems??[];
   const quizReport=completed&&quizFailures.length?shellMarkup(87,quizFailures.length,quizFailures.map(item=>shellMarkup(88,escapeHtml(item.summary),item.attempts)).join("")):"";
+  if (completed) return report + quizReport;
+  const questions=progress?shellMarkup(64,progress.generatedQuizQuestions):shellMarkup(57);
+  const stage=(active?progress?.stage:status.message)??workflowStageMessage(run.state);
+  const pageCount=progress?.processedPageCount??run.counts.pages;
+  const total=progress?.totalPages;
+  const meter=shellMarkup(69,total??1,total==null?(active?"":'value="0"'):`value="${pageCount}"`,active?"library-processing-spinner":"",`${pageCount}${total==null?"":` of ${total}`}`,active&&progress?.sectionTitle?` · ${escapeHtml(progress.sectionTitle)}`:"");
   const summaries=points.length?shellMarkup(52,points.map(point=>shellMarkup(51,escapeHtml(point.summary))).join("")):shellMarkup(knowledgeCount?54:53);
   return shellMarkup(49,escapeHtml(status.sourceId),escapeHtml(status.sourceId),escapeHtml(stage),escapeHtml(shellMarkup(66,knowledgeCount,knowledgeCount===1?"point":"points",questions)),meter+(points.length?shellMarkup(70,escapeHtml(points.at(-1)?.summary??"")):""),knowledgeCount,summaries,report+quizReport+(active?shellMarkup(55):""));
-}
-
-/** @param {readonly { readonly summary: string, readonly sourceTopic?: string|null }[]} knowledge @returns {string} */
-function knowledgeOverview(knowledge) {
-  const sourceTopic = [...new Set(knowledge.map(({ sourceTopic }) => sourceTopic?.trim() ?? "").filter(Boolean))][0];
-  const lead = `Contains ${knowledge.length} retained knowledge ${knowledge.length === 1 ? "point" : "points"}`;
-  return sourceTopic === undefined ? `${lead}.` : `${lead} · Source topic: ${sourceTopic.slice(0, 240 - lead.length - 18)}.`;
 }
 
 /** @param {LibrarySource} source @param {WorkflowSourceStatus | null} status @returns {string | null} */

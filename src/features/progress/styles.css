@@ -13,7 +13,7 @@
 .progress-chart svg { display: block; width: 100%; margin: 24px 0 12px; color: var(--signal-one); }
 .progress-chart p, .progress-note { color: var(--text-muted); font-size: 12px; }
 .progress-table { margin-top: 16px; overflow: auto; font-size: 12px; }
-.progress-table summary, .progress-definitions summary { color: var(--action); font-weight: 700; }
+.progress-table summary { color: var(--action); font-weight: 700; }
 .progress-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .progress-table th, .progress-table td { padding: 8px; border-bottom: 1px solid var(--border); text-align: left; }
 .progress-subjects { align-self: start; }

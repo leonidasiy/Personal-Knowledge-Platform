@@ -300,7 +300,7 @@ function workflowStatus(state, sourceId = "source-a") {
   };
 }
 
-Deno.test("Library is source-only and renders a broad related-knowledge overview", () => {
+Deno.test("Library source cards render one list of retained extracted knowledge", () => {
   const html = renderLibraryRoute({
     ...baseModel(),
     knowledge: [{ knowledgeId: "knowledge-a", sourceId: "source-a", summary: "This lesson introduces harmonic motion, cadences, and how tonal tension resolves across a phrase.", questionLocked: true }],
@@ -313,8 +313,8 @@ Deno.test("Library is source-only and renders a broad related-knowledge overview
     "data-library-disable",
     "data-library-load-more",
     "About this source",
-    "Related knowledge",
-    "1 retained knowledge point",
+    "Extracted knowledge points (1)",
+    "This lesson introduces harmonic motion",
   ]) assert(html.includes(expected), `Missing ${expected}.`);
   assert(!html.includes("data-library-knowledge-remove"), "Source cards must not expose individual knowledge controls.");
   assert(!html.includes("Question unlocks after Feed study"), "Source overviews must not expose quiz state for individual points.");
@@ -345,7 +345,7 @@ Deno.test("Library can render a cross-source knowledge search result separately 
   assert(html.includes("semantic match"), "Knowledge search must disclose the match mode.");
 });
 
-Deno.test("Library source search renders source cards with only a broad knowledge overview", () => {
+Deno.test("Library source search keeps the extracted points with their source", () => {
   const knowledge = [
     { knowledgeId: "knowledge-a", sourceId: "source-a", summary: "This lesson introduces the piano keyboard and grand staff, including middle C and clefs.", questionLocked: true },
     { knowledgeId: "knowledge-b", sourceId: "source-a", summary: "This lesson explains half steps, whole steps, and accidentals in staff notation.", questionLocked: false },
@@ -356,15 +356,14 @@ Deno.test("Library source search renders source cards with only a broad knowledg
     knowledge,
   });
   assert(html.includes("Harmony source"), "Source search must render the matching source card.");
-  assert(html.includes("Related knowledge"), "Source search must retain the broad related-knowledge overview.");
-  assert(html.includes("2 retained knowledge points"), "The overview must include the retained knowledge count.");
-  assert(!html.includes("piano keyboard and grand staff"), "The overview must not guess source-owned topics from point summaries.");
-  assert(!html.includes(knowledge[0].summary) && !html.includes(knowledge[1].summary), "Source search must not render individual knowledge summaries.");
+  assert(html.includes("Extracted knowledge points (2)"), "The list must count the currently retained points.");
+  assert(html.includes(knowledge[0].summary) && html.includes(knowledge[1].summary), "The source list must show each extracted summary.");
+  assert(!html.includes("Related knowledge"), "The duplicate source overview must be removed.");
   assert(!html.includes("data-library-knowledge-remove"), "Source search must not expose individual knowledge controls.");
   assert(html.includes("Open original source"), "Source search must retain the source link.");
 });
 
-Deno.test("Library related-knowledge overview displays the source-owned topic", () => {
+Deno.test("Library extracted list escapes summaries and excludes other sources", () => {
   const repeated = "This lesson covers scales, modes, and tonal centers in music theory.";
   const html = renderLibraryRoute({
     ...baseModel(),
@@ -372,14 +371,13 @@ Deno.test("Library related-knowledge overview displays the source-owned topic", 
       { knowledgeId: "knowledge-a", sourceId: "source-a", summary: repeated, sourceTopic: "Cadential harmony", questionLocked: true },
       { knowledgeId: "knowledge-b", sourceId: "source-a", summary: repeated, sourceTopic: "Cadential harmony", questionLocked: false },
       { knowledgeId: "knowledge-c", sourceId: "source-a", summary: `${repeated} <script>alert(1)</script>`, sourceTopic: "Cadential harmony", questionLocked: true },
+      { knowledgeId: "other", sourceId: "source-b", summary: "Another source point", questionLocked: true },
     ],
   });
-  assert(html.includes("3 retained knowledge points"), "The overview count must include every retained point.");
-  assert(html.includes("Source topic: Cadential harmony"), "The overview must display the persisted source topic.");
-  assert(!html.includes("<script>alert(1)</script>"), "Overview text must be escaped.");
-  assert(!html.includes("scales, modes, and tonal centers"), "Point summaries must not be treated as source topics.");
-  const overview = html.match(/<p class="library-knowledge-overview">([\s\S]*?)<\/p>/)?.[1] ?? "";
-  assert(overview.length <= 300, "The related-knowledge overview must remain bounded.");
+  assert(html.includes("Extracted knowledge points (3)"), "The list must count every retained point for this source.");
+  assert(html.includes(repeated) && html.includes("&lt;script>"), "Retained summaries must be shown and escaped.");
+  assert(!html.includes("<script>alert(1)</script>") && !html.includes("Another source point"), "No unsafe markup or another source's points may enter this list.");
+  assert(!html.includes("Related knowledge") && !html.includes("Source topic:"), "A second source overview must not duplicate the points.");
 });
 
 Deno.test("Header announces the number of actively processing sources", () => {
@@ -592,7 +590,7 @@ Deno.test("Library controller loads source knowledge and removes one knowledge p
   });
   await page.load();
   const initial = page.render({});
-  assert(initial.includes("Related knowledge"), "Library must show source-level knowledge context.");
+  assert(initial.includes("Extracted knowledge points (1)"), "Library must show the retained point in its source list.");
   page.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({
     querySelector: () => null,
     querySelectorAll: (/** @type {string} */ selector) => {
@@ -607,7 +605,7 @@ Deno.test("Library controller loads source knowledge and removes one knowledge p
   action();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert(requests.some((request) => request.includes("POST /api/learning-generation/knowledge-remove")), "Library must call the paired knowledge removal endpoint.");
-  assert(!page.render({}).includes("1 retained knowledge point"), "Removed knowledge must disappear from the current Library projection.");
+  assert(!page.render({}).includes("A cadence resolves musical tension."), "Removed knowledge must disappear from the current Library projection.");
 });
 
 Deno.test("Library controller searches retained knowledge across sources", async () => {
@@ -919,8 +917,8 @@ Deno.test("Library refresh invalidates previously loaded knowledge before replac
     if(String(url).includes("source-status")) return Response.json({result:{sourceId:source.id,run:null,reasonCode:null,message:null}});
     return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});
   },gatewayBaseUrl:"https://app.example/",escapeHtml:value=>value,formatDate:value=>value,createId:()=>"id",confirmDisable:()=>true,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
-  await page.load(); assert(page.render({}).includes("Source topic: Previously retained idea"),"Initial source-owned topic is shown.");
-  await page.load(); assert(!page.render({}).includes("Source topic: Previously retained idea"),"Failed refresh cannot leave stale knowledge visible.");
+  await page.load(); assert(page.render({}).includes("A point summary"),"Initial retained knowledge is shown.");
+  await page.load(); assert(!page.render({}).includes("A point summary"),"Failed refresh cannot leave stale knowledge visible.");
 });
 Deno.test("Source search invalidates old knowledge when the source revision changes", async () => {
  let reads=0;
@@ -1037,21 +1035,18 @@ function partialStatus() {
   const completed = workflowStatus("completed");
   return { ...completed, reasonCode: "partial-failure", run: { ...completed.run, revision: 4, failureKind: "WorkflowPagesFailed", progress: { ...sampleProgress(), failedItems: [{ url: "https://publisher.example/learn#section=page-3", title: "Page <3>", failureKind: "KnowledgeReviewOutputInvalid", attempts: 2 }] } } };
 }
-Deno.test("Library partial completion lists safe failed-unit links and truthful stopped progress", () => {
+Deno.test("Library completion removes progress while preserving failed-unit reports and retries", () => {
   {
   const partial = partialStatus();
   partial.run.progress.processedPageCount = 17; partial.run.progress.totalPages = 23;
   partial.run.progress.failedItems = Array.from({ length: 6 }, (_, index) => ({ ...partial.run.progress.failedItems[0], title: `Page ${index + 1}` }));
   const completedReport = renderLibraryRoute({ ...baseModel(), workflowStatuses: [partial] });
-  assert(completedReport.includes('aria-label="Pages attempted" max="23" value="23"') && completedReport.includes("23 of 23 pages attempted · 17 successful · 6 need retry"), "Completed partial work shows all attempted pages with distinct success and retry counts.");
+  assert(!completedReport.includes("<progress") && !completedReport.includes("data-library-workflow-progress"), "Completed partial work removes the finished processing panel.");
   assert(partial.run.progress.processedPageCount === 17 && completedReport.includes("Failed items (6)"), "Attempted progress must not change successful counts or hide the failure report.");
-  partial.run.progress.totalPages = 20;
-  assert(renderLibraryRoute({ ...baseModel(), workflowStatuses: [partial] }).includes('max="20" value="20"'), "Attempted progress is capped at the reported total.");
-  partial.run.progress.totalPages = 23;
   const active = renderLibraryRoute({ ...baseModel(), workflowStatuses: [{ ...partial, run: { ...partial.run, state: "extraction-loop" } }] });
   assert(active.includes('value="17" class="library-processing-spinner"') && active.includes("17 of 23 pages reviewed"), "Active processing preserves successful counts and motion.");
   const successful = renderLibraryRoute({ ...baseModel(), workflowStatuses: [{ ...partial, reasonCode: "completed", run: { ...partial.run, progress: { ...partial.run.progress, processedPageCount: 23, failedItems: [] } } }] });
-  assert(successful.includes("23 of 23 pages reviewed") && !successful.includes("need retry") && !successful.includes("library-processing-spinner"), "All-success completion preserves truthful stopped progress without retry wording.");
+  assert(!successful.includes("<progress") && !successful.includes("need retry") && !successful.includes("library-processing-spinner"), "Successful completion removes the finished progress panel and retry wording.");
   }
   for (const title of ["https://publisher.example/learn — captured page.pdf.pkpi — Page 3", "My document.pdf — Page 3", "How transformers work — Page 3", "My captured page.pdf.pkpi — Page 3"]) {
     const state = partialStatus(); state.run.progress.failedItems[0].title = title;
@@ -1061,7 +1056,7 @@ Deno.test("Library partial completion lists safe failed-unit links and truthful 
     if (title.startsWith("https://")) assert(!report.includes("captured page.pdf.pkpi"), "Legacy internal capture filenames must not clutter the failed item report.");
   }
   const html = renderLibraryRoute({ ...baseModel(), workflowStatuses: [partialStatus()] });
-  for (const text of ["Processing complete with failed items", "Failed items (1)", "Page &lt;3>", "The review response was invalid.", "2 attempts", "Retry failed items", "Successful knowledge and quizzes are retained."]) assert(html.includes(text), `Missing partial completion detail: ${text}`);
+  for (const text of ["Failed items (1)", "Page &lt;3>", "The review response was invalid.", "2 attempts", "Retry failed items", "Successful knowledge and quizzes are retained."]) assert(html.includes(text), `Missing partial completion detail: ${text}`);
   assert(!html.includes("library-processing-spinner") && !html.includes("Updates every minute"), "Partial completion stops processing motion and polling copy.");
   assert(!html.includes("quality checks"), "Malformed reviewer output is a technical failure, not a negative quality decision.");
   assert(!html.includes("KnowledgeReviewOutputInvalid") && html.includes('rel="noopener noreferrer"'), "Failure codes stay internal and unit links retain safe external-link attributes.");
@@ -1150,7 +1145,7 @@ Deno.test("Library separates failed quiz and page reports and approves the exact
   confirmRetryFailed:(count,target)=>{promptCount++;assert(count===1&&!!target===quizzes,"Confirmation count and target match the clicked report.");return approved;},createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
   await page.load();
   const html=page.render({});
-  for(const text of ["Failed items (1)","Failed quiz items (1)","Retained &lt;point>","4 attempts","saved drafts are retained","4 quiz questions generated","Retry failed items","Retry failed quizzes"])assert(html.includes(text),`Missing separate report detail ${text}`);
+  for(const text of ["Failed items (1)","Failed quiz items (1)","Retained &lt;point>","4 attempts","saved drafts are retained","Retry failed items","Retry failed quizzes"])assert(html.includes(text),`Missing separate report detail ${text}`);
   assert(!html.includes("KnowledgeModelUnavailable")&&!html.includes("library-processing-spinner"),"Internal codes and processing motion stay absent after partial completion.");
   assert(promptCount===0&&posts===0,"Cold completed reports do not prompt or retry automatically.");
   page.bind(/** @type {HTMLElement} */(/** @type {unknown} */({querySelector:()=>null,querySelectorAll:(/** @type {string} */ selector)=>selector==="[data-library-workflow-retry], [data-library-workflow-cancel]"?[{hasAttribute:(/** @type {string} */ name)=>name==="data-library-workflow-quiz"&&quizzes,getAttribute:(/** @type {string} */ name)=>name.endsWith("revision")?"4":"run-source-a",addEventListener:(/** @type {string} */ _event,/** @type {()=>void} */ callback)=>{click=callback;}}]:[]})));
@@ -1162,4 +1157,22 @@ Deno.test("Library separates failed quiz and page reports and approves the exact
   const retryable=renderLibraryRoute({...baseModel(),workflowStatuses:[{...state,reasonCode:"retryable-failure",run:{...state.run,state:"retryable-failure"}}]});
   assert(!retryable.includes("Retry failed quizzes")&&retryable.includes("Retry processing"),"A retained deferred list cannot offer completed-only quiz control during a general retryable failure.");
  }
+});
+
+Deno.test("Completed Library lists only current retained points even after deletions", () => {
+  const status = workflowStatus("completed");
+  status.run.counts.knowledgePoints = 61;
+  const finished = { ...status, run: { ...status.run, progress: sampleProgress() } };
+  const knowledge = [{ knowledgeId: "retained", sourceId: source.id, summary: "Currently retained point", questionLocked: true }];
+  for (const origin of /** @type {const} */ (["web", "private-document"])) {
+    const model = { ...baseModel(), collection: { ...baseModel().collection, items: [{ ...source, origin }] }, workflowStatuses: [finished] };
+    const html = renderLibraryRoute({ ...model, knowledge });
+    assert(html.includes("Extracted knowledge points (1)") && html.includes(knowledge[0].summary), "Final list reflects the retained projection for every source type.");
+    assert((html.match(/Extracted knowledge points/g) ?? []).length === 1, "A source has exactly one knowledge list.");
+    for (const retired of ["Related knowledge", "Processing complete", "<progress", "61 knowledge", "A beat groups", "quiz questions generated"]) assert(!html.includes(retired), `Completed clutter must be absent: ${retired}`);
+    const empty = renderLibraryRoute({ ...model, knowledge: [] });
+    assert(empty.includes("Extracted knowledge points (0)") && !empty.includes("Currently retained point") && !empty.includes("A beat groups"), "Removed points cannot reappear from historical progress.");
+    const active = renderLibraryRoute({ ...model, knowledge, workflowStatuses: [{ ...finished, run: { ...finished.run, state: "extraction-loop" } }] });
+    assert((active.match(/Extracted knowledge points/g) ?? []).length === 1 && active.includes("<progress"), "Active sources keep their live progress and one list.");
+  }
 });

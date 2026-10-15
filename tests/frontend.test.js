@@ -454,7 +454,7 @@ Deno.test("Feed and Review keep study and quiz controls exclusive", async () => 
     "The learner surface must not expose the retired manual-study or feed-quiz controls.",
   );
   assert(
-    libraryRoute.includes("Related knowledge") &&
+    libraryRoute.includes("Extracted knowledge points") &&
       libraryRoute.includes("data-library-knowledge-remove") &&
       !libraryRoute.includes("Review queue") &&
       !libraryRoute.includes("data-learning-review-decision"),

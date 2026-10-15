@@ -73,7 +73,7 @@ Deno.test("Progress observations use descriptive section headings", async () => 
   );
   assert(
     page.render().includes("at least one elapsed day") &&
-      page.render().includes("Activity records are not mastery or transfer."),
+      page.render().includes("They do not measure mastery or transfer."),
     "Factual measurement boundaries remain.",
   );
 });
