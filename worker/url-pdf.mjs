@@ -6,7 +6,7 @@ import { imageSignature } from '../src/features/knowledge-workflows/image-upload
 import { packUrlCapture } from '../src/features/knowledge-workflows/url-capture.js';
 
 // One explicitly selected public page; source traversal remains the learner's choice.
-/** @param {{binding:import('@cloudflare/puppeteer').BrowserWorker,capacity:Pick<import('./browser-run-capacity-d1.js').D1BrowserRunCapacityLedger,'reserve'|'reconcile'>,fetch:typeof globalThis.fetch,now:()=>number,logger:(entry:{event:string,ownerId:string,failureKind?:string})=>void,launcher?:Pick<typeof puppeteer,'launch'>}} dependencies */
+/** @param {{binding:import('@cloudflare/puppeteer').BrowserWorker,capacity:Pick<import('./browser-run-capacity-d1.js').D1BrowserRunCapacityLedger,'reserve'|'reconcile'>,fetch:typeof globalThis.fetch,now:()=>number,logger:(entry:{event:string,ownerId:string,failureKind?:string,stage?:string,diagnosticToken?:string})=>void,launcher?:Pick<typeof puppeteer,'launch'>}} dependencies */
 export function createUrlPdfCapture({binding,capacity,fetch,now,logger,launcher=puppeteer}) {
   return async (/** @type {{ownerId:string,url:string}} */ {ownerId,url}) => {
     /** @param {string} kind @returns {{ok:false,error:{kind:string}}} */
@@ -20,7 +20,7 @@ export function createUrlPdfCapture({binding,capacity,fetch,now,logger,launcher=
       return resolved;
     };
     const authorized=await lookup(new URL(url).hostname);
-    if(!authorized.ok)return fail('KnowledgeBrowserNetworkRejected');
+    if(!authorized.ok){logger({event:'url-capture-network-failure',ownerId,stage:'source',failureKind:authorized.error.kind});return fail('KnowledgeBrowserNetworkRejected');}
     const reserved=await capacity.reserve({ownerId,jobId:`url-capture:${crypto.randomUUID()}`});
     if(!reserved.ok)return reserved;
     const started=now();
@@ -46,12 +46,13 @@ export function createUrlPdfCapture({binding,capacity,fetch,now,logger,launcher=
           const checked=validatePublisherDestination(target);
           const resolved=checked.ok ? await lookup(new URL(target).hostname) : {ok:false};
           if(!resolved.ok){
+            if(!rejection)logger({event:'url-capture-network-failure',ownerId,stage:request.isNavigationRequest()?'navigation':'resource',failureKind:'error' in resolved?resolved.error.kind:'SourceExtractionUrlInvalid'});
             rejection='KnowledgeBrowserNetworkRejected';
             return await request.abort();
           }
           if(!['GET','HEAD'].includes(request.method()))return await request.abort();
           await request.continue(request.resourceType()==='image'?{headers:{...request.headers(),accept:'image/webp,image/png,image/jpeg,image/gif;q=0.8'}}:{});
-        }catch{rejection='KnowledgeBrowserNetworkRejected';await request.abort().catch(()=>{});}
+        }catch(error){if(!rejection)logger({event:'url-capture-network-failure',ownerId,stage:'interception',failureKind:'KnowledgeBrowserNetworkRejected',diagnosticToken:error instanceof Error&&error.message.includes('Too many subrequests')?'subrequest-limit':error instanceof TypeError?'type-error':'request-failed'});rejection='KnowledgeBrowserNetworkRejected';await request.abort().catch(()=>{});}
       });
       // Cloudflare's CDP peer is its internal proxy; destinations are checked before each request.
       page.on('popup',popup=>{void popup?.close();});
