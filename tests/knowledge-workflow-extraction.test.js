@@ -901,3 +901,19 @@ Deno.test("runtime-exhausted technical acquisition retries are not multiplied by
   assertEquals(result.value.scratchpad.failedPages?.[0].failureKind,error.kind==="WorkflowStageCallUncertain"?"WorkflowProcessingInterrupted":error.kind);
  }
 });
+
+Deno.test("batch-reviewed extraction commits in source order and resumes without repeating committed points", async () => {
+  const fixture=setup();
+  const original=fixture.dependencies.acquirer.fetchPage;
+  /** @type {string[][]} */ const batches=[];
+  let interrupted=true;
+  const runner=createExtractionRunner({...fixture.dependencies,orderedUrls:['https://example.test/a'],planner:inventoryPlanner(fixture,['https://example.test/a']),acquirer:{async fetchPage(command){const page=await original(command);return page.ok?{ok:true,value:{...page.value,candidates:[page.value.candidates[0],{...page.value.candidates[0],normalizedHash:'hash-b',summary:'Second supported relationship'}]}}:page;}},reviewer:{async review(){throw Error('Use the batch boundary');},async reviewBatch(points){batches.push(points.map(p=>p.normalizedHash));return points.map(p=>p.normalizedHash==='hash-b'&&interrupted?{ok:false,error:{kind:'ReviewerUnavailable'}}:{ok:true,value:p});}}});
+  const command={ownerId:'owner-a',runId:'run-a',sourceId:'source-a',sourceRevision:1,rootUrl:'https://example.test/',startedAtMs:0,deadlineAtMs:1800000};
+  const first=await runner.run(command);
+  assertEquals(first.ok,false);assertEquals(fixture.points.length,1);
+  interrupted=false;
+  const second=await runner.run(command);
+  if(!second.ok)throw Error(JSON.stringify(second.error));
+  assertEquals(second.ok,true);assertEquals(fixture.points.map(p=>p.normalizedHash).join(','),'hash-a,hash-b');
+  assertEquals(batches.map(b=>b.join(',')).join('|'),'hash-a,hash-b|hash-b');
+});

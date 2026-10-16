@@ -125,6 +125,8 @@
  * }} ExtractionScratchpad
  */
 
+/** @typedef {Result<KnowledgePoint|null,{readonly kind:string,readonly status?:number,readonly attempts?:number,readonly technicalAttempts?:number,readonly technicalRetriesExhausted?:boolean,readonly causeKind?:string}>} KnowledgeReviewResult */
+
 /**
  * @typedef {{
  *   readonly state: "completed" | "paused" | "awaiting-time-limit-decision",
@@ -203,7 +205,7 @@
  *   readonly checkRobots?: (targetUrl: string) => Promise<Result<unknown, unknown>>,
  *   readonly scratchpad: ScratchpadRepository,
  *   readonly knowledge: KnowledgeRepository,
- *   readonly reviewer?: { readonly review: (point: KnowledgePoint, observation: PageObservation) => Promise<Result<KnowledgePoint | null, { readonly kind: string, readonly status?: number, readonly attempts?: number, readonly technicalAttempts?: number, readonly technicalRetriesExhausted?: boolean, readonly causeKind?: string }>> },
+ *   readonly reviewer?: { readonly review: (point: KnowledgePoint, observation: PageObservation) => Promise<KnowledgeReviewResult>, readonly reviewBatch?: (points:readonly KnowledgePoint[],observation:PageObservation)=>Promise<readonly KnowledgeReviewResult[]> },
  *   readonly memory?: ExtractionMemory,
  *   readonly now: () => string,
  *   readonly nowMs: () => number,
@@ -549,15 +551,24 @@ export function createExtractionRunner(dependencies) {
         if (!pageMemory.ok) return pageMemory;
         let novel = 0;
         let reviewFailure;
-        for (const candidate of scratchpad.processedContentDigests?.includes(observation.contentDigest??'') ? [] : observation.candidates) {
+        const candidates = scratchpad.processedContentDigests?.includes(observation.contentDigest??'') ? [] : observation.candidates.filter((candidate,index,all)=>!scratchpad.acceptedHashes.includes(candidate.normalizedHash)&&all.findIndex(other=>other.normalizedHash===candidate.normalizedHash)===index);
+        /** @param {KnowledgeCandidate} candidate */
+        const toPoint = candidate => /** @type {KnowledgePoint} */ (freeze({ id: `knowledge:${command.sourceId}:${command.sourceRevision}:${candidate.normalizedHash}`, sourceId: command.sourceId, sourceRevision: command.sourceRevision, summary: candidate.summary, normalizedHash: candidate.normalizedHash, evidenceAnchors: freeze(candidate.evidenceAnchors.map((anchor) => freeze({ ...anchor }))), coverageGoalIds: freeze([...candidate.coverageGoalIds]), mediaCandidates: freeze([...candidate.mediaCandidates]), attribution: freeze({ sourceUrl: observation.responseUrl??observation.url }), extractionVersion }));
+        /** @type {readonly KnowledgeReviewResult[]|undefined} */ let batchReviews;
+        if (dependencies.reviewer?.reviewBatch !== undefined) {
+          try {batchReviews = await dependencies.reviewer.reviewBatch(candidates.map(toPoint),observation);}
+          catch {return fail({kind:"KnowledgePersistenceFailed",causeKind:"KnowledgeReviewFailed"},dependencies,command.runId);}
+          if (!Array.isArray(batchReviews) || batchReviews.length !== candidates.length) return fail({kind:"KnowledgePersistenceFailed",causeKind:"KnowledgeReviewOutputInvalid"},dependencies,command.runId);
+        }
+        for (const [candidateIndex,candidate] of candidates.entries()) {
           if (scratchpad.acceptedHashes.includes(candidate.normalizedHash)) continue;
           if (dependencies.reviewer === undefined && candidate.similarity?.decision === "ambiguous") return fail({ kind: "KnowledgeDuplicateAmbiguous" }, dependencies, command.runId);
           if (candidate.similarity !== undefined) scratchpad = cloneScratchpad({ ...scratchpad, similarityEvidence: [...scratchpad.similarityEvidence, { candidateHash: candidate.normalizedHash, comparedLocalHash: candidate.similarity.comparedLocalHash, score: candidate.similarity.score, decision: candidate.similarity.decision }] });
           if (dependencies.reviewer === undefined && candidate.similarity?.decision === "merge") continue;
-          let point = /** @type {KnowledgePoint} */ (freeze({ id: `knowledge:${command.sourceId}:${command.sourceRevision}:${candidate.normalizedHash}`, sourceId: command.sourceId, sourceRevision: command.sourceRevision, summary: candidate.summary, normalizedHash: candidate.normalizedHash, evidenceAnchors: freeze(candidate.evidenceAnchors.map((anchor) => freeze({ ...anchor }))), coverageGoalIds: freeze([...candidate.coverageGoalIds]), mediaCandidates: freeze([...candidate.mediaCandidates]), attribution: freeze({ sourceUrl: observation.responseUrl??observation.url }), extractionVersion }));
+          let point = toPoint(candidate);
           if (dependencies.reviewer !== undefined) {
             let reviewed;
-            try { reviewed = await dependencies.reviewer.review(point, observation); } catch (error) { return fail({ kind: "KnowledgePersistenceFailed", causeKind: "KnowledgeReviewFailed" }, dependencies, command.runId); }
+            try { reviewed = batchReviews === undefined ? await dependencies.reviewer.review(point, observation) : batchReviews[candidateIndex]; } catch (error) { return fail({ kind: "KnowledgePersistenceFailed", causeKind: "KnowledgeReviewFailed" }, dependencies, command.runId); }
             if (!reviewed.ok) {
               if (interruptedUnitCause(reviewed.error) === undefined && !pageLocalFailure(reviewed.error.kind, reviewed.error)) return fail({kind:"KnowledgePersistenceFailed",causeKind:reviewed.error.kind},dependencies,command.runId);
               reviewFailure = reviewed.error;

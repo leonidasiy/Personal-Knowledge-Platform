@@ -535,6 +535,16 @@ Deno.test("Library dispatches Retry processing for a deadline-expired extraction
   } finally {page.dispose();}
 });
 
+Deno.test("Library offers Continue processing only when interrupted work has saved progress", () => {
+  for (const saved of ["none", "pages", "knowledge", "live"]) {
+    const status = {...workflowStatus("retryable-failure"),reasonCode:"retryable-failure",run:{...workflowStatus("retryable-failure").run,...(saved === "live" ? {progress:{currentUrl:null,pageTitle:null,sectionTitle:null,stage:"Reviewing knowledge",updatedAt:"2026-10-16T11:00:00.000Z",knowledgePoints:[{knowledgeId:"point-a",summary:"Saved progress"}],generatedQuizQuestions:0,processedPageCount:0,totalPages:1}} : {})}};
+    if (saved === "pages") status.run.counts.pages = 1;
+    if (saved === "knowledge") status.run.counts.knowledgePoints = 1;
+    const html = renderLibraryRoute({...baseModel(),workflowStatuses:[status]});
+    assert(html.includes(saved === "none" ? ">Retry processing</button>" : ">Continue processing</button>"), "The action must distinguish a fresh retry from resuming saved work.");
+  }
+});
+
 Deno.test("Library keeps robots evidence out of cards", () => {
   const present = renderLibraryRoute({
     ...baseModel(),
@@ -1191,7 +1201,7 @@ Deno.test("Library separates failed quiz and page reports and approves the exact
   const onlyQuiz=renderLibraryRoute({...baseModel(),workflowStatuses:[{...state,run:{...state.run,progress:{...state.run.progress,failedItems:[]}}}]});
   assert(onlyQuiz.includes("Retry failed quizzes")&&!onlyQuiz.includes(">Retry failed items</button>"),"Quiz-only failure never offers source extraction retry.");
   const retryable=renderLibraryRoute({...baseModel(),workflowStatuses:[{...state,reasonCode:"retryable-failure",run:{...state.run,state:"retryable-failure"}}]});
-  assert(!retryable.includes("Retry failed quizzes")&&retryable.includes("Retry processing"),"A retained deferred list cannot offer completed-only quiz control during a general retryable failure.");
+  assert(!retryable.includes("Retry failed quizzes")&&retryable.includes("Continue processing"),"A retained deferred list cannot offer completed-only quiz control during a general retryable failure.");
  }
 });
 

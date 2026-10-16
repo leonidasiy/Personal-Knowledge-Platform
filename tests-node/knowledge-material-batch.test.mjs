@@ -63,6 +63,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
     const imageObservationSizes = [];
     const materialReviews = [];
     const qualityReviews = [];
+    let activeParallelReviews=0,maximumParallelReviews=0,parallelSelections=0;
     let captionCalls=0, decisionCalls=0, decisionRefused=false;
     let modelCalls = 0; let invalidPairedDraftInjected = false, pairedFeedbackSeen = false;
     const transport = async (_url, init) => {
@@ -103,7 +104,14 @@ test("production upload runtime resumes text batches and processes selected PDF 
       if(body.response_format?.json_schema?.name==='captured_image_caption_v1'){
         captionCalls++;assert.equal(db.prepare("SELECT COUNT(*) n FROM extraction_knowledge_points WHERE run_id='capture-run'").get().n,2);assert(!task.knowledge,'Caption has no knowledge to force-fit');assert.equal(message[2].type,'image_url');output={description:`Fixture original ${task.imageId}`,visibleText:'Q K V'};if(captionCalls===1)output.extra='invalid';
       } else if(body.response_format?.json_schema?.name==='webpage_image_purpose_v1')output={purpose:'illustration',imageId:task.imageId,imageDigest:task.imageDigest,visibleEvidence:'Synthetic original figure context.'};
+      else if (body.response_format?.json_schema?.name==='knowledge_batch_selection_v1') {
+        assert.equal(modelInput.contract.role,'question-evaluator');
+        assert(Array.isArray(task.previousKnowledge)&&Array.isArray(task.previousQuizzes));
+        if(task.points.some(point=>point.summary.startsWith('Parallel fixture'))){parallelSelections++;assert.equal(activeParallelReviews,0);assert.equal(task.points.length,3);}
+        output={keptKnowledgeIds:task.points.map(point=>point.id)};
+      }
       else if (body.response_format?.json_schema?.name==='knowledge_quality_review_v11') {
+        if(task.knowledge.summary.startsWith('Parallel fixture')){activeParallelReviews++;maximumParallelReviews=Math.max(maximumParallelReviews,activeParallelReviews);await new Promise(resolve=>setTimeout(resolve,10));activeParallelReviews--;}
         qualityReviews.push(task.sourceMode);
         assert.equal(modelInput.contract.role,'question-evaluator');
         assert(task.sourceEvidence.sections.some(section=>section.locator===task.knowledge.evidenceAnchors[0].selector));
@@ -152,6 +160,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
           : task.mode === "image"
           ? { notes: "Synthetic concise progress.", candidates: [{ summary: "The figure distinguishes two cases.", visibleEvidence: "Two cases are labeled in the figure.", normalizedHash: `fixture-image-${imageBatchSizes.length}`, coverageGoalIds: [] }] }
           : { pages: task.sections.map((section) => ({ url: section.url, notes: "Synthetic concise progress.", candidates: section.text === "" ? [] : [{ summary: section.text, normalizedHash: section.id, evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [] }] })) };
+        if(task.sections[0]?.id==='parallel-page')output.pages[0].candidates=Array.from({length:3},(_,i)=>({...output.pages[0].candidates[0],summary:`Parallel fixture relationship ${i}`,normalizedHash:`parallel-${i}`}));
       } else if (task.source && task.points) output = { mainSubject: "music", topic: "Synthetic material" };
       else if (task.draft) output = { score: 9, reasons: ["Synthetic fixture"], feedback: "Accepted fixture", groundingProblems: [], knowledgeGroundingProblems: [] };
       else if (task.knowledge) output = { knowledgeId: task.knowledge.id, knowledgeRevision: task.knowledge.sourceRevision, canonicalAnswers: ["fixture"], citedEvidenceUrls: task.knowledge.evidenceAnchors.map((anchor) => anchor.url), multipleChoice: { prompt: `Which fixture belongs to ${task.knowledge.normalizedHash}?`, options: [{ key: "choice-a", text: "Fixture" }, { key: "choice-b", text: "Other" }], correctOptionKeys: ["choice-a"], correctOptionAnswers: [{ key: "choice-a", canonicalAnswer: "fixture" }], explanation: "Fixture is supported by the source." }, fillBlank: { prompt: "The supported answer is ____.", blanks: [{ id: "blank-1", canonicalAnswer: "fixture", acceptedAnswers: ["fixture"] }], explanation: "Fixture is supported by the source." } };
@@ -313,7 +322,20 @@ test("production upload runtime resumes text batches and processes selected PDF 
     const capturePoints=db.prepare('SELECT point_json FROM extraction_knowledge_points WHERE run_id=? ORDER BY created_at,knowledge_id').all(captureRunId).map(row=>JSON.parse(row.point_json));
     assert.equal(capturePoints.filter(p=>p.mediaCandidates.length).length,1);assert.equal(capturePoints.find(p=>p.mediaCandidates.length).imageAssociation.score,0.95);assert.equal(capturePoints.find(p=>p.mediaCandidates.length).imageAssociation.model,'typesafe/jev-1.13');assert.deepEqual(capturePoints.find(p=>!p.mediaCandidates.length).mediaCandidates,[]);assert.deepEqual(capturePoints.map(p=>p.summary).sort(),captureMaterial.sections.map(s=>s.text).sort(),'Images cannot rewrite text-derived knowledge');
 
-
+    // Exercise the actual production extraction wiring with three independent model requests.
+    const parallelRunId='parallel-run',parallelSourceId='parallel-source',parallelUrl='https://example.test/parallel';
+    const parallelMaterial={...material,runId:parallelRunId,sourceId:parallelSourceId,sourceUrl:parallelUrl,sections:[{id:'parallel-page',title:'Parallel',locator:'page:1',text:'Parallel fixture source relationships.'}]};
+    const parallelService=createKnowledgeWorkflowService(repository,{now:clock,createId:()=>parallelRunId,logger});
+    let parallelRun=unwrap(await parallelService.createRun({ownerId,sourceId:parallelSourceId,sourceRevision:1,canonicalSourceIdentity:parallelUrl,contentSignature:parallelMaterial.contentDigest,idempotencyKey:parallelRunId,sourceOrigin:'private-document',configDigests:Object.fromEntries(Object.entries(configs).map(([role,config])=>[role,config.digest]))})).run;
+    unwrap(await materials.persist({ownerId,runId:parallelRunId,materialId:'parallel-material',idempotencyKey:parallelRunId,fingerprint:parallelMaterial.contentDigest,objectKey:'synthetic-parallel',material:parallelMaterial,createdAt:clock()}));
+    parallelRun=unwrap(await parallelService.attachMaterial({ownerId,runId:parallelRunId,materialId:'parallel-material'}));
+    db.prepare("INSERT INTO library_sources (owner_id,source_id,submitted_url,canonical_url,title,description,adapter_json,identity_evidence_json,state,approved_at,updated_at,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(ownerId,parallelSourceId,parallelUrl,parallelUrl,'Parallel source','Offline concurrency fixture',JSON.stringify({kind:'private-document'}),'[]','active',clock(),clock(),1);
+    for(let step=0;step<4&&parallelRun.state!=='per-point-quiz-loop';step++){
+      const runtime=createKnowledgeWorkflowRuntime({imagePolicy:WEBPAGE_IMAGE_POLICY,database,fetch:transport,browser:{readPage:forbidden,readRobots:forbidden,screenshot:forbidden,close:async()=>({ok:true,value:null})},apiKey:'offline-fixture',endpoint:'https://example.test/model',now:clock,nowMs:Date.now,logger,configSnapshots:configs,material:materials,transition:({run:current,nextState,...rest})=>parallelService.advance({ownerId,runId:parallelRunId,expectedRevision:current.revision,nextState,...rest})});
+      unwrap(await runtime.execute(parallelRun));parallelRun=unwrap(await repository.findById(ownerId,parallelRunId));
+    }
+    assert.equal(parallelRun.counts.knowledgePoints,3);
+    assert.equal(maximumParallelReviews,3);assert.equal(activeParallelReviews,0);assert.equal(parallelSelections,1);
 
   } finally { db.close(); }
 });

@@ -131,6 +131,7 @@ export function createKnowledgeWorkflowAgentRuntime(dependencies) {
   if (!dependencies || typeof dependencies.model?.generate !== "function" || typeof dependencies.memory?.createNamespace !== "function" || typeof dependencies.memory.listRecords !== "function" || typeof dependencies.memory.appendRecord !== "function" || typeof dependencies.eventLedger?.append !== "function" || typeof dependencies.compactor?.compact !== "function" || !record(dependencies.configSnapshots) || !roleSnapshots(dependencies.configSnapshots) || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function") throw new TypeError("Knowledge agent runtime dependencies are invalid.");
   const namespaces = new Map();
   const active = new Set();
+  /** @type {Map<string,Promise<void>>} */ const preparations = new Map();
   let executionSequence = 0;
 
   /** @param {string} prefix @returns {string} */
@@ -185,9 +186,16 @@ export function createKnowledgeWorkflowAgentRuntime(dependencies) {
       const contract = dependencies.configSnapshots[command.role];
       if (!record(contract) || !text(contract.digest)) return { ok: false, error: { kind: "WorkflowConfigurationSnapshotInvalid" } };
       const configDigest = contract.digest;
-      const activeKey = JSON.stringify([command.ownerId, command.runId, command.role]);
+      const roleKey = JSON.stringify([command.ownerId, command.runId, command.role]);
+      const activeKey = JSON.stringify([command.ownerId, command.runId, command.role, command.taskId]);
       if (active.has(activeKey)) return { ok: false, error: { kind: "ContextLimitBeforeSafeCheckpoint" } };
       active.add(activeKey);
+      // Snapshot and compact shared memory in order; independent model calls can overlap.
+      const previousPreparation = preparations.get(roleKey);
+      let releasePreparation = () => {};
+      /** @type {Promise<void>} */ const preparation = new Promise(resolve => {releasePreparation = resolve;});
+      preparations.set(roleKey,preparation);
+      await previousPreparation;
       try {
       let modelCalled=false;
       /** Cover compaction and every harness call in this whole native work item.
@@ -240,6 +248,7 @@ export function createKnowledgeWorkflowAgentRuntime(dependencies) {
       }
       const modelInput = Object.freeze({ contract: contextContract, memory: priorCompacted.value.context.recentTurns, task: command.input });
       if (estimatedTokens(modelInput) + estimatedTokens(command.systemPrompt) + command.maxOutputTokens > 1_048_576) return { ok: false, error: { kind: "ContextLimitBeforeSafeCheckpoint" } };
+      releasePreparation();
       /** @type {{ inputTokens: number | null, outputTokens: number | null } | null} */
       let usage = null;
       const executionId = nextExecutionId("model");
@@ -272,7 +281,7 @@ export function createKnowledgeWorkflowAgentRuntime(dependencies) {
       if (!memoryRecord.ok) return { ok: false, error: { kind: memoryRecord.error.kind } };
       dependencies.logger({ event: "knowledge-agent-runtime-success", ownerId: command.ownerId, runId: command.runId, role: command.role });
       return { ok: true, value: outcome.value.output };
-      } finally { active.delete(activeKey); }
+      } finally {releasePreparation();if(preparations.get(roleKey)===preparation)preparations.delete(roleKey);active.delete(activeKey);}
     },
     /** @param {{ readonly ownerId: string, readonly runId: string, readonly role: AgentRole, readonly taskId: string, readonly name: string, readonly input: unknown }} command @returns {Promise<Result<unknown, { readonly kind: string, readonly diagnosticToken?: string }>>} */
     async invokeTool(command) {

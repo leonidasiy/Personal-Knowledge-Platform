@@ -8,6 +8,8 @@ import { capturedImageCaptionPrompt, capturedImageCaptionSchema, isCapturedImage
 import { URL_CAPTURE_TYPE, parseUrlCapture } from '../src/features/knowledge-workflows/url-capture.js';
 import { requestWebpageFacts, createWebpageAttemptPolicy, isWebpageEvidence, webpageFactsPrompt, knowledgeSelectionPolicy } from './webpage-facts.js';
 // @ts-check
+
+import {reviewKnowledgeBatch,knowledgeBatchSelectionPrompt} from "./knowledge-workflow-parallel-review.js";
 import {AgentExecutionBoundaryFailure} from '../src/features/knowledge-workflows/harness.js';
 
 import { isKnowledgeWorkflowRun } from "../src/features/knowledge-workflows/workflow.js";
@@ -919,6 +921,19 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     return { ok: true, value: null };
   }
 
+  /** @param {KnowledgeWorkflowRun} run @param {(point:KnowledgePoint,observation:PageObservation)=>Promise<import('../src/features/knowledge-workflows/extraction.js').KnowledgeReviewResult>} review */
+  function parallelKnowledgeReviewer(run,review) {
+    return {review,
+      /** @param {readonly KnowledgePoint[]} points @param {PageObservation} observation */
+      reviewBatch:(points,observation)=>reviewKnowledgeBatch({points,review:point=>review(point,observation),select:async survivors=>{
+        const context=await content.reviewContext({ownerId:run.ownerId,runId:run.runId,sourceId:run.sourceId,knowledgeId:survivors[0].id});
+        if(!context.ok)return context;
+        const input={points:survivors.map(point=>({id:point.id,summary:point.summary})),...context.value};
+        return generate(run,'question-evaluator',`knowledge-batch-selection-${await imageHash(new TextEncoder().encode(JSON.stringify(input)))}`,knowledgeBatchSelectionPrompt,input,2048,undefined,{responseSchema:{name:'knowledge_batch_selection_v1',schema:{type:'object',additionalProperties:false,required:['keptKnowledgeIds'],properties:{keptKnowledgeIds:{type:'array',items:{type:'string',enum:survivors.map(point=>point.id)}}}}}});
+      }}),
+    };
+  }
+
   /** @param {KnowledgeWorkflowRun} run @param {{ readonly taskId: string, readonly systemPrompt: string, readonly input: unknown, readonly maxOutputTokens: number }} command @returns {Promise<Result<Record<string, unknown>, { readonly kind: string }>>} */
   async function generatePlanner(run, command) {
     const generated = await generate(run, "knowledge-scraper", command.taskId, command.systemPrompt, command.input, command.maxOutputTokens, undefined, { timeoutMs: 90_000, reasoningEffort: "low" });
@@ -1232,7 +1247,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         return /** @type {const} */ ({ ok: true, value: page });
       },
     };
-    return createExtractionRunner({ rights, robots, ...(checkRobots === undefined ? {} : { checkRobots }), planner, acquirer, ...(pageOnly ? {orderedUrls:[run.canonicalSourceIdentity]} : navigation && run.extractionScope !== "platform" ? {orderedUrls:navigation.lessonUrls} : {}), reviewer:{review:async(point)=>{
+    return createExtractionRunner({ rights, robots, ...(checkRobots === undefined ? {} : { checkRobots }), planner, acquirer, ...(pageOnly ? {orderedUrls:[run.canonicalSourceIdentity]} : navigation && run.extractionScope !== "platform" ? {orderedUrls:navigation.lessonUrls} : {}), reviewer:parallelKnowledgeReviewer(run,async(point)=>{
       const captured=capturedPages.get(point.attribution.sourceUrl);
       if(captured===undefined)return {ok:false,error:{kind:'KnowledgeReviewEvidenceUnavailable'}};
       const association=associations.get(point.normalizedHash);
@@ -1247,7 +1262,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         associations.set(accepted.normalizedHash,{normalizedHash:accepted.normalizedHash,status:'match',image,binding:reviewed.value.binding});
       }
       return reviewed.ok?{ok:true,value:reviewed.value?.point??null}:reviewed;
-    }}, scratchpad: { load: (scope) => loadExtractionScratchpad(scope, run), save: (scratchpad) => content.saveScratchpad(scratchpad, dependencies.now()) }, knowledge: { append: async (point) => {
+    }), scratchpad: { load: (scope) => loadExtractionScratchpad(scope, run), save: (scratchpad) => content.saveScratchpad(scratchpad, dependencies.now()) }, knowledge: { append: async (point) => {
       const page=embeddedImagesByPage.get(point.attribution.sourceUrl);
       const association=associations.get(point.normalizedHash);
       const image=point.mediaCandidates.length&&association?.status==="match"?association.image:undefined;
@@ -1419,14 +1434,14 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       },
       maximumBatchSize: 1,
     };
-    return { ok: true, value: createExtractionRunner({ rights: { status: "allowed", sourceId: run.sourceId, sourceRevision: run.sourceRevision }, robots: { status: "allowed" }, planner, acquirer: { fetchPage: async () => ({ ok: false, error: { kind: "WorkflowMaterialBatchRequired" } }) }, batchAcquirer, reviewer:{review:async(point)=>{
+    return { ok: true, value: createExtractionRunner({ rights: { status: "allowed", sourceId: run.sourceId, sourceRevision: run.sourceRevision }, robots: { status: "allowed" }, planner, acquirer: { fetchPage: async () => ({ ok: false, error: { kind: "WorkflowMaterialBatchRequired" } }) }, batchAcquirer, reviewer:parallelKnowledgeReviewer(run,async(point)=>{
       const section=sectionsByUrl.get(point.attribution.sourceUrl);
       if(section===undefined)return {ok:false,error:{kind:'WorkflowMaterialSectionNotFound'}};
       const visual=material.mode==='image'?await visualFor({...section,url:point.attribution.sourceUrl}):{ok:true,value:undefined};
       if(!visual.ok)return {ok:false,error:{kind:'error' in visual?visual.error?.kind??'WorkflowMaterialImageUnavailable':'WorkflowMaterialImageUnavailable'}};
       const reviewed=await reviewCapturedCandidate({run,point,sourceEvidence:{sections:[{id:section.id,url:point.attribution.sourceUrl,locator:section.locator,text:section.text}]},sourceMode:material.mode==='image'?'image':'text',...(visual.value===undefined?{}:{supportingImage:{...visual.value,mediaType:/** @type {'image/png'|'image/jpeg'|'image/webp'|'image/gif'} */(visual.value.mediaType)}})});
       return reviewed.ok?{ok:true,value:reviewed.value?.point??null}:reviewed;
-    }}, scratchpad: { load: (scope) => loadExtractionScratchpad(scope, run), save: (scratchpad) => content.saveScratchpad(scratchpad, dependencies.now()) }, knowledge: { append: async (point) => {
+    }), scratchpad: { load: (scope) => loadExtractionScratchpad(scope, run), save: (scratchpad) => content.saveScratchpad(scratchpad, dependencies.now()) }, knowledge: { append: async (point) => {
       if(material.mode!=="image")return appendKnowledge(run,point);
       const section=sectionsByUrl.get(point.attribution.sourceUrl);
       if(section===undefined)return {ok:false,error:{kind:"WorkflowMaterialSectionNotFound"}};

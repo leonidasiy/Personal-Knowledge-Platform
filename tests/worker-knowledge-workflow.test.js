@@ -213,7 +213,7 @@ Deno.test("source workflow status explains an expired extraction as retryable", 
   assertEquals(response.status, 200);
   const body = /** @type {{ readonly result: Record<string, unknown> }} */ (await response.json());
   assertEquals(body.result.reasonCode, "retryable-failure");
-  assertEquals(body.result.message, "Automatic extraction stopped after its processing deadline elapsed. Retry processing to try again.");
+  assertEquals(body.result.message, "Automatic extraction stopped after its processing deadline elapsed. Any saved progress has been retained.");
 });
 
 Deno.test("authorized material route derives owner, decodes pasted text, and preserves the attestation", async () => {
