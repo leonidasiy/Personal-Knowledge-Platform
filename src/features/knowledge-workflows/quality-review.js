@@ -266,7 +266,7 @@ function retryableTechnicalReviewFailure(error) {
 /** @typedef {{readonly failureKind:'KnowledgeReviewOutputInvalid',readonly issues:readonly string[],readonly instructions:string}} KnowledgeReviewTechnicalFeedback */
 /** @typedef {{readonly failureKind:'KnowledgeRepairOutputInvalid',readonly issues:readonly string[],readonly instructions:string}} KnowledgeRepairTechnicalFeedback */
 
-/** @param {{technicalRetries?:boolean,evaluate:(point:KnowledgePoint,attempt:number,repairContext?:KnowledgeCriticRepairContext,technicalAttempt?:number,technicalRetryFeedback?:KnowledgeReviewTechnicalFeedback)=>Promise<Result<unknown>>,regenerate:(point:KnowledgePoint,verdict:ReviewVerdict,retrievalComparison:RetrievalComparison|null,technicalAttempt?:number,technicalRetryFeedback?:KnowledgeRepairTechnicalFeedback)=>Promise<Result<unknown>>,context:ReviewContext,sourceMode:'text'|'image',imagePurpose?:'illustration'|'evidence',sourceEvidence?:unknown,digest:(text:string)=>Promise<string>}} dependencies */
+/** @param {{technicalRetries?:boolean,logger?:(entry:{event:string,field:'review'|'repair',failureKind:string,count:number})=>void,evaluate:(point:KnowledgePoint,attempt:number,repairContext?:KnowledgeCriticRepairContext,technicalAttempt?:number,technicalRetryFeedback?:KnowledgeReviewTechnicalFeedback)=>Promise<Result<unknown>>,regenerate:(point:KnowledgePoint,verdict:ReviewVerdict,retrievalComparison:RetrievalComparison|null,technicalAttempt?:number,technicalRetryFeedback?:KnowledgeRepairTechnicalFeedback)=>Promise<Result<unknown>>,context:ReviewContext,sourceMode:'text'|'image',imagePurpose?:'illustration'|'evidence',sourceEvidence?:unknown,digest:(text:string)=>Promise<string>}} dependencies */
 export function createKnowledgeQualityReviewer(dependencies) {
   return Object.freeze({
     /** @param {KnowledgePoint} original @returns {Promise<Result<{point:KnowledgePoint,verdict:ReviewVerdict}|null>>} */
@@ -289,6 +289,7 @@ export function createKnowledgeQualityReviewer(dependencies) {
             if(!retryableTechnicalReviewFailure(reviewed.error))return reviewed;
             if(technicalAttempt===maximumTechnicalAttempts)return {ok:false,error:{...reviewed.error,attempts:technicalAttempt,technicalAttempts:technicalAttempt,technicalRetriesExhausted:true}};
             await waitForTransientRetry(reviewed.error,technicalAttempt);
+            dependencies.logger?.({event:'knowledge-quality-technical-retry',field:'review',failureKind:reviewed.error.kind,count:technicalAttempt});
             continue;
           }
           let issue='AssessmentShapeInvalid';
@@ -306,6 +307,7 @@ export function createKnowledgeQualityReviewer(dependencies) {
           }
           technicalRetryFeedback=Object.freeze({failureKind:'KnowledgeReviewOutputInvalid',issues:[issue],instructions:`Return a fresh complete assessment matching the supplied schema. Correct the structural issue without inventing source support or changing the factual decision to force acceptance. In audit v8, non-final claimEnd boundaries must be strictly increasing integers, at most ${auditInput.summaryNonFinalEndMaximum}; when that maximum is 0 use clauses=[]. finalClause has no numeric end and covers all remaining summary tokens through ${auditInput.summaryTokenCount}; do not omit or overlap tokens. Copy pixel imageId exactly from currentAttachmentIds; never retype or alter an identifier. Text and previous-content citation ranges must use the supplied auditEvidence IDs and endExclusiveTokenCount. Required supportingImageEvidence must describe inspected attached pixels; with no attachment return an empty string.`});
           if(technicalAttempt===maximumTechnicalAttempts)return {ok:false,error:{kind:'KnowledgeReviewOutputInvalid',attempts:technicalAttempt,technicalAttempts:technicalAttempt,technicalRetriesExhausted:true}};
+          dependencies.logger?.({event:'knowledge-quality-technical-retry',field:'review',failureKind:'KnowledgeReviewOutputInvalid',count:technicalAttempt});
         }
         if(assessment===undefined)return {ok:false,error:{kind:'KnowledgeReviewOutputInvalid',attempts:maximumTechnicalAttempts,technicalAttempts:maximumTechnicalAttempts,technicalRetriesExhausted:true}};
         const verdict=deriveReviewVerdict(assessment,point,dependencies.sourceMode,dependencies.imagePurpose);
@@ -325,6 +327,7 @@ export function createKnowledgeQualityReviewer(dependencies) {
             if(!retryableTechnicalReviewFailure(repaired.error))return repaired;
             if(technicalAttempt===maximumTechnicalAttempts)return {ok:false,error:{...repaired.error,attempts:technicalAttempt,technicalAttempts:technicalAttempt,technicalRetriesExhausted:true}};
             await waitForTransientRetry(repaired.error,technicalAttempt);
+            dependencies.logger?.({event:'knowledge-quality-technical-retry',field:'repair',failureKind:repaired.error.kind,count:technicalAttempt});
             continue;
           }
           const candidate=repaired.value;
@@ -335,6 +338,7 @@ export function createKnowledgeQualityReviewer(dependencies) {
           const issue=!record(candidate)||Object.keys(candidate).sort().join(',')!=='coverageGoalIds,evidenceClauses,summary,useSupportingImage'?'RepairShapeInvalid':!text(candidate.summary)||candidate.summary.length>2000?'RepairSummaryInvalid':!Array.isArray(candidate.coverageGoalIds)||!candidate.coverageGoalIds.every(id=>original.coverageGoalIds.includes(id))?'RepairCoverageGoalsInvalid':!Array.isArray(candidate.evidenceClauses)||candidate.evidenceClauses.length!==original.evidenceAnchors.length||!candidate.evidenceClauses.every(clause=>text(clause)&&clause.length<=500)?'RepairEvidenceClausesInvalid':'RepairImageRetentionInvalid';
           repairTechnicalFeedback=Object.freeze({failureKind:'KnowledgeRepairOutputInvalid',issues:[issue],instructions:`Return a fresh complete object with exactly summary, coverageGoalIds, evidenceClauses and useSupportingImage, matching the supplied schema. summary must be nonempty and at most 2000 characters. Use only IDs from knowledge.coverageGoalIds. evidenceClauses must contain exactly ${original.evidenceAnchors.length} nonempty strings, each at most 500 characters, in the original evidence-anchor order. useSupportingImage must be boolean; ${dependencies.sourceMode==='image'||original.mediaCandidates.length>0&&!verdict.allowTextOnly?'keep it true because removing the attached source image is not permitted':'set it false only for a text source when no original image exists or the existing review permits text-only processing'}. Correct the reported structural issue within the existing immutable evidence and semantic repair obligations; do not invent facts, alter evidence anchors or change the review decision to force acceptance.`});
           if(technicalAttempt===maximumTechnicalAttempts)return {ok:false,error:{kind:'KnowledgeRepairOutputInvalid',attempts:technicalAttempt,technicalAttempts:technicalAttempt,technicalRetriesExhausted:true}};
+          dependencies.logger?.({event:'knowledge-quality-technical-retry',field:'repair',failureKind:'KnowledgeRepairOutputInvalid',count:technicalAttempt});
         }
         if(value===undefined)return {ok:false,error:{kind:'KnowledgeRepairOutputInvalid',attempts:maximumTechnicalAttempts,technicalAttempts:maximumTechnicalAttempts,technicalRetriesExhausted:true}};
         const evidenceClauses=value.evidenceClauses;

@@ -21,6 +21,26 @@ const verdict=(decision,other={})=>({decision,reasons:['Source-backed concrete r
 const repair={summary:'A supported distinct relationship.',coverageGoalIds:['core'],useSupportingImage:false,evidenceClauses:['Captured immutable relationship.']};
 const reviewer=(evaluate,regenerate,mode='text')=>createKnowledgeQualityReviewer({context,sourceMode:mode,evaluate:async(p,attempt)=>{const r=await evaluate(p,attempt);return r.ok?{ok:true,value:auditedVerdict(p,r.value,mode)}:r;},regenerate,digest:async()=> 'sha256:repaired'});
 
+for(const field of ['review','repair'])for(const invalidOutput of [false,true])test(`retry metrics include ${field} ${invalidOutput?'invalid output':'technical failure'} without counting exhaustion`,async()=>{
+ const entries=[];let reviews=0,repairs=0;
+ const failed=invalidOutput?{ok:true,value:{}}:{ok:false,error:{kind:'KnowledgeModelResponseInvalid'}};
+ const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',logger:entry=>entries.push(entry),digest:async()=>assert.fail('Exhausted repair cannot commit'),
+  evaluate:async(p)=>{reviews++;return field==='review'?failed:{ok:true,value:auditedVerdict(p,verdict('revise'))};},
+  regenerate:async()=>{repairs++;return failed;},
+ }).review(point);
+ assert.equal(result.ok,false);assert.equal(result.error.technicalAttempts,4);
+ assert.equal(reviews,field==='review'?4:1);assert.equal(repairs,field==='repair'?4:0);
+ assert.deepEqual(entries.map(({event,field:phase,failureKind,count})=>({event,field:phase,failureKind,count})),[1,2,3].map(count=>({event:'knowledge-quality-technical-retry',field,failureKind:invalidOutput?(field==='review'?'KnowledgeReviewOutputInvalid':'KnowledgeRepairOutputInvalid'):'KnowledgeModelResponseInvalid',count})));
+});
+
+test('review retry metrics exclude terminal failures and disabled retries',async()=>{
+ for(const technicalRetries of [false,true]) {
+  const entries=[];let calls=0;
+  const result=await createKnowledgeQualityReviewer({context,sourceMode:'text',technicalRetries,logger:entry=>entries.push(entry),digest:async()=>assert.fail('No repair'),regenerate:async()=>assert.fail('No repair'),evaluate:async()=>{calls++;return {ok:false,error:{kind:technicalRetries?'KnowledgeModelCredentialRejected':'KnowledgeModelResponseInvalid'}};}}).review(point);
+  assert.equal(result.ok,false);assert.equal(calls,1);assert.deepEqual(entries,[]);
+ }
+});
+
 test('unknown response fields use four technical critiques without spending a quality revision',async()=>{
  for(const validSecond of [true,false]) {
   let calls=0;
@@ -62,7 +82,7 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
     for(const name of (await readdir('worker/migrations')).filter(name=>name.endsWith('.sql')).sort())db.exec(await readFile('worker/migrations/'+name,'utf8'));
     const database={prepare(sql){let values=[];const execute=()=>({success:true,meta:{changes:Number(db.prepare(sql).run(...values).changes)}});return {bind(...v){values=v;return this;},first:async()=>{if(media==='deadline-null-read-failure'&&sql.startsWith('SELECT extraction_deadline_at FROM knowledge_workflow_runs'))throw new Error('Constructed clock read failure');if(media==='repair-legacy-read-failure'&&sql.startsWith('SELECT stage_key FROM knowledge_workflow_stages'))throw new Error('Synthetic legacy lookup read failure');return db.prepare(sql).get(...values)??null;},all:async()=>({success:true,results:db.prepare(sql).all(...values)}),run:async()=>execute(),execute};},async batch(statements){db.exec('BEGIN IMMEDIATE');try{const result=statements.map(s=>s.execute());db.exec('COMMIT');return result;}catch(error){db.exec('ROLLBACK');throw error;}}};
     const unwrap=result=>{assert.equal(result.ok,true,JSON.stringify(result.error));return result.value;};
-    const now=()=> '2026-10-09T00:00:00.000Z';let dispatchNow=Date.parse(now());const nowMs=()=>dispatchNow,logger=()=>{};
+    const now=()=> '2026-10-09T00:00:00.000Z';let dispatchNow=Date.parse(now());const nowMs=()=>dispatchNow,logs=[],logger=entry=>logs.push(entry);
     const loader=createAgentConfigurationLoader({sha256:async value=>'sha256:'+createHash('sha256').update(value).digest('hex')}),configs={};
     for(const role of ['rights-assessor','knowledge-scraper','question-generator','question-evaluator'])configs[role]=unwrap(await loader.load({source:await readFile('agent-config/'+role+'.yaml','utf8'),expectedRole:role}));
     const repository=new D1KnowledgeWorkflowRepository({database,logger}),service=createKnowledgeWorkflowService(repository,{now,createId:()=> 'synthetic-run',logger});
@@ -193,6 +213,7 @@ for(const {anchors,mismatch,media} of productionCases)test(`production repair sc
       runtime=createKnowledgeWorkflowRuntime(runtimeOptions);
     }
     const result=await runtime.reviewCapturedCandidate(command);
+    if(media==='repair-technical-feedback')assert.deepEqual(logs.filter(entry=>entry.event==='knowledge-quality-technical-retry'),[{event:'knowledge-quality-technical-retry',field:'repair',failureKind:'KnowledgeRepairOutputInvalid',count:1,ownerId:run.ownerId,runId:run.runId,stage:'knowledge-scraper'}]);
     if(['deadline-expired','deadline-null-invalid','deadline-null-read-failure'].includes(media)){
       assert.deepEqual(result,{ok:false,error:{kind:media==='deadline-expired'?'WebpageImageRunDeadlineExceeded':media==='deadline-null-invalid'?'WorkflowExtractionClockInvalid':'WorkflowStagePersistenceFailed'}});
       assert.equal(criticCalls,0);assert.equal(repairCalls,0);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-evaluator:%' OR stage_key LIKE 'knowledge-scraper:%'").get().n,0,'Expired or invalid extraction clocks cannot claim paid model work');return;
