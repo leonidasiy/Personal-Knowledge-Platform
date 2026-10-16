@@ -43,19 +43,19 @@ export function createUrlPdfCapture({binding,capacity,fetch,now,logger,launcher=
         try {
           const target=request.url();
           if(target.startsWith('data:')||target==='about:blank')return await request.continue();
+          if(!['GET','HEAD'].includes(request.method()))return await request.abort();
           const checked=validatePublisherDestination(target);
           const resolved=checked.ok ? await lookup(new URL(target).hostname) : {ok:false};
           if(!resolved.ok){
             const failureKind='error' in resolved?resolved.error.kind:'SourceExtractionUrlInvalid';
             // An unavailable asset stays blocked without discarding the public article.
-            if(!request.isNavigationRequest()&&failureKind==='WorkflowDnsLookupFailed')logger({event:'url-capture-resource-unavailable',ownerId,stage:'resource',failureKind});
+            if(!(request.isNavigationRequest()&&request.frame()===page.mainFrame())&&failureKind==='WorkflowDnsLookupFailed')logger({event:'url-capture-resource-unavailable',ownerId,stage:'resource',failureKind});
             else{
               if(!rejection)logger({event:'url-capture-network-failure',ownerId,stage:request.isNavigationRequest()?'navigation':'resource',failureKind});
               rejection='KnowledgeBrowserNetworkRejected';
             }
             return await request.abort();
           }
-          if(!['GET','HEAD'].includes(request.method()))return await request.abort();
           await request.continue(request.resourceType()==='image'?{headers:{...request.headers(),accept:'image/webp,image/png,image/jpeg,image/gif;q=0.8'}}:{});
         }catch(error){if(!rejection)logger({event:'url-capture-network-failure',ownerId,stage:'interception',failureKind:'KnowledgeBrowserNetworkRejected',diagnosticToken:error instanceof Error&&error.message.includes('Too many subrequests')?'subrequest-limit':error instanceof TypeError?'type-error':'request-failed'});rejection='KnowledgeBrowserNetworkRejected';await request.abort().catch(()=>{});}
       });
