@@ -14,8 +14,8 @@ import { readFailedQuizItems,exhaustedQuizTechnicalFailure } from '../worker/kno
 import {AgentExecutionBoundaryFailure} from '../src/features/knowledge-workflows/harness.js';
 import { WEBPAGE_IMAGE_POLICY } from '../worker/webpage-image-budget.js';
 
-for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 'stopped-before-acquisition','expired-quiz-clock','quiz-review503','quiz-generator503','quiz-review-malformed','quiz-review401','classifier503-success','classifier-malformed-success','classifier503-exhausted','classifier-malformed-exhausted','classifier401','classifier-bounded','classifier-critical','classifier-mixed-success','quiz-review-resume-success']) {
- test(failureMode==='expired-quiz-clock'?'runtime continues normal quizzes after the extraction window expires without renewing it':failureMode.startsWith('classifier')?`runtime classification honors one four-attempt combined technical budget: ${failureMode}`:failureMode.startsWith('quiz-') ? `runtime isolates ${failureMode} and approved retry preserves source pages, drafts and healthy quizzes` : failureMode === 'stopped-before-acquisition' ? 'runtime fences provider calls after an authoritative run stop' : failureMode === 'model401' ? 'runtime stops on credential rejection without local page skipping or retry' : `runtime isolates ${failureMode} and approved retry processes only the failed page with fresh durable model identities`, async () => {
+for (const failureMode of ['material-coverage', 'review-output', 'model503', 'model200', 'model401', 'stopped-before-acquisition','expired-quiz-clock','quiz-review503','quiz-generator503','quiz-review-malformed','quiz-review401','classifier503-success','classifier-malformed-success','classifier503-exhausted','classifier-malformed-exhausted','classifier401','classifier-bounded','classifier-critical','classifier-mixed-success','quiz-review-resume-success']) {
+ test(failureMode==='material-coverage'?'runtime bounds supplied material coverage without inventing support':failureMode==='expired-quiz-clock'?'runtime continues normal quizzes after the extraction window expires without renewing it':failureMode.startsWith('classifier')?`runtime classification honors one four-attempt combined technical budget: ${failureMode}`:failureMode.startsWith('quiz-') ? `runtime isolates ${failureMode} and approved retry preserves source pages, drafts and healthy quizzes` : failureMode === 'stopped-before-acquisition' ? 'runtime fences provider calls after an authoritative run stop' : failureMode === 'model401' ? 'runtime stops on credential rejection without local page skipping or retry' : `runtime isolates ${failureMode} and approved retry processes only the failed page with fresh durable model identities`, async () => {
   const db = new DatabaseSync(':memory:');
   try {
     const migrations = new URL('../worker/migrations/', import.meta.url);
@@ -56,6 +56,7 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
     run = unwrap(await service.attachMaterial({ ownerId, runId, materialId: 'failed-unit-fixture-material' }));
     db.prepare('INSERT INTO library_sources (owner_id,source_id,submitted_url,canonical_url,title,description,adapter_json,identity_evidence_json,state,approved_at,updated_at,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(ownerId, sourceId, sourceUrl, sourceUrl, 'Offline failure-isolation fixture', 'Constructed test input', JSON.stringify({ kind: 'private-document' }), '[]', 'active', clock(), clock(), 1);
     let approvedRetry = false,quizStillInvalid=false,replayInterrupted=false;
+    let quizInterrupted = false, quizResumed = false, expiredDeadline;
     let modelCalls = 0,classifierCalls=0,classifierPreflights=0;
     const classifierBodies=[];
     const extractedPages = [], reviewedPages = [], generatedQuizzes = [],evaluatedQuizzes=[];
@@ -67,7 +68,9 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
       const input = JSON.parse(envelope.slice(envelope.indexOf('\n') + 1, envelope.lastIndexOf('\n')));
       const task = input.task ?? input;
       let output;
-      if (body.response_format?.json_schema?.name === 'knowledge_quality_review_v11') {
+      if (body.response_format?.json_schema?.name === 'knowledge_batch_selection_v1') {
+        output = { keptKnowledgeIds: task.points.map(point => point.id) };
+      } else if (body.response_format?.json_schema?.name === 'knowledge_quality_review_v11') {
         reviewedPages.push(task.knowledge.normalizedHash);
         output = syntheticAssessment(task, { decision: 'pass', reasons: ['Constructed supported fixture.'], feedback: 'Constructed acceptance.', matchedLessOftenIds: [], supportingImageEvidence: '', allowTextOnly: true });
         if (failureMode === 'review-output' && !approvedRetry && task.knowledge.normalizedHash === 'page-2') output.audit.version = 999;
@@ -80,6 +83,10 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
       }
       else if (task.operation === 'plan-authorized-material' || task.operation === 'replan-authorized-material') {
         output = { revision: 1, frontier: [], coverageGoals: [], unresolvedGaps: [], stopDecision: { decision: 'continue', rationale: 'Observe the supplied fixture inventory.', evidenceUrls: [], unresolvedGapIds: [] } };
+        if (failureMode === 'material-coverage') {
+          output.coverageGoals = [{ id: 'observed', priority: 'high', description: 'Supplied relationships.' }, { id: 'unavailable', priority: 'normal', description: 'Context unavailable in the supplied material.' }];
+          output.unresolvedGaps = [{ id: 'unavailable-gap', priority: 'high', description: 'Context unavailable in the supplied material.' }];
+        }
         if (failureMode === 'stopped-before-acquisition') db.prepare("UPDATE knowledge_workflow_runs SET state='retryable-failure',revision=revision+1 WHERE owner_id=? AND run_id=?").run(ownerId, runId);
       }
       else if (task.sections) {
@@ -87,7 +94,7 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
         extractedPages.push(task.sections[0].id);
         if(failureMode.startsWith('quiz-')&&task.sections[0].id==='page-4')return Response.json({error:{message:'Constructed page failure.'}},{status:503});
         if (failureMode.startsWith('model') && !approvedRetry && task.sections[0].id === 'page-2') return new Response(JSON.stringify({ error: { message: 'Synthetic provider rejection.' } }), { status: Number(failureMode.slice(5)), headers: { 'content-type': 'application/json' } });
-        output = { pages: task.sections.map(section => ({ url: section.url, notes: 'Constructed progress.', candidates: [{ summary: section.text, normalizedHash: section.id, evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [] }] })) };
+        output = { pages: task.sections.map(section => ({ url: section.url, notes: 'Constructed progress.', candidates: [{ summary: section.text, normalizedHash: section.id, evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: failureMode === 'material-coverage' ? ['observed'] : [], mediaCandidates: [] }] })) };
       } else if (task.draft) {
         evaluatedQuizzes.push(task.knowledge.id);
         if(failureMode==='quiz-review-resume-success'&&task.knowledge.summary==='Synthetic distinct relationship 2.'&&evaluatedQuizzes.filter(id=>id.includes('page-2')).length===4)output={score:9,reasons:['Constructed recovery.'],feedback:'Constructed acceptance.',groundingProblems:[],knowledgeGroundingProblems:[]};
@@ -104,12 +111,54 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
       return Response.json({ id: `offline-fixture-${modelCalls}`, choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }], usage: { prompt_tokens: 100, completion_tokens: 100 } });
     };
     const forbidden = async () => assert.fail('Offline uploaded material must not scrape webpages.');
-    const runtime = () => createKnowledgeWorkflowRuntime({ imagePolicy: WEBPAGE_IMAGE_POLICY, technicalRetries:failureMode==='classifier-bounded'?false:undefined, preflightModelWork:(_role,scope)=>{if(failureMode==='quiz-review-resume-success'&&!replayInterrupted&&scope.stageKey.startsWith('question-evaluator:quiz-evaluator-')&&scope.stageKey.includes('page-2')&&evaluatedQuizzes.filter(id=>id.includes('page-2')).length===2){replayInterrupted=true;const error=new AgentExecutionBoundaryFailure({kind:'EvaluationCancelled'});error.notStarted=true;throw error;}if(scope.stageKey.startsWith('source-classifier:')){classifierPreflights++;if(failureMode==='classifier-critical'){const error=new AgentExecutionBoundaryFailure({kind:'EvaluationBudgetExceeded'});error.notStarted=true;throw error;}}}, database, fetch: transport, browser: { readPage: forbidden, readRobots: forbidden, screenshot: forbidden, close: async () => ({ ok: true, value: null }) }, apiKey: 'offline-fixture-only', endpoint: 'https://example.test/model', now: clock, nowMs: Date.now, logger, configSnapshots, material: materials, imageSearch: { search: forbidden }, fallbackManifest: { entries: [], resolve: forbidden }, transition: ({ run: current, nextState, ...rest }) => service.advance({ ownerId, runId, expectedRevision: current.revision, nextState, ...rest }) });
-    let quizInterrupted = false;
+    const runtime = () => createKnowledgeWorkflowRuntime({
+      imagePolicy: WEBPAGE_IMAGE_POLICY, technicalRetries: failureMode === 'classifier-bounded' ? false : undefined,
+      preflightModelWork: (_role, scope) => {
+        if (['review-output', 'model503', 'model200'].includes(failureMode) && !approvedRetry && !quizInterrupted && scope.stageKey.startsWith('question-evaluator:quiz-evaluator-') && scope.stageKey.includes('page-3')) {
+          quizInterrupted = true;
+          const error = new AgentExecutionBoundaryFailure({ kind: 'EvaluationCancelled' });
+          error.notStarted = true;
+          throw error;
+        }
+        if (failureMode === 'quiz-review-resume-success' && !replayInterrupted && scope.stageKey.startsWith('question-evaluator:quiz-evaluator-') && scope.stageKey.includes('page-2') && evaluatedQuizzes.filter(id => id.includes('page-2')).length === 2) {
+          replayInterrupted = true;
+          const error = new AgentExecutionBoundaryFailure({ kind: 'EvaluationCancelled' });
+          error.notStarted = true;
+          throw error;
+        }
+        if (scope.stageKey.startsWith('source-classifier:')) {
+          classifierPreflights++;
+          if (failureMode === 'classifier-critical') {
+            const error = new AgentExecutionBoundaryFailure({ kind: 'EvaluationBudgetExceeded' });
+            error.notStarted = true;
+            throw error;
+          }
+        }
+      },
+      database, fetch: transport, browser: { readPage: forbidden, readRobots: forbidden, screenshot: forbidden, close: async () => ({ ok: true, value: null }) },
+      apiKey: 'offline-fixture-only', endpoint: 'https://example.test/model', now: clock, nowMs: Date.now, logger, configSnapshots, material: materials,
+      imageSearch: { search: forbidden }, fallbackManifest: { entries: [], resolve: forbidden },
+      transition: async ({ run: current, nextState, ...rest }) => {
+        const result = await service.advance({ ownerId, runId, expectedRevision: current.revision, nextState, ...rest });
+        if (result.ok && failureMode === 'expired-quiz-clock' && nextState === 'per-point-quiz-loop' && expiredDeadline === undefined) {
+          expiredDeadline = new Date(Date.now() - 1000).toISOString();
+          const expired = { ...result.value, extractionDeadlineAt: expiredDeadline };
+          db.prepare('UPDATE knowledge_workflow_runs SET extraction_deadline_at=?,run_json=? WHERE owner_id=? AND run_id=?').run(expiredDeadline, JSON.stringify(expired), ownerId, runId);
+          return { ok: true, value: expired };
+        }
+        return result;
+      },
+    });
     const finish = async () => {
       for (let step = 0; step < 8 && run.state !== 'completed'; step++) {
         if (run.state === 'awaiting-time-limit-decision') run = unwrap(await service.control({ ownerId, runId, expectedRevision: run.revision, action: 'resume', idempotencyKey: `fixture-chunk-${run.revision}` }));
-        if (!approvedRetry && run.state === 'per-point-quiz-loop' && run.counts.acceptedQuizzes === 1 && !quizInterrupted) {
+        const executed = await runtime().execute(run);
+        if (quizInterrupted && !quizResumed) {
+          assert.equal(executed.ok, false);
+          assert.equal(executed.error.detailKind, 'QuizGenerationRejected');
+          run = unwrap(await repository.findById(ownerId, runId));
+          assert.equal(run.state, 'per-point-quiz-loop');
+          assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_stages WHERE stage_key LIKE 'quiz-point-completed:%' AND status='completed'").get().n, 1);
           const previousCalls = modelCalls, counts = {...run.counts}, started = run.extractionStartedAt, deadline = run.extractionDeadlineAt;
           const previousQuizzes = db.prepare('SELECT quiz_id,draft_json,status FROM knowledge_workflow_quizzes ORDER BY quiz_id').all();
           const publication=db.prepare('SELECT knowledge_id,attempt_number FROM knowledge_workflow_quizzes LIMIT 1').get();
@@ -129,9 +178,9 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
           assert.equal(run.extractionDeadlineAt,deadline);
           assert.equal(modelCalls,previousCalls);
           assert.deepEqual(db.prepare('SELECT quiz_id,draft_json,status FROM knowledge_workflow_quizzes ORDER BY quiz_id').all(),previousQuizzes);
-          quizInterrupted = true;
+          quizResumed = true;
+          continue;
         }
-        const executed = await runtime().execute(run);
         if (!executed.ok && finalScratchpadReadFailed) {
           assert.equal(executed.error.kind,'WorkflowTransitionFailed');
           assert.equal(executed.error.detailKind,'ScratchpadPersistenceFailed');
@@ -146,13 +195,8 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
       assert.equal(run.state, 'completed');
     };
     if(failureMode==='expired-quiz-clock'){
-      let expiredDeadline;
       for(let step=0;step<8&&run.state!=='completed';step++){
         if(run.state==='awaiting-time-limit-decision')run=unwrap(await service.advance({ownerId,runId,expectedRevision:run.revision,nextState:'extraction-loop'}));
-        if(run.state==='per-point-quiz-loop'&&expiredDeadline===undefined){
-          expiredDeadline=new Date(Date.now()-1000).toISOString();run={...run,extractionDeadlineAt:expiredDeadline};
-          db.prepare('UPDATE knowledge_workflow_runs SET extraction_deadline_at=?,run_json=? WHERE owner_id=? AND run_id=?').run(expiredDeadline,JSON.stringify(run),ownerId,runId);
-        }
         unwrap(await runtime().execute(run));run=unwrap(await repository.findById(ownerId,runId));
       }
       assert(expiredDeadline);assert.equal(run.state,'completed');assert.equal(run.extractionDeadlineAt,expiredDeadline);assert.equal(run.counts.acceptedQuizzes,3);
@@ -244,7 +288,8 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
       await finish();
       assert.equal(run.failureKind,'WorkflowQuizItemsFailed');
       assert.equal(run.counts.acceptedQuizzes,2);assert.equal(run.counts.knowledgePoints,3);
-      assert.equal(generatedQuizzes.at(-1),'page-3','Healthy tail must run after the middle item exhausts technical retries.');
+      assert(generatedQuizzes.includes('page-3'), 'Healthy tail must run while the middle item exhausts technical retries.');
+      assert(db.prepare("SELECT knowledge_id FROM knowledge_workflow_quizzes WHERE knowledge_id LIKE '%page-3%' AND status='published'").get(), 'Healthy tail must publish despite its failed peer.');
       const failed=unwrap(await readFailedQuizItems(database,run));assert.equal(failed.length,1);assert.equal(failed[0].attempts,4);assert.equal(failed[0].generation,0);
       const failedId=failed[0].knowledgeId;assert(failedId.includes('page-2'));
       const failedKey=`quiz-point-failed:${failedId}:0`,originalFailure=db.prepare('SELECT result_json FROM knowledge_workflow_stages WHERE stage_key=?').get(failedKey).result_json;
@@ -290,6 +335,18 @@ for (const failureMode of ['review-output', 'model503', 'model200', 'model401', 
       assert(retryStages.some(key=>key.startsWith(failureMode==='quiz-generator503'?'question-generator:':'question-evaluator:')));
       assert(retryStages.every(key=>!key.includes('page-1')&&!key.includes('page-3')));
       const finalProgress=unwrap(await new D1KnowledgeWorkflowProgressRepository({database,logger}).read(run));assert.equal(finalProgress.failedQuizItems,undefined);assert.equal(finalProgress.failedItems.length,1);
+      return;
+    }
+    if (failureMode === 'material-coverage') {
+      await finish();
+      assert.equal(run.failureKind, null);
+      assert.equal(run.counts.pages, 3);
+      assert.equal(run.counts.acceptedQuizzes, 3);
+      const saved = JSON.parse(db.prepare('SELECT scratchpad_json FROM extraction_scratchpads WHERE owner_id=? AND run_id=?').get(ownerId, runId).scratchpad_json);
+      assert.deepEqual(saved.coverage, ['observed'], 'Unavailable goals cannot fabricate coverage.');
+      assert.deepEqual(saved.planCheckpoint.plan.coverageGoals.map(goal => goal.id), ['observed']);
+      assert.deepEqual(saved.planCheckpoint.orderedUrls, sections.map(section => `${sourceUrl}#section=${section.id}`));
+      assert.deepEqual(saved.planCheckpoint.plan.unresolvedGaps, []);
       return;
     }
     await finish();

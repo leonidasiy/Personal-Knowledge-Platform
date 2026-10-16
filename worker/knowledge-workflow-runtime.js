@@ -1421,7 +1421,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       },
       maximumBatchSize: 1,
     };
-    return { ok: true, value: createExtractionRunner({ rights: { status: "allowed", sourceId: run.sourceId, sourceRevision: run.sourceRevision }, robots: { status: "allowed" }, planner, acquirer: { fetchPage: async () => ({ ok: false, error: { kind: "WorkflowMaterialBatchRequired" } }) }, batchAcquirer, reviewer:parallelKnowledgeReviewer(run,async(point)=>{
+    return { ok: true, value: createExtractionRunner({ rights: { status: "allowed", sourceId: run.sourceId, sourceRevision: run.sourceRevision }, robots: { status: "allowed" }, planner, orderedUrls: sectionUrls, acquirer: { fetchPage: async () => ({ ok: false, error: { kind: "WorkflowMaterialBatchRequired" } }) }, batchAcquirer, reviewer:parallelKnowledgeReviewer(run,async(point)=>{
       const section=sectionsByUrl.get(point.attribution.sourceUrl);
       if(section===undefined)return {ok:false,error:{kind:'WorkflowMaterialSectionNotFound'}};
       const visual=material.mode==='image'?await visualFor({...section,url:point.attribution.sourceUrl}):{ok:true,value:undefined};
