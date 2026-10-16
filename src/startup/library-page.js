@@ -459,7 +459,7 @@ export function createLibraryPage(dependencies) {
     const status = workflowStatuses.find((candidate) =>
       candidate.run?.runId === runId
     );
-    if (status?.run == null || pendingSourceId !== null || (cancel ? !cancellationRetries.has(runId) && ["completed","abandoned"].includes(status.run.state) : status.run.state !== "retryable-failure" && status.reasonCode!=="partial-failure")) return;
+    if (status?.run == null || pendingSourceId !== null || (cancel ? !cancellationRetries.has(runId) && ["completed","abandoned"].includes(status.run.state) : status.reasonCode!=="retryable-failure" && status.reasonCode!=="partial-failure")) return;
     if(!cancel&&status.reasonCode==="partial-failure"&&!approved&&!dependencies.confirmRetryFailed?.((quizzes?status.run.progress?.failedQuizItems:status.run.progress?.failedItems)?.length??0,quizzes))return;
     const source=items.find(source=>source.id===status.sourceId);
     if(cancel&&(source===undefined||!dependencies.confirmCancel?.(source)))return;

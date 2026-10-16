@@ -1578,3 +1578,14 @@ Deno.test("approved completed partial workflows restart without delivering event
  let rejected=false;try{await deliverKnowledgeWorkflowControl({},"resume",true);}catch(error){rejected=error instanceof TypeError;}
  assertEquals(rejected,true);
 });
+
+Deno.test("retry restarts an errored platform instance instead of sending an unusable event", async () => {
+  /** @type {string[]} */ const calls = [];
+  await deliverKnowledgeWorkflowControl({
+    status: async () => ({status:"errored"}),
+    restart: async () => {calls.push("restart");},
+    resume: async () => {throw new Error("An errored instance cannot be resumed");},
+    sendEvent: async () => {throw new Error("An errored instance cannot receive events");},
+  }, "resume");
+  assertEquals(calls.join(","), "restart");
+});

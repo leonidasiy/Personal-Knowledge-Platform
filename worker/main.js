@@ -2526,7 +2526,7 @@ async function reconcileKnowledgeWorkflowLaunch(binding, run, params, reused) {
  * is waiting at step.waitForEvent, so the matching event is authoritative and
  * is delivered first with bounded retries. If direct delivery is rejected, the
  * instance may be paused; resume it once and redeliver the event.
- * @param {{ readonly restart?: () => Promise<void>, readonly pause?: () => Promise<void>, readonly resume?: () => Promise<void>, readonly sendEvent?: (event: { readonly type: string, readonly payload?: unknown }) => Promise<void>, readonly terminate?: (options: { readonly rollback: boolean }) => Promise<void> }} instance
+ * @param {{ readonly status?: () => Promise<{readonly status:string}>, readonly restart?: () => Promise<void>, readonly pause?: () => Promise<void>, readonly resume?: () => Promise<void>, readonly sendEvent?: (event: { readonly type: string, readonly payload?: unknown }) => Promise<void>, readonly terminate?: (options: { readonly rollback: boolean }) => Promise<void> }} instance
  * @param {unknown} action
  * @param {boolean} [restartCompleted]
  * @returns {Promise<void>}
@@ -2539,7 +2539,7 @@ async function deliverKnowledgeWorkflowControl(instance, action, restartComplete
     return;
   }
   if (action === "resume" || action === "retry-quizzes") {
-    if (restartCompleted) {
+    if (restartCompleted || typeof instance.status === "function" && (await instance.status()).status === "errored") {
       if (typeof instance.restart !== "function") throw new TypeError("Knowledge workflow restart is unavailable.");
       await instance.restart();
       return;

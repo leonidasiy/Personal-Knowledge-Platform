@@ -500,6 +500,41 @@ Deno.test("Library treats an expired extraction as stopped and retryable", () =>
   assert(html.includes("Retry processing"), "The expired run must remain retryable.");
 });
 
+Deno.test("Library dispatches Retry processing for a deadline-expired extraction", async () => {
+  let resumed = false;
+  let posts = 0;
+  /** @type {(()=>void)|null} */ let click = null;
+  /** @type {import("../src/features/source-library/gateway.js").WorkflowSourceStatus} */
+  const expired = {...workflowStatus("extraction-loop"),run:{...workflowStatus("extraction-loop").run,extractionStartedAt:"2026-08-13T00:00:00.000Z",extractionDeadlineAt:"2026-08-13T00:30:00.000Z",remainingMs:0}, reasonCode:"retryable-failure", message:"Automatic extraction stopped after its processing deadline elapsed. Retry processing to try again."};
+  if (expired.run === null) throw new Error("Missing expired fixture run");
+  const errors = /** @type {string[]} */ ([]);
+  const page = createLibraryPage({
+    fetch: async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/source-library")) return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});
+      if (path.endsWith("/library-knowledge")) return Response.json({result:{items:[]}});
+      if (path.endsWith("/control")) {
+        posts++;
+        const command = JSON.parse(String(init?.body));
+        assert(command.action === "resume" && command.expectedRevision === 1 && command.runId === "run-source-a", "Retry must target the expired run at its current revision.");
+        resumed = true;
+        return Response.json({result:{...workflowStatus("extraction-loop").run,revision:2}});
+      }
+      return Response.json({result:resumed?workflowStatus("extraction-loop"):expired});
+    }, gatewayBaseUrl:"https://app.example/",escapeHtml:v=>v,formatDate:v=>v,createId:()=>"id",confirmDisable:()=>true,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:message=>errors.push(message),rerender:()=>{},
+  });
+  try {
+    await page.load();
+    assert(page.render({}).includes('data-library-workflow-retry="run-source-a"'), "The expired card offers Retry processing.");
+    page.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({querySelector:()=>null,querySelectorAll:(/** @type {string} */ selector)=>selector==="[data-library-workflow-retry], [data-library-workflow-cancel]"?[{hasAttribute:()=>false,getAttribute:(/** @type {string} */ name)=>name.endsWith("revision")?"1":"run-source-a",addEventListener:(/** @type {string} */ _event,/** @type {()=>void} */ handler)=>{click=handler;}}]:[]})));
+    if (click === null) throw new Error("Retry action not bound");
+    /** @type {()=>void} */ (click)();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    assert(posts === 1, "Clicking Retry processing must dispatch one resume request for the expired run.");
+    assert(errors.length === 0 && !page.render({}).includes("deadline elapsed"), "Successful retry replaces the expired status without an error.");
+  } finally {page.dispose();}
+});
+
 Deno.test("Library keeps robots evidence out of cards", () => {
   const present = renderLibraryRoute({
     ...baseModel(),
