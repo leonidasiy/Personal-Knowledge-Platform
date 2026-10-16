@@ -1,0 +1,93 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {DatabaseSync} from 'node:sqlite';
+import {readFile,readdir} from 'node:fs/promises';
+import {resumeInterruptedKnowledgeWorkflows} from '../worker/knowledge-workflow-auto-resume.js';
+import {D1KnowledgeWorkflowRepository} from '../worker/knowledge-workflow-d1.js';
+import {createKnowledgeWorkflowService} from '../src/features/knowledge-workflows/workflow.js';
+
+async function fixture(phase='per-point-quiz-loop') {
+  const db=new DatabaseSync(':memory:');
+  const migrations=new URL('../worker/migrations/',import.meta.url);
+  for(const name of (await readdir(migrations)).filter(n=>n.endsWith('.sql')).sort())db.exec(await readFile(new URL(name,migrations),'utf8'));
+  const database={prepare(sql){let values=[];return {bind(...v){values=v;return this;},async first(){return db.prepare(sql).get(...values)??null;},async all(){return {success:true,results:db.prepare(sql).all(...values)};},async run(){return {success:true,meta:{changes:Number(db.prepare(sql).run(...values).changes)}};}};},async batch(statements){return Promise.all(statements.map(s=>s.run()));}};
+  let time=Date.parse('2026-10-16T12:00:00.000Z'),status='errored',events=0,restarts=0,dispatchFails=false;
+  const now=()=>new Date(time).toISOString(),logger=()=>{};
+  const service=createKnowledgeWorkflowService(new D1KnowledgeWorkflowRepository({database,logger}),{now,logger,createId:()=> 'run-auto'});
+  const unwrap=r=>{assert.equal(r.ok,true,JSON.stringify(r.error));return r.value;};
+  let run=unwrap(await service.createRun({ownerId:'owner-a',sourceId:'source-a',sourceRevision:1,canonicalSourceIdentity:'https://example.test/',contentSignature:'source',configDigests:{},idempotencyKey:'create-auto'})).run;
+  for(const state of ['rights-assessment','robots-check','extraction-loop',...(phase==='per-point-quiz-loop'?['extraction-finalized','per-point-quiz-loop']:[])])run=unwrap(await service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState:state,counts:{pages:11,knowledgePoints:31,acceptedQuizzes:1,pendingQuizzes:0}}));
+  db.prepare("INSERT INTO library_sources VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run('owner-a','source-a','https://example.test/','https://example.test/','Fixture','','{}','[]','active',now(),now(),1);
+  const instance={id:'instance',status:async()=>({status}),restart:async()=>{if(dispatchFails)throw new Error('Test dispatch unavailable');restarts++;status='running';},resume:async()=>{},sendEvent:async()=>{if(dispatchFails)throw new Error('Test dispatch unavailable');events++;status='running';},pause:async()=>{},terminate:async()=>{}};
+  const dependencies={database,binding:{create:async()=>instance,get:async()=>instance},ownerId:'owner-a',now,logger};
+  return {db,service,dependencies,run,unwrap,advanceTime:ms=>{time+=ms;},setStatus:s=>{status=s;},failDispatch:()=>{dispatchFails=true;},counts:()=>({events,restarts}),read:async()=>unwrap(await service.status({ownerId:'owner-a',runId:'run-auto'})),tick:async()=>resumeInterruptedKnowledgeWorkflows(dependencies)};
+}
+
+test('crashed quiz execution waits two minutes from detection and resumes exact saved phase once',async()=>{
+  const f=await fixture();try{
+    f.advanceTime(3_600_000);
+    assert.deepEqual(await f.tick(),{ok:true,value:0});
+    const stopped=await f.read();assert.equal(stopped.state,'retryable-failure');assert.equal(stopped.retryState,'per-point-quiz-loop');
+    f.advanceTime(119_999);assert.deepEqual(await f.tick(),{ok:true,value:0});assert.equal(f.counts().restarts,0);
+    f.advanceTime(1);assert.deepEqual(await f.tick(),{ok:true,value:1});
+    const resumed=await f.read();assert.equal(resumed.state,'per-point-quiz-loop');assert.deepEqual(resumed.counts,f.run.counts);assert.equal(resumed.revision,stopped.revision+1);
+    assert.deepEqual(await f.tick(),{ok:true,value:0});assert.deepEqual(f.counts(),{events:0,restarts:1});
+  }finally{f.db.close();}
+});
+
+test('retryable waiting work receives the existing resume event without restarting the workflow',async()=>{
+  const f=await fixture();try{
+    f.unwrap(await f.service.advance({ownerId:'owner-a',runId:f.run.runId,expectedRevision:f.run.revision,nextState:'retryable-failure',failureKind:'WorkflowStagePersistenceFailed'}));f.setStatus('waiting');
+    f.advanceTime(120_000);assert.deepEqual(await f.tick(),{ok:true,value:1});assert.deepEqual(f.counts(),{events:1,restarts:0});assert.equal((await f.read()).state,'per-point-quiz-loop');
+  }finally{f.db.close();}
+});
+
+test('elapsed extraction deadlines continue after two minutes with checkpoints and a renewed existing time envelope',async()=>{
+  const f=await fixture('extraction-loop');try{
+    f.advanceTime(30*60_000);f.unwrap(await f.service.advance({ownerId:'owner-a',runId:f.run.runId,expectedRevision:f.run.revision,nextState:'awaiting-time-limit-decision',decisionRequired:'time-limit'}));f.setStatus('waiting');
+    f.advanceTime(119_999);assert.deepEqual(await f.tick(),{ok:true,value:0});f.advanceTime(1);assert.deepEqual(await f.tick(),{ok:true,value:1});
+    const resumed=await f.read();assert.equal(resumed.state,'extraction-loop');assert.deepEqual(resumed.counts,f.run.counts);assert.equal(Date.parse(resumed.extractionDeadlineAt)-Date.parse(f.dependencies.now()),30*60_000);
+  }finally{f.db.close();}
+});
+
+test('user pauses, cancellations, running executions and disabled sources never auto-resume',async()=>{
+  for(const scenario of ['paused','abandoned','running','disabled','platform-paused']){
+    const f=await fixture('extraction-loop');try{
+      if(['paused','abandoned'].includes(scenario))f.unwrap(await f.service.control({ownerId:'owner-a',runId:f.run.runId,expectedRevision:f.run.revision,action:scenario==='paused'?'stop':'abandon',idempotencyKey:scenario}));
+      if(scenario==='running')f.setStatus('running');
+      if(scenario==='platform-paused'){await f.tick();f.setStatus('paused');}
+      if(scenario==='disabled')f.db.prepare("UPDATE library_sources SET state='disabled'").run();
+      f.advanceTime(3_600_000);const before=await f.read();assert.deepEqual(await f.tick(),{ok:true,value:0});assert.deepEqual(await f.read(),before);assert.deepEqual(f.counts(),{events:0,restarts:0});
+    }finally{f.db.close();}
+  }
+});
+
+test('failed control dispatch rolls back to a retryable checkpoint and starts a new two minute wait',async()=>{
+  for(const phase of ['retryable-failure','awaiting-time-limit-decision']){
+    const f=await fixture('extraction-loop');try{
+      f.advanceTime(30*60_000);f.unwrap(await f.service.advance({ownerId:'owner-a',runId:f.run.runId,expectedRevision:f.run.revision,nextState:phase,...(phase==='retryable-failure'?{failureKind:'WorkflowStagePersistenceFailed'}:{decisionRequired:'time-limit'})}));f.setStatus('waiting');f.failDispatch();f.advanceTime(120_000);
+      assert.equal((await f.tick()).ok,false);const restored=await f.read();assert.equal(restored.state,'retryable-failure');assert.equal(restored.retryState,'extraction-loop');assert.deepEqual(restored.counts,f.run.counts);
+      assert.deepEqual(await f.tick(),{ok:true,value:0});
+    }finally{f.db.close();}
+  }
+});
+
+test('overlapping scheduler ticks dispatch recovery only once',async()=>{
+  const f=await fixture();try{
+    await f.tick();f.advanceTime(120_000);
+    const outcomes=await Promise.all([f.tick(),f.tick()]);assert(outcomes.every(r=>r.ok));assert.equal(f.counts().restarts,1);
+  }finally{f.db.close();}
+});
+
+test('removed and superseded runs are excluded from automatic recovery',async()=>{
+  for(const scenario of ['removed','superseded']){
+    const f=await fixture();try{
+      if(scenario==='removed')f.db.prepare("INSERT INTO knowledge_workflow_run_tombstones (owner_id,tombstone_id,run_id,purged_before,reason,occurred_at) VALUES (?,?,?,?,?,?)").run('owner-a','removed',f.run.runId,f.dependencies.now(),'workflow-abandoned',f.dependencies.now());
+      else {
+        const newer={...f.run,runId:'newer-run',idempotencyKey:'newer-run',createdAt:'2026-10-16T12:01:00.000Z',state:'completed'};
+        f.unwrap(await new D1KnowledgeWorkflowRepository({database:f.dependencies.database,logger:()=>{}}).insert(newer));
+      }
+      f.advanceTime(3_600_000);const before=await f.read();assert.deepEqual(await f.tick(),{ok:true,value:0});assert.deepEqual(await f.read(),before);assert.deepEqual(f.counts(),{events:0,restarts:0});
+    }finally{f.db.close();}
+  }
+});

@@ -5,6 +5,7 @@ import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
 import { createReminderRuntime } from "./reminders/runtime.js";
 import { createUnifiedWorkerRouter } from "./static-router.js";
 import { routeWithWorkerVersion } from "./versioned-router.js";
+import { resumeInterruptedKnowledgeWorkflows } from "./knowledge-workflow-auto-resume.js";
 
 export {
   PublisherTranscriptAuthorizationDurableObject,
@@ -36,17 +37,23 @@ export default {
     if (!environment?.SOURCE_LIBRARY_DB || typeof environment.SOURCE_LIBRARY_DB.prepare !== "function") throw new Error("Knowledge workflow restriction reaper requires SOURCE_LIBRARY_DB.");
     if (event.cron === "* * * * *") {
       const logger = (record) => console.info(JSON.stringify(record));
-      if ([environment.VAPID_PUBLIC_KEY,environment.VAPID_PRIVATE_KEY,environment.VAPID_SUBJECT].every(value=>value===undefined)) {
-        logger({event:"reminder-schedule-unconfigured"});
-        return;
-      }
-      const reminders = createReminderRuntime({environment,database:environment.SOURCE_LIBRARY_DB,now:()=>new Date(),fetch:globalThis.fetch,logger});
-      const result = await reminders.run();
-      if (!result.ok && result.error.kind === "ReminderConfigurationMissing") {
-        logger({event:"reminder-schedule-disabled",failure:result.error.kind});
-        return;
-      }
-      if (!result.ok) throw new Error(result.error.kind);
+      const recovery = environment.KNOWLEDGE_WORKFLOW_ENABLED === "true"
+        ? resumeInterruptedKnowledgeWorkflows({database:environment.SOURCE_LIBRARY_DB,binding:environment.KNOWLEDGE_WORKFLOW,ownerId:environment.ACCESS_OWNER_ID,now:()=>new Date().toISOString(),logger}).then(result=>{if(!result.ok)throw new Error(result.error.kind);})
+        : Promise.resolve();
+      const reminderDispatch = (async () => {
+        if ([environment.VAPID_PUBLIC_KEY,environment.VAPID_PRIVATE_KEY,environment.VAPID_SUBJECT].every(value=>value===undefined)) {
+          logger({event:"reminder-schedule-unconfigured"});
+          return;
+        }
+        const reminders = createReminderRuntime({environment,database:environment.SOURCE_LIBRARY_DB,now:()=>new Date(),fetch:globalThis.fetch,logger});
+        const result = await reminders.run();
+        if (!result.ok && result.error.kind === "ReminderConfigurationMissing") {
+          logger({event:"reminder-schedule-disabled",failure:result.error.kind});
+          return;
+        }
+        if (!result.ok) throw new Error(result.error.kind);
+      })();
+      await Promise.all([recovery,reminderDispatch]);
       return;
     }
     if (event.cron !== "*/15 * * * *") throw new Error("ScheduledTriggerUnsupported");
