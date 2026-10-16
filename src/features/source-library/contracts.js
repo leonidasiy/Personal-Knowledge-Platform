@@ -50,6 +50,7 @@
  *   readonly title: string,
  *   readonly description: string,
  *   readonly adapter: SourceAdapterContract,
+ *   readonly primarySubject?: string | null,
  *   readonly interestAreaIds: readonly string[],
  *   readonly identityEvidence: readonly SourceIdentityEvidence[],
  *   readonly state: LibrarySourceState,

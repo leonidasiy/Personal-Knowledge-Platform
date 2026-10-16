@@ -58,6 +58,57 @@ function setup() {
   };
 }
 
+Deno.test("bounded extraction does not restore unavailable goals after the final replan", async () => {
+  const fixture = setup();
+  const runner = createExtractionRunner({
+    ...fixture.dependencies,
+    orderedUrls: ["https://example.test/a"],
+    planner: {
+      async plan(input) {
+        const result = await fixture.dependencies.planner.plan(input);
+        if (!result.ok) return result;
+        return { ok: true, value: { ...result.value, coverageGoals: [...result.value.coverageGoals, { id: "image-context", priority: "normal", description: "Describe images unavailable to text extraction." }] } };
+      },
+      async replan({ previous }) {
+        return { ok: true, value: { ...previous, frontier: [], coverageGoals: previous.coverageGoals.filter(goal => goal.id !== "image-context"), stopDecision: { decision: "complete", rationale: "All supplied sections observed.", evidenceUrls: ["https://example.test/a"], unresolvedGapIds: [] } } };
+      },
+    },
+  });
+  const result = await runner.run({ ownerId: "owner-a", runId: "run-a", sourceId: "source-a", sourceRevision: 1, rootUrl: "https://example.test", startedAtMs: 0, deadlineAtMs: 1_800_000 });
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.value.state, "completed");
+  assertEquals(result.value.pagesProcessed, 1);
+  assertEquals(result.value.scratchpad.planCheckpoint?.plan.coverageGoals.length, 1);
+  assertEquals(JSON.stringify(result.value.scratchpad.coverage), '["goal-a"]');
+});
+
+Deno.test("resume repairs an exhausted cached bounded plan without reacquiring or replanning", async () => {
+  const fixture = setup();
+  const urls = ["https://example.test/a"];
+  const loaded = await fixture.dependencies.scratchpad.load({ ownerId: "owner-a", runId: "run-a", sourceId: "source-a", sourceRevision: 1 });
+  if (!loaded.ok) throw new Error("Fixture initialization failed.");
+  const planned = await fixture.dependencies.planner.plan({ rootUrl: "https://example.test", scratchpad: loaded.value });
+  if (!planned.ok) throw new Error("Fixture initialization failed.");
+  await fixture.dependencies.scratchpad.save({
+    ...loaded.value, revision: 2, processedUrls: urls, acceptedHashes: ["existing-point"], coverage: ["goal-a"], frontier: [], retryingFailedPages: true, retryGeneration: 61,
+    planCheckpoint: { batchKey: null, orderedUrls: urls, retryGeneration: 61, plan: { ...planned.value, frontier: [], coverageGoals: [...planned.value.coverageGoals, { id: "image-context", priority: "normal", description: "Unavailable image context." }], stopDecision: { decision: "complete", rationale: "All sections observed.", evidenceUrls: urls, unresolvedGapIds: [] } } },
+  });
+  const result = await createExtractionRunner({
+    ...fixture.dependencies, orderedUrls: urls,
+    planner: { async plan() { throw new Error("Must reuse the saved plan."); }, async replan() { throw new Error("No unprocessed pages."); } },
+    acquirer: { async fetchPage() { throw new Error("Must preserve completed extraction."); } },
+  }).run({ ownerId: "owner-a", runId: "run-a", sourceId: "source-a", sourceRevision: 1, rootUrl: "https://example.test", startedAtMs: 0, deadlineAtMs: 1_800_000 });
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.value.state, "completed");
+  assertEquals(result.value.knowledgePointCount, 1);
+  assertEquals(result.value.scratchpad.retryingFailedPages, false);
+  assertEquals(result.value.scratchpad.planCheckpoint?.plan.coverageGoals.length, 1);
+  assertEquals(JSON.stringify(result.value.scratchpad.coverage), '["goal-a"]');
+  assertEquals(fixture.points.length, 0);
+});
+
 Deno.test("five-page extraction batches checkpoint before consumption and resume with a smaller tail", async () => {
   const fixture = setup();
   const urls = Array.from({ length: 7 }, (_, index) => `https://example.test/${index}`);

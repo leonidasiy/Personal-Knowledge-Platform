@@ -263,7 +263,7 @@ export function createLibraryPage(dependencies) {
         sourceTopic: card.sourceClassification?.topic ?? null,
       }));
       const newest = [...items].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt) || b.id.localeCompare(a.id))[0];
-      if (automaticSubject && newest) subject = librarySourceSubjects(newest.id, knowledge)[0];
+      if (automaticSubject && newest) subject = librarySourceSubjects(newest, knowledge)[0];
     })().finally(() => {
       knowledgeRead = null;
       rerender();
@@ -787,7 +787,7 @@ export function createLibraryPage(dependencies) {
     pendingFocusSourceId=sourceId;query="";searchScope="knowledge";
     await load();
     const requested=items.find(source=>source.id===sourceId);
-    if(requested){subject=librarySourceSubjects(sourceId,knowledge)[0];rerender();}
+    if(requested){subject=librarySourceSubjects(requested,knowledge)[0];rerender();}
     else{pendingFocusSourceId=null;onError(libraryCopy(13));}
   }
   function dispose(){disposed=true;stopWorkflowStatusPolling();observer?.disconnect();observer=null;if(focusHandle!==null){cancel(focusHandle);focusHandle=null;}pendingFocusSourceId=null;}

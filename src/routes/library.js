@@ -76,9 +76,9 @@ function renderCollection(model) {
         : shellMarkup(31));
   }
   const ordered = [...collection.items].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt) || b.id.localeCompare(a.id));
-  const selected = collection.subject ?? librarySourceSubjects(ordered[0].id, model.knowledge ?? [])[0];
+  const selected = collection.subject ?? librarySourceSubjects(ordered[0], model.knowledge ?? [])[0];
   const subjects = [...SUBJECTS, { id: "unclassified", label: "Unclassified" }];
-  const visible = ordered.filter(source => librarySourceSubjects(source.id, model.knowledge ?? []).includes(selected));
+  const visible = ordered.filter(source => librarySourceSubjects(source, model.knowledge ?? []).includes(selected));
   const subjectControl = shellMarkup(6, subjects.map(s => shellMarkup(7, s.id, selected === s.id ? "selected" : "", escapeHtml(s.label))).join(""), visible.length, visible.length === 1 ? "" : "s");
   const content = shellMarkup(8, subjectControl, visible.map(source => renderSource(model, source)).join(""), visible.length ? "" : shellMarkup(9));
   const retainedNotice = collection.message === null
@@ -90,12 +90,13 @@ function renderCollection(model) {
   return shellMarkup(12, search, retainedNotice, content, more);
 }
 
-/** A source appears under each primary subject present in its retained points.
- * @param {string} sourceId
+/** Keep source classification available while its knowledge is awaiting publication.
+ * @param {LibrarySource} source
  * @param {readonly {readonly sourceId:string,readonly primarySubject?:string|null}[]} knowledge
  */
-export function librarySourceSubjects(sourceId, knowledge) {
-  const subjects = [...new Set(knowledge.filter(point => point.sourceId === sourceId).flatMap(point => point.primarySubject ? [point.primarySubject] : []))];
+export function librarySourceSubjects(source, knowledge) {
+  if (source.primarySubject) return [source.primarySubject];
+  const subjects = [...new Set(knowledge.flatMap(point => point.sourceId === source.id && point.primarySubject ? [point.primarySubject] : []))];
   return subjects.length ? subjects : ["unclassified"];
 }
 

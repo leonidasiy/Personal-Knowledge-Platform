@@ -38,13 +38,13 @@ export function parseClassification(value) {
 }
 
 // Provider schema uses exactly the same approved IDs as the runtime boundary.
-export const CLASSIFICATION_SCHEMA = Object.freeze({
+export const CLASSIFICATION_SCHEMA = /* @__PURE__ */ Object.freeze({
   type: "object", additionalProperties: false,
   required: ["version", "primarySubject", "secondarySubjects", "subcategory"],
   properties: {
     version: { type: "integer", enum: [1] },
-    primarySubject: { anyOf: [{ type: "string", enum: SUBJECTS.map(s => s.id) }, { type: "null" }] },
-    secondarySubjects: { type: "array", maxItems: 2, items: { type: "string", enum: SUBJECTS.map(s => s.id) } },
+    primarySubject: { anyOf: [{ type: "string", enum: /* @__PURE__ */ SUBJECTS.map(s => s.id) }, { type: "null" }] },
+    secondarySubjects: { type: "array", maxItems: 2, items: { type: "string", enum: /* @__PURE__ */ SUBJECTS.map(s => s.id) } },
     subcategory: { anyOf: [{ type: "string", minLength: 1, maxLength: 80 }, { type: "null" }] },
   },
 });

@@ -7,6 +7,7 @@ import {
   isRecord,
 } from "./contracts.js";
 import { parseWorkflowProgress } from '../knowledge-workflows/progress.js';
+import { isSubjectId } from '../knowledge-subjects/public.js';
 
 /** @import { KnowledgeSearchHit, LibrarySource, Result, SourceCatalogPage, SourceInterestArea, SourceSearchHit, SourceSearchScope } from "./contracts.js" */
 
@@ -413,6 +414,7 @@ function sourcePage(value, ownerId) {
 function parseSource(value) {
   if (
     !isRecord(value) || ![value.id, value.ownerId, value.title].every(isNonEmptyText) ||
+    (value.primarySubject != null && !isSubjectId(value.primarySubject)) ||
     !isPublicHttpsUrl(value.submittedUrl) || !isPublicHttpsUrl(value.canonicalUrl) ||
     typeof value.description !== "string" || !isRecord(value.adapter) ||
     ![value.adapter.id, value.adapter.version, value.adapter.granularity].every(isNonEmptyText) ||

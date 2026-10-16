@@ -42,6 +42,14 @@ Deno.test("source gateway preserves empty descriptions through catalog and searc
   assertEquals(search.value[0].source.description, "");
 });
 
+Deno.test("source gateway retains saved classifications and rejects malformed classifications", async () => {
+  for (const primarySubject of [undefined, null, "music", "invented", 42]) {
+    const result = await gateway(async () => Response.json({ ownerId: "owner-a", result: { items: [{ ...source, primarySubject }], interestAreas: [], nextCursor: null } })).browse({ limit: 20 });
+    assertEquals(result.ok, primarySubject == null || primarySubject === "music");
+    if (result.ok) assertEquals(result.value.items[0].primarySubject, primarySubject);
+  }
+});
+
 Deno.test("source gateway rejects malformed descriptions and catalog owner mismatches", async () => {
   for (const description of [undefined, null, 42, {}, []]) {
     const result = await gateway(async () => Response.json({ result: { items: [{ ...source, description }], interestAreas: [], nextCursor: null } })).browse({ limit: 20 });

@@ -397,6 +397,8 @@ export function createExtractionRunner(dependencies) {
       if (!validPlan(plan.value) || plan.value.frontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionPlanInvalid" }, dependencies, command.runId);
       let currentPlan = freeze({ ...plan.value, frontier: freeze(orderedUrls ?? [...new Set([...persistedFrontier, ...plan.value.frontier])]) });
       scratchpad = cloneScratchpad({ ...scratchpad, discoveredUrls: [...new Set([...(scratchpad.discoveredUrls ?? []), ...currentPlan.frontier])] });
+      const exhaustedInventory = orderedUrls !== undefined && scratchpad.pendingBatch === undefined && pendingFrontierUrl(currentPlan, scratchpad) === null;
+      if (exhaustedInventory) currentPlan = freeze(boundAuthorizedMaterialPlan(currentPlan, [], scratchpad));
       const initialDiscoveredUrls = scratchpad.discoveredUrls ?? [];
       if (initialDiscoveredUrls.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
       /** @returns {Promise<Result<null, ExtractionFailure>>} */
@@ -407,7 +409,7 @@ export function createExtractionRunner(dependencies) {
         try {const saved=await dependencies.scratchpad.save(scratchpad);if(!saved.ok)return fail({kind:"ScratchpadPersistenceFailed"},dependencies,command.runId);}catch(error){return fail({kind:"ScratchpadPersistenceFailed"},dependencies,command.runId);}
         return {ok:true,value:null};
       }
-      if (!reusable) {
+      if (!reusable || exhaustedInventory) {
         const saved = await saveCurrentPlan();
         if (!saved.ok) return saved;
         const planned = await remember(dependencies.memory, "decision", "source", { phase: "plan", revision: currentPlan.revision, decision: currentPlan.stopDecision.decision, rationale: currentPlan.stopDecision.rationale, frontier: currentPlan.frontier.slice(0, 50), discoveredUrls: initialDiscoveredUrls.slice(0, 50), unresolvedGaps: currentPlan.unresolvedGaps.slice(0, 50).map((gap) => ({ id: gap.id, priority: gap.priority, description: gap.description })) }, dependencies, command.runId);
@@ -628,6 +630,7 @@ export function createExtractionRunner(dependencies) {
         const preservedFrontier = (orderedUrls ?? [...new Set([...proposedPlan.frontier, ...(scratchpad.discoveredUrls ?? [])])]).filter((url) => !scratchpad.processedUrls.includes(url) && !scratchpad.failedPages?.some(page => page.url === url));
         if (preservedFrontier.length > dependencies.policy.maximumFrontier) return fail({ kind: "ExtractionLimitExceeded", limit: "frontier" }, dependencies, command.runId);
         currentPlan = freeze({ ...proposedPlan, coverageGoals: freeze([...coverageGoals.values()]), frontier: freeze(preservedFrontier) });
+        if (orderedUrls !== undefined) currentPlan = freeze(boundAuthorizedMaterialPlan(currentPlan, preservedFrontier, scratchpad));
         const prematureComplete = currentPlan.stopDecision.decision === "complete" && pendingFrontierUrl(currentPlan, scratchpad) !== null;
         if (prematureComplete) {
           dependencies.logger({ event: "knowledge-extraction-premature-complete-rejected", runId: command.runId, failureKind: "ExtractionCoverageIncomplete" });
@@ -662,6 +665,31 @@ export function createExtractionRunner(dependencies) {
       }
     },
   });
+}
+
+/**
+ * Bound a plan to the source content the learner authorized.
+ * Once every supplied section has been observed, model-suggested goals and gaps that
+ * refer to unavailable source content cannot be resolved by another fetch.
+ * @param {ExtractionPlan} plan
+ * @param {readonly string[]} remainingFrontierUrls
+ * @param {ExtractionScratchpad} scratchpad
+ * @returns {ExtractionPlan}
+ */
+export function boundAuthorizedMaterialPlan(plan, remainingFrontierUrls, scratchpad) {
+  if (remainingFrontierUrls.length > 0) return plan;
+  return {
+    ...plan,
+    frontier: [],
+    coverageGoals: plan.coverageGoals.filter((goal) => scratchpad.coverage.includes(goal.id)),
+    unresolvedGaps: [],
+    stopDecision: {
+      decision: "complete",
+      rationale: "All content in the selected extraction scope has been observed.",
+      evidenceUrls: plan.stopDecision.evidenceUrls,
+      unresolvedGapIds: [],
+    },
+  };
 }
 
 /** @param {URL} root @param {URL} candidate @returns {boolean} */

@@ -1,4 +1,5 @@
 // @ts-check
+import { isSubjectId } from "../src/features/knowledge-subjects/public.js";
 
 import { isRecord } from "../src/features/source-library/contracts.js";
 import { matchesPrivateDocumentReplay, sourceApprovalFingerprint } from "../src/features/source-library/repository.js";
@@ -770,13 +771,14 @@ export class D1SourceLibraryRepository {
   }
 }
 
+const SOURCE_CLASSIFICATION_COLUMN = "(SELECT sc.main_subject FROM source_classifications sc WHERE sc.owner_id = s.owner_id AND sc.source_id = s.source_id AND sc.source_revision = s.revision AND sc.status = 'classified') AS primary_subject";
 const SOURCE_COLUMNS =
-  "s.owner_id, s.source_id, s.submitted_url, s.canonical_url, s.title, s.description, s.adapter_json, s.identity_evidence_json, s.state, s.approved_at, s.updated_at, s.revision, COALESCE(json_group_array(a.interest_area_id) FILTER (WHERE a.interest_area_id IS NOT NULL), '[]') AS interest_area_ids_json";
+  `s.owner_id, s.source_id, s.submitted_url, s.canonical_url, s.title, s.description, s.adapter_json, s.identity_evidence_json, s.state, s.approved_at, s.updated_at, s.revision, ${SOURCE_CLASSIFICATION_COLUMN}, COALESCE(json_group_array(a.interest_area_id) FILTER (WHERE a.interest_area_id IS NOT NULL), '[]') AS interest_area_ids_json`;
 const SOURCE_FROM =
   " FROM library_sources s LEFT JOIN source_interest_areas a ON a.owner_id = s.owner_id AND a.source_id = s.source_id";
 const SOURCE_SELECT = `SELECT ${SOURCE_COLUMNS}${SOURCE_FROM}`;
 const SEARCH_SOURCE_COLUMNS =
-  "s.owner_id, s.source_id, s.submitted_url, s.canonical_url, s.title, s.description, s.adapter_json, s.identity_evidence_json, s.state, s.approved_at, s.updated_at, s.revision, COALESCE((SELECT json_group_array(a.interest_area_id) FROM source_interest_areas a WHERE a.owner_id = s.owner_id AND a.source_id = s.source_id), '[]') AS interest_area_ids_json";
+  `s.owner_id, s.source_id, s.submitted_url, s.canonical_url, s.title, s.description, s.adapter_json, s.identity_evidence_json, s.state, s.approved_at, s.updated_at, s.revision, ${SOURCE_CLASSIFICATION_COLUMN}, COALESCE((SELECT json_group_array(a.interest_area_id) FROM source_interest_areas a WHERE a.owner_id = s.owner_id AND a.source_id = s.source_id), '[]') AS interest_area_ids_json`;
 
 /** @param {unknown} row @param {string} ownerId @returns {SourceInterestArea} */
 function interestAreaFromRow(row, ownerId) {
@@ -816,11 +818,12 @@ function knowledgeSearchFromRow(row) {
   return freeze({ knowledgeId: row.knowledge_id, sourceId: row.source_id, sourceTitle: row.source_title, summary: point.summary, sourceUrl: point.attribution.sourceUrl, evidenceAnchorIds: freeze(evidenceAnchorIds), questionLocked: row.question_locked === 1 });
 }
 
-/** @param {SourceRow & { readonly interest_area_ids_json: string }} row @returns {LibrarySource} */
+/** @param {SourceRow & { readonly interest_area_ids_json: string, readonly primary_subject?: string | null }} row @returns {LibrarySource} */
 function sourceFromRow(row) {
   const adapter = JSON.parse(row.adapter_json);
   const identityEvidence = JSON.parse(row.identity_evidence_json);
   const interestAreaIds = JSON.parse(row.interest_area_ids_json);
+  if (row.primary_subject != null && !isSubjectId(row.primary_subject)) throw new TypeError("Stored source classification is invalid.");
   if (
     typeof adapter !== "object" || adapter === null ||
     !Array.isArray(identityEvidence) || !Array.isArray(interestAreaIds) ||
@@ -839,6 +842,7 @@ function sourceFromRow(row) {
     canonicalUrl: row.canonical_url,
     title: row.title,
     description: row.description,
+    primarySubject: row.primary_subject ?? null,
     adapter:
       /** @type {import("../src/features/source-library/contracts.js").SourceAdapterContract} */ (adapter),
     interestAreaIds: freeze(/** @type {string[]} */ (interestAreaIds)),

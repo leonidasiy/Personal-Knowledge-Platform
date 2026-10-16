@@ -137,6 +137,16 @@ Deno.test("Library sources appear on each represented primary subject and legacy
   assert(rejected, "Unknown selected subjects must fail validation.");
 });
 
+Deno.test("Library keeps a classified source on its shelf while retry hides its published knowledge", () => {
+  const classified = { ...source, primarySubject: "music" };
+  for (const state of ["completed", "per-point-quiz-loop", "retryable-failure"]) {
+    for (const subject of ["music", "unclassified"]) {
+      const html = renderLibraryRoute({ ...baseModel(), collection: { ...baseModel().collection, items: [classified], subject }, knowledge: [], workflowStatuses: [workflowStatus(state)] });
+      assert(html.includes('data-library-source="source-a"') === (subject === "music"), "Saved source classification must survive retry and page reload even without visible knowledge.");
+    }
+  }
+});
+
 Deno.test("Library restores subject selection and reports unavailable or invalid stored preferences", async () => {
   for (const stored of [SUBJECTS[1].id, "unclassified", "invalid", "throws", null]) {
     const errors = /** @type {string[]} */ ([]);

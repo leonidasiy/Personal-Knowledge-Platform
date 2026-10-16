@@ -18,7 +18,7 @@ import {AgentExecutionBoundaryFailure} from '../src/features/knowledge-workflows
 import { isKnowledgeWorkflowRun } from "../src/features/knowledge-workflows/workflow.js";
 import { acquireImageBytes, createMediaPublicEgress } from "../src/features/knowledge-workflows/media.js";
 import { createKnowledgeWorkflowExecutor } from "../src/features/knowledge-workflows/executor.js";
-import { createExtractionRunner, isExtractionPlan, isKnowledgeCandidate, isVisualMediaReference } from "../src/features/knowledge-workflows/extraction.js";
+import { boundAuthorizedMaterialPlan, createExtractionRunner, isExtractionPlan, isKnowledgeCandidate, isVisualMediaReference } from "../src/features/knowledge-workflows/extraction.js";
 import { createRightsAssessor } from "../src/features/knowledge-workflows/rights.js";
 import { createRobotsGate } from "../src/features/knowledge-workflows/robots.js";
 import { verifyPublicWebpage } from './webpage-access.js';
@@ -131,31 +131,6 @@ function authorizedSectionUrl(rootUrl, sectionId) {
   const url = new URL(rootUrl);
   url.hash = `section=${encodeURIComponent(sectionId)}`;
   return url.href;
-}
-
-/**
- * Bound a plan to the source content the learner authorized.
- * Once every supplied section has been observed, model-suggested goals and gaps that
- * refer to unavailable source content cannot be resolved by another fetch.
- * @param {import("../src/features/knowledge-workflows/extraction.js").ExtractionPlan} plan
- * @param {readonly string[]} remainingFrontierUrls
- * @param {import("../src/features/knowledge-workflows/extraction.js").ExtractionScratchpad} scratchpad
- * @returns {import("../src/features/knowledge-workflows/extraction.js").ExtractionPlan}
- */
-function boundAuthorizedMaterialPlan(plan, remainingFrontierUrls, scratchpad) {
-  if (remainingFrontierUrls.length > 0) return plan;
-  return {
-    ...plan,
-    frontier: [],
-    coverageGoals: plan.coverageGoals.filter((goal) => scratchpad.coverage.includes(goal.id)),
-    unresolvedGaps: [],
-    stopDecision: {
-      decision: "complete",
-      rationale: "All content in the selected extraction scope has been observed.",
-      evidenceUrls: plan.stopDecision.evidenceUrls,
-      unresolvedGapIds: [],
-    },
-  };
 }
 
 const extractionPlanPrompt = `# Identity

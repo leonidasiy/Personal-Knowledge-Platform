@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
 import { D1SourceClassificationRepository } from "../worker/source-classification-d1.js";
+import { D1SourceLibraryRepository } from "../worker/source-library-d1.js";
 
 /** @param {DatabaseSync} database */
 function d1(database) {
@@ -14,6 +15,7 @@ function d1(database) {
           const statement = database.prepare(sql);
           return {
             first: async () => statement.get(...values) ?? null,
+            all: async () => ({ success: true, results: statement.all(...values) }),
             run: async () => {
               const result = statement.run(...values);
               return { success: true, meta: { changes: Number(result.changes) } };
@@ -67,6 +69,30 @@ test("source classification is owner scoped, insert once, manually revision chec
   assert.equal([raceA, raceB].filter((item) => item.ok).length, 1);
   assert.equal([raceA, raceB].filter((item) => !item.ok && item.error.kind === "SourceClassificationRevisionConflict").length, 1);
   database.close();
+});
+
+test("catalog keeps the current source category while its workflow is retryable", async () => {
+  const database = await databaseWithMigrations();
+  try {
+    const port = d1(database);
+    const classifications = new D1SourceClassificationRepository({ database: port, now: () => "2026-10-16T00:00:00.000Z", logger: () => {} });
+    const library = new D1SourceLibraryRepository(port);
+    const classification = { mainSubject: "music", topic: "Harmony" };
+    assert.equal((await classifications.persistAgent({ ownerId: "owner-a", sourceId: "source-a", sourceRevision: 1, classification, legacyAudit: [] })).ok, true);
+    database.exec("UPDATE knowledge_workflow_runs SET state='retryable-failure'");
+    const read = await library.read("owner-a", "source-a");
+    assert.equal(read.ok, true);
+    assert.equal(read.value.primarySubject, classification.mainSubject);
+    const catalog = await library.browseActive({ ownerId: "owner-a", limit: 20, after: null });
+    assert.equal(catalog.ok, true);
+    assert.equal(catalog.value.items[0].primarySubject, classification.mainSubject);
+    const search = await library.keywordSearch({ ownerId: "owner-a", query: "Harmony", limit: 20 });
+    assert.equal(search.ok, true);
+    assert.equal(search.value[0].source.primarySubject, classification.mainSubject);
+    assert.equal((await library.read("owner-b", "source-a")).value, null);
+    database.exec("UPDATE source_classifications SET source_revision=2");
+    assert.equal((await library.read("owner-a", "source-a")).value.primarySubject, null);
+  } finally { database.close(); }
 });
 
 test("0019 indexes topic-only and content-only matches, refreshes edits, and keeps one row per point", async () => {
