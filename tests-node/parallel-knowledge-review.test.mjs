@@ -14,7 +14,7 @@ test('parallel review retains individual failures and rejected points without si
 test('batch selection rejects invented and repeated IDs, and rechecks a cached single survivor against the current saved context',async()=>{
  for(const keptKnowledgeIds of [['unknown'],['point-0','point-0']]){
   const result=await reviewKnowledgeBatch({points:points.slice(0,2),review:async p=>({ok:true,value:p}),select:async()=>({ok:true,value:{keptKnowledgeIds}})});
-  assert(result.every(r=>!r.ok&&r.error.kind==='KnowledgeReviewBatchOutputInvalid'));
+  assert(result.every(r=>!r.ok&&r.error.kind==='KnowledgeReviewOutputInvalid'));
  }
  let calls=0;const single=await reviewKnowledgeBatch({points:points.slice(0,1),review:async p=>({ok:true,value:p}),select:async()=>{calls++;return {ok:true,value:{keptKnowledgeIds:[]}};}});
  assert.equal(calls,1);assert.equal(single[0].value,null);

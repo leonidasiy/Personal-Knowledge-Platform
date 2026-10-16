@@ -27,7 +27,7 @@ export async function reviewKnowledgeBatch({points,review,select}) {
   const ids = typeof output === 'object' && output !== null && !Array.isArray(output) && Object.keys(output).join(',') === 'keptKnowledgeIds' ? /** @type {{keptKnowledgeIds:unknown}} */ (output).keptKnowledgeIds : null;
   const valid = Array.isArray(ids) && new Set(ids).size === ids.length && ids.every(id=>typeof id==='string'&&survivors.some(point=>point.id===id));
   if (!selected.ok || !valid) {
-    const error = selected.ok ? {kind:'KnowledgeReviewBatchOutputInvalid'} : selected.error;
+    const error = selected.ok ? {kind:'KnowledgeReviewOutputInvalid'} : selected.error;
     return results.map(result=>result.ok&&result.value!==null?{ok:false,error}:result);
   }
   const kept = new Set(/** @type {string[]} */ (ids));

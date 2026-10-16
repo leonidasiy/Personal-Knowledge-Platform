@@ -928,7 +928,9 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       reviewBatch:(points,observation)=>reviewKnowledgeBatch({points,review:point=>review(point,observation),select:async survivors=>{
         const context=await content.reviewContext({ownerId:run.ownerId,runId:run.runId,sourceId:run.sourceId,knowledgeId:survivors[0].id});
         if(!context.ok)return context;
-        const input={points:survivors.map(point=>({id:point.id,summary:point.summary})),...context.value};
+        const checkpoint=await content.loadScratchpad(run);
+        if(!checkpoint.ok)return checkpoint;
+        const input={points:survivors.map(point=>({id:point.id,summary:point.summary})),...context.value,retryGeneration:checkpoint.value.retryGeneration??0};
         return generate(run,'question-evaluator',`knowledge-batch-selection-${await imageHash(new TextEncoder().encode(JSON.stringify(input)))}`,knowledgeBatchSelectionPrompt,input,2048,undefined,{responseSchema:{name:'knowledge_batch_selection_v1',schema:{type:'object',additionalProperties:false,required:['keptKnowledgeIds'],properties:{keptKnowledgeIds:{type:'array',items:{type:'string',enum:survivors.map(point=>point.id)}}}}}});
       }}),
     };
