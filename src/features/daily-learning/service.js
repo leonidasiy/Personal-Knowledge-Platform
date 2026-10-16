@@ -194,21 +194,7 @@ export class DailyLearningService {
       };
     }
     const sorted = fairPromptOrder(eligiblePrompts);
-    const limit = Math.min(
-      studySet.recallLimit,
-      sorted.length,
-      Math.max(0, studySet.items.length - 1),
-    );
-    if (limit >= studySet.items.length) {
-      return {
-        ok: false,
-        error: {
-          kind: "RecallAssignmentRatioInvalid",
-          studySize: studySet.items.length,
-          recallSize: limit,
-        },
-      };
-    }
+    const limit = Math.min(studySet.recallLimit, sorted.length);
     return this.#repository.recordCohort(freeze({
       id: this.#createId(),
       ownerId,

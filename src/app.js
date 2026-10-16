@@ -326,15 +326,13 @@ async function initialize() {
     return;
   }
   await loadLearnerController();
-  await startFeedSession();
-  await refreshPromptAvailability();
-  if (!(await ensureDailyStudySet())) {
-    render();
-    return;
-  }
   await loadActiveRoute();
   render();
   void syncReminderTimeZone();
+  setInterval(() => { if (document.visibilityState === "visible") void learnerController?.refreshDay(); }, 60_000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void learnerController?.refreshDay();
+  });
 }
 
 /** @returns {Promise<boolean>} */
@@ -363,7 +361,7 @@ async function ensureDailySettings() {
   const saved = dailyLearningService.saveSettings({
     ownerId: LOCAL_OWNER_ID,
     dailyStudyTarget: 5,
-    dailyRecallLimit: 3,
+    dailyRecallLimit: 5,
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     expectedRevision: 0,
     updatedAt: now,
@@ -395,69 +393,6 @@ async function commitDailySettings(settings) {
     return false;
   }
   dailySettings = committed.value;
-  return true;
-}
-
-/** @returns {Promise<boolean>} */
-async function ensureDailyStudySet() {
-  if (dailySettings === null || feedPage === null) return false;
-  const day = learningDay(dailySettings.timeZone);
-  const existing = dailyLearningRepository.listStudySets(LOCAL_OWNER_ID, day);
-  if (existing.length === 0) {
-    const now = new Date().toISOString();
-    const created = dailyLearningService.createStudySet({
-      ownerId: LOCAL_OWNER_ID,
-      learningDay: day,
-      idempotencyKey: `daily-set:${LOCAL_OWNER_ID}:${day}:1`,
-      createdAt: now,
-      candidates: feedPage.items.map((/** @type {RankedFeedItem} */ item) => {
-        const candidate = candidates.find((entry) =>
-          entry.id === item.candidateId
-        );
-        return {
-          contentId: item.candidateId,
-          contentVersion: 1,
-          promptIds: candidate === undefined ? [] : [candidate.quiz.id],
-        };
-      }),
-    });
-    if (!created.ok) {
-      errorMessage = created.error.kind ===
-          "DailyAssignmentInsufficientCandidates"
-        ? `Today's set needs ${created.error.required} items; ${created.error.available} available.`
-        : "Today's set could not be assigned.";
-      return false;
-    }
-    if (!(await commitStudySet(created.value))) return false;
-  }
-  for (
-    const set of dailyLearningRepository.listStudySets(LOCAL_OWNER_ID, day)
-  ) {
-    if (!(await issueRecallCohort(set))) return false;
-  }
-  syncVisibleAssignment();
-  return true;
-}
-
-/** @param {DailyStudySet} studySet */
-async function commitStudySet(studySet) {
-  dailyLearningRepository.rollbackStudySet(
-    studySet.ownerId,
-    studySet.idempotencyKey,
-  );
-  const persisted = await appendEnvelope({
-    id: studySet.idempotencyKey,
-    ownerId: studySet.ownerId,
-    kind: "daily_study_set",
-    payloadJson: JSON.stringify(studySet),
-    recordedAt: studySet.createdAt,
-  }, false);
-  if (!persisted) return false;
-  const committed = dailyLearningRepository.recordStudySet(studySet);
-  if (!committed.ok) {
-    errorMessage = APP_COPY.savedSetHidden;
-    return false;
-  }
   return true;
 }
 
@@ -695,6 +630,7 @@ async function loadLearnerController() {
     escapeHtml,
     now: () => new Date().toISOString(),
     createId: () => crypto.randomUUID(),
+    getDailyTargets: () => ({ learning: dailySettings?.dailyStudyTarget ?? 5, review: dailySettings?.dailyRecallLimit ?? 5 }),
     onChange: (message, preferredFocusKey = null, fallbackHeadingId = null) => {
       notice = message ?? null;
       if (message === undefined) render(preferredFocusKey, fallbackHeadingId);
@@ -1069,11 +1005,11 @@ function renderSettingsPreferences() {
     themeOption("dark", "Observatory")
   }</div></fieldset><label class="switch-control"><span><strong>Interface sounds</strong><small>Interaction and quiz cues</small></span><input type="checkbox" data-setting="sound" data-focus-key="setting-sound" ${
     experienceSettings.soundEnabled ? "checked" : ""
-  }></label><label class="switch-control"><span><strong>Interface motion</strong><small>Device reduced-motion settings take priority</small></span><input type="checkbox" data-setting="motion" data-focus-key="setting-motion" ${experienceSettings.motionEnabled === false ? "" : "checked"}></label><form class="daily-settings-form" data-daily-settings-form><fieldset class="settings-group"><legend>Daily learning</legend><label for="daily-study-target">Daily study target</label><input id="daily-study-target" name="daily-study-target" type="number" min="1" max="50" step="1" value="${
+  }></label><label class="switch-control"><span><strong>Interface motion</strong><small>Device reduced-motion settings take priority</small></span><input type="checkbox" data-setting="motion" data-focus-key="setting-motion" ${experienceSettings.motionEnabled === false ? "" : "checked"}></label><form class="daily-settings-form" data-daily-settings-form><fieldset class="settings-group"><legend>Daily learning</legend><label for="daily-study-target">Daily learning target</label><input id="daily-study-target" name="daily-study-target" type="number" min="1" max="50" step="1" value="${
     dailySettings?.dailyStudyTarget ?? 5
-  }"><label for="daily-recall-limit">Daily recall limit</label><input id="daily-recall-limit" name="daily-recall-limit" type="number" min="0" max="49" step="1" value="${
-    dailySettings?.dailyRecallLimit ?? 3
-  }"><p class="settings-form-note">Changes apply to the next assigned set.</p><p class="settings-form-error" data-daily-settings-error tabindex="-1"></p><button class="button secondary" type="submit">Save learning targets</button></fieldset></form>${
+  }"><label for="daily-recall-limit">Daily review target</label><input id="daily-recall-limit" name="daily-recall-limit" type="number" min="0" step="1" value="${
+    dailySettings?.dailyRecallLimit ?? 5
+  }"><p class="settings-form-note">Independent daily goals: knowledge cards studied on Feed and quiz cards completed on Review. Both pages show up to five cards at a time.</p><p class="settings-form-error" data-daily-settings-error tabindex="-1"></p><button class="button secondary" type="submit">Save learning targets</button></fieldset></form>${
     settingsIssue === null ? "" : `<div class="settings-recovery" role="status">
             <p>${escapeHtml(friendlySettingsFailure(settingsIssue.kind))}</p>
             <button class="button secondary" type="button" data-action="reset-settings" data-focus-key="reset-settings">Reset display settings</button>
@@ -1401,9 +1337,7 @@ async function saveDailySettings(event) {
   if (!result.ok) {
     const error = form.querySelector("[data-daily-settings-error]");
     if (error instanceof HTMLElement) {
-      error.textContent = result.error.kind === "DailyTargetPairInvalid"
-        ? "Recall limit must be lower than the study target."
-        : "Use a 1-50 study target and a non-negative recall limit.";
+      error.textContent = "Use a 1–50 learning target and a non-negative whole-number review target.";
       error.focus();
     }
     return;

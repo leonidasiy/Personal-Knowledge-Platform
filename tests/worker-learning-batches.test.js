@@ -336,3 +336,27 @@ Deno.test("reloading an open Review batch resumes only unanswered questions", as
     if (!failure.ok) assertEquals(failure.error.kind, "LearningBatchPersistenceFailed");
   }
 });
+
+Deno.test("a new day replaces unfinished Feed and Review batches without erasing prior activity", async () => {
+  const previous = { batch_id: "yesterday", learning_day: "2026-08-18", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-18T00:00:00.000Z", completed_at: null };
+  class PriorDayDatabase extends Database {
+    /** @override @param {string} query @param {readonly (string | number | null)[]} [bindings] */
+    async first(query, bindings = []) {
+      if (query.includes("FROM learner_feed_batches")) return { ...previous, item_ids_json: JSON.stringify(Array.from({ length: 5 }, (_, i) => `knowledge-${i}`)) };
+      return await super.first(query, bindings);
+    }
+  }
+  const database = new PriorDayDatabase(rows(8).map(row => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" })));
+  database.reviewRow = previous;
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
+  for (const load of [() => service.loadFeed("owner-a", "2026-08-19"), () => service.loadReview("owner-a", "2026-08-19")]) {
+    const result = await load();
+    assertEquals(result.ok, true);
+    if (!result.ok) return;
+    const projection = /** @type {{ readonly batch: { readonly learningDay: string, readonly status: string, readonly itemIds: readonly string[] } }} */ (result.value);
+    assertEquals(projection.batch.learningDay, "2026-08-19");
+    assertEquals(projection.batch.status, "open");
+    assertEquals(projection.batch.itemIds.length, 5);
+  }
+  assertEquals(database.queries.some(query => query.startsWith("DELETE")), false);
+});

@@ -1,5 +1,7 @@
 // @ts-check
 
+import { isProgressSummary } from "../progress/public.js";
+
 import { isSubjectId } from "../knowledge-subjects/public.js";
 
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
@@ -89,7 +91,7 @@ function parseReviewAnswer(value) {
 
 /** @param {unknown} value @returns {Result<FeedBatchProjection, LearningBatchGatewayFailure>} */
 function parseFeed(value) {
-  if (!record(value) || !Array.isArray(value.items)) return bad();
+  if (!record(value) || !Array.isArray(value.items) || value.items.length > 5) return bad();
   const batch = parseBatch(value.batch);
   if (value.batch !== null && batch === null) return bad();
   const items = value.items.map(parseCard);
@@ -98,7 +100,7 @@ function parseFeed(value) {
 
 /** @param {unknown} value @returns {Result<ReviewBatchProjection, LearningBatchGatewayFailure>} */
 function parseReview(value) {
-  if (!record(value) || !Array.isArray(value.questions) || typeof value.dueCount !== "number" || !Number.isSafeInteger(value.dueCount) || value.dueCount < 0) return bad();
+  if (!record(value) || !Array.isArray(value.questions) || value.questions.length > 5 || typeof value.dueCount !== "number" || !Number.isSafeInteger(value.dueCount) || value.dueCount < 0) return bad();
   const dueCount = value.dueCount;
   const batch = parseBatch(value.batch);
   if (value.batch !== null && batch === null) return bad();
@@ -127,6 +129,14 @@ export class LearningBatchGatewayClient {
     if (this.#base.protocol !== "https:" && this.#base.hostname !== "localhost" && this.#base.hostname !== "127.0.0.1") throw new TypeError("Learning batch gateway protocol is invalid.");
     this.#fetch = dependencies.fetch;
     this.#timeoutMs = dependencies.timeoutMs;
+  }
+
+  /** @returns {Promise<Result<import("../progress/public.js").ProgressSummary, LearningBatchGatewayFailure>>} */
+  async loadProgress() {
+    const response = await this.#request("api/learning-generation/progress?days=7", "GET", null);
+    if (!response.ok) return response;
+    const value = resultValue(response.value);
+    return isProgressSummary(value) ? { ok: true, value } : bad();
   }
 
   /** @param {string} learningDay @returns {Promise<Result<FeedBatchProjection, LearningBatchGatewayFailure>>} */

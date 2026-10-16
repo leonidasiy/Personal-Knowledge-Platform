@@ -8,6 +8,9 @@ Object.defineProperty(globalThis, "document", { configurable: true, value: {
 } });
 // @ts-check
 
+import { buildProgress } from "../src/features/progress/public.js";
+import { learningCelebrationMarkup } from "../src/features/learning-generation/celebration.js";
+
 import { createLearnerController } from "../src/features/learning-generation/learner.js";
 
 /** @param {boolean} condition @param {string} message */
@@ -256,5 +259,77 @@ Deno.test("preference motion follows actual settlement, rejects duplicate pendin
   } finally {
     if (originalElement) Object.defineProperty(globalThis, "HTMLElement", originalElement); else Reflect.deleteProperty(globalThis, "HTMLElement");
     if (originalFrame) Object.defineProperty(globalThis, "requestAnimationFrame", originalFrame); else Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+  }
+});
+
+Deno.test("daily targets use separate persisted study and quiz counts across five-card batches", async () => {
+  const progress = buildProgress({ days: 7, now: "2026-09-01T12:00:00.000Z", subject: null, studies: [{ completedAt: "2026-09-01T10:00:00.000Z", itemCount: 5 }, { completedAt: "2026-09-01T11:00:00.000Z", itemCount: 5 }], attempts: [{ batchId: "b", questionId: "q", knowledgeId: "k", answeredAt: "2026-09-01T10:00:00.000Z", correct: false, score: 0, elapsedDays: null, previousCorrect: null, primarySubject: null }] });
+  if (!progress.ok) throw new Error(progress.error.field);
+  let targets = { learning: 10, review: 5 };
+  const controller = createLearnerController({ fetch: async input => response({ result: String(input).includes("/progress?") ? progress.value : String(input).includes("review-batch") ? review : { batch: null, items: [] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", getDailyTargets: () => targets, onChange: () => {} });
+  await Promise.all([controller.loadFeed(), controller.loadReview()]);
+  assert(controller.renderFeed().includes("10 / 10") && controller.renderFeed().includes("knowledge cards studied"), "Study counts accumulate across batches.");
+  assert(controller.renderReview().includes("1 / 5") && controller.renderReview().includes("quiz cards completed"), "Incorrect submitted quizzes count toward completion independently.");
+  targets = { learning: 5, review: 10 };
+  assert(controller.renderFeed().includes("10 / 5") && controller.renderReview().includes("1 / 10"), "Target changes apply immediately without changing the batch.");
+});
+
+Deno.test("an open page loads both new daily batches once and retains same-day batches", async () => {
+  let timestamp = "2026-09-01T23:59:00.000Z";
+  /** @type {string[]} */ const requested = [];
+  const controller = createLearnerController({ fetch: async input => { requested.push(String(input)); return response({ result: String(input).includes("review-batch") ? review : { batch: null, items: [] } }); }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => timestamp, createId: () => "test", onChange: () => {} });
+  await Promise.all([controller.loadFeed(), controller.loadReview()]);
+  await controller.refreshDay();
+  assert(requested.length === 2, "Same day does not refresh batches.");
+  timestamp = "2026-09-02T00:00:00.000Z";
+  await controller.refreshDay();
+  assert(requested.length === 4 && requested.slice(2).every(url => url.includes("day=2026-09-02")), "Both pages request the new day, including unfinished Review.");
+  await controller.refreshDay();
+  assert(requested.length === 4, "Repeated day checks keep the new batches.");
+});
+
+Deno.test("learning celebration points to the remaining review goal", () => {
+  const html = learningCelebrationMarkup(10, 5);
+  assert(html.includes('href="#review"') && html.includes("5 quiz cards") && html.includes("<strong>10</strong>"), "Celebration shows actual activity and Review continuation.");
+  assert(learningCelebrationMarkup(5, 0).includes("Your review goal is complete too"), "Completed Review is not described as outstanding.");
+});
+
+Deno.test("only crossing the learning target opens the Review celebration", async () => {
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  let studied = 0, shown = 0, status = "open", popup = "";
+  /** @type {Record<string, { click?: () => void }>} */ const actions = {};
+  const button = (/** @type {string} */ selector) => ({ addEventListener: (/** @type {string} */ _type, /** @type {() => void} */ listener) => { actions[selector] = { click: listener }; } });
+  const dialog = { innerHTML: "", setAttribute: () => {}, querySelector: () => null, addEventListener: () => {}, showModal: () => { shown++; popup = dialog.innerHTML; } };
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { ...document, createElement: () => dialog, querySelector: () => null, body: { append: () => {} } } });
+  try {
+    const cards = Array.from({ length: 5 }, (_, i) => ({ knowledgeId: `k-${i}`, sourceId: "s", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: `q-${i}`, title: "Synthetic source", summary: "Synthetic knowledge.", sourceUrl: "https://example.test", evidenceAnchorIds: ["a"], media: null, questionLocked: true }));
+    const controller = createLearnerController({ fetch: async input => {
+      const path = String(input);
+      if (path.endsWith("/complete")) { studied += 5; status = "completed"; return response({ result: { status } }); }
+      if (path.includes("/progress?")) {
+        const progress = buildProgress({ days: 7, now: "2026-09-01T12:00:00.000Z", subject: null, attempts: [], studies: Array.from({ length: studied / 5 }, () => ({ itemCount: 5, completedAt: "2026-09-01T10:00:00.000Z" })) });
+        if (!progress.ok) throw new Error(progress.error.field);
+        return response({ result: progress.value });
+      }
+      if (path.includes("review-batch")) return response({ result: { batch: null, questions: [], dueCount: 0 } });
+      if (path.endsWith("/refresh")) status = "open";
+      return response({ result: { batch: { ...review.batch, status, itemIds: cards.map(c => c.knowledgeId) }, items: cards } });
+    }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", getDailyTargets: () => ({ learning: 10, review: 5 }), onChange: () => {} });
+    await controller.loadFeed();
+    controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: button, querySelectorAll: () => [] })));
+    actions["[data-action='complete-learner-feed']"].click?.();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert(shown === 0 && controller.renderFeed().includes("5 / 10"), "The first five-card batch must not trigger a ten-card goal.");
+    actions["[data-action='refresh-learner-feed']"].click?.();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    actions["[data-action='complete-learner-feed']"].click?.();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert(shown === 1 && popup.includes("5 quiz cards") && popup.includes('href="#review"'), "Crossing ten opens a celebration with the independent Review goal.");
+    await controller.loadFeed();
+    actions["[data-action='complete-learner-feed']"].click?.();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert(shown === 1, "Reloading or re-completing the closed batch must not repeat the popup.");
+  } finally {
+    if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
   }
 });

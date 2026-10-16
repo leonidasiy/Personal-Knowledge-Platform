@@ -195,3 +195,9 @@ Deno.test("learner gateway surfaces server locks instead of treating them as suc
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.kind, "LearningBatchGatewayRejected");
 });
+
+Deno.test("Feed and Review reject projections with more than five cards", async () => {
+  const gateway = new LearningBatchGatewayClient({ fetch: async input => response({ result: String(input).includes("review-batch") ? { ...review, questions: Array.from({ length: 6 }, () => review.questions[0]) } : { ...feed, items: [...feed.items, feed.items[0]] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000 });
+  assertEquals((await gateway.loadFeed("2026-08-19")).ok, false);
+  assertEquals((await gateway.loadReview("2026-08-19")).ok, false);
+});

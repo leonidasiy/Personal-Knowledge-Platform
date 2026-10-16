@@ -23,9 +23,9 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   }),
   stylesheet: Object.freeze({
     label: "CSS",
-    // Image controls: measured owner-approved CSS allowance 2026-10-15.
-    rawBytes: 41_942,
-    gzipBytes: 9_136,
+    // Daily-goal popup: measured owner-approved CSS allowance 2026-10-16.
+    rawBytes: 44_333,
+    gzipBytes: 9_643,
   }),
   pdfRenderer: Object.freeze({
     label: "On-demand PDF renderer",

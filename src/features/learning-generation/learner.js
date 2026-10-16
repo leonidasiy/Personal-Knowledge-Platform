@@ -5,6 +5,8 @@ import { pendingSpark, playSpark, sparkIcon } from "../experience/spark.js";
 import { SUBJECTS } from "../knowledge-subjects/public.js";
 import { subjectPresentation } from "../knowledge-subjects/presentation.js";
 
+import { showLearningCelebration } from "./celebration.js";
+
 import { LearningBatchGatewayClient } from "./batches-gateway.js";
 
 /** @import { FeedBatchProjection, LearningBatchGatewayFailure, LearningKnowledgeCard, LearningReviewQuestion, ReviewBatchProjection } from "./batches-gateway.js" */
@@ -17,6 +19,7 @@ import { LearningBatchGatewayClient } from "./batches-gateway.js";
  *   readonly escapeHtml: (value: string) => string,
  *   readonly now: () => string,
  *   readonly createId: () => string,
+ *   readonly getDailyTargets?: () => { readonly learning: number, readonly review: number },
  *   readonly onChange: (notice?: string, preferredFocusKey?: string | null, fallbackHeadingId?: string | null) => void
  * }} LearnerControllerDependencies
  */
@@ -38,6 +41,34 @@ export function createLearnerController(dependencies) {
   const celebrations = new Set();
   /** @type {Map<string, string>} */ const preferences = new Map();
   let classificationMessage = "";
+  /** @type {{ readonly date: string, readonly studyItems: number, readonly reviewAttempts: number } | null} */ let dailyProgress = null;
+  /** @type {Promise<void> | null} */ let progressLoad = null;
+  let feedDay = "", reviewDay = "";
+
+  async function loadDailyProgress() {
+    if (!dependencies.getDailyTargets) return;
+    if (progressLoad !== null) return await progressLoad;
+    progressLoad = (async () => {
+      const result = await gateway.loadProgress();
+      dailyProgress = result.ok ? result.value.activity.find(row => row.date === day()) ?? null : null;
+    })().finally(() => { progressLoad = null; });
+    await progressLoad;
+  }
+
+  /** @param {"learning" | "review"} kind */
+  function renderDailyGoal(kind) {
+    if (!dependencies.getDailyTargets) return "";
+    const target = dependencies.getDailyTargets()[kind];
+    const count = kind === "learning" ? dailyProgress?.studyItems : dailyProgress?.reviewAttempts;
+    const label = feedMarkup(kind === "learning" ? 24 : 25);
+    return feedMarkup(23, count === undefined ? "Progress unavailable" : `${count} / ${target}`, label);
+  }
+
+  async function refreshDay() {
+    if (pending.size > 0 || feed.state === "loading" || review.state === "loading" || (feedDay === day() && reviewDay === day())) return;
+    attempts.clear();
+    await Promise.all([loadFeed(), loadReview()]);
+  }
 
   /** @param {string} key */
   function actionState(key) {
@@ -58,7 +89,10 @@ export function createLearnerController(dependencies) {
   async function loadFeed() {
     feed = { state: "loading", value: feed.value, error: null };
     onChange();
-    const result = await gateway.loadFeed(day());
+    const requestedDay = day();
+    const result = await gateway.loadFeed(requestedDay);
+    if (result.ok) feedDay = requestedDay;
+    await loadDailyProgress();
     feed = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: null, error: result.error };
     onChange();
     return result;
@@ -68,7 +102,10 @@ export function createLearnerController(dependencies) {
     const previousBatchId = review.value?.batch?.batchId ?? null;
     review = { state: "loading", value: review.value, error: null };
     onChange();
-    const result = await gateway.loadReview(day());
+    const requestedDay = day();
+    const result = await gateway.loadReview(requestedDay);
+    if (result.ok) reviewDay = requestedDay;
+    await loadDailyProgress();
     if (result.ok && result.value.batch?.batchId !== previousBatchId) {
       answers.clear();
     }
@@ -90,6 +127,8 @@ export function createLearnerController(dependencies) {
     const batch = feed.value?.batch;
     if (batch === null || batch === undefined || batch.status !== "open") return;
     if (!begin("feed-complete")) return;
+    await loadDailyProgress();
+    const studiedBefore = dailyProgress?.studyItems;
     const result = await gateway.completeFeed(batch.batchId, `feed-complete:${batch.batchId}`);
     pending.delete("feed-complete");
     if (!result.ok) {
@@ -98,6 +137,10 @@ export function createLearnerController(dependencies) {
       return;
     }
     await Promise.all([loadFeed(), loadReview()]);
+    const targets = dependencies.getDailyTargets?.();
+    if (targets && studiedBefore !== undefined && studiedBefore < targets.learning && dailyProgress !== null && dailyProgress.studyItems >= targets.learning) {
+      showLearningCelebration(dailyProgress.studyItems, Math.max(0, targets.review - dailyProgress.reviewAttempts));
+    }
   }
 
   async function refreshReview() {
@@ -147,6 +190,7 @@ export function createLearnerController(dependencies) {
         : review.value.batch;
       review = { state: "success", value: { ...review.value, batch, dueCount: Math.max(0, review.value.dueCount - (alreadyAnswered ? 0 : 1)) }, error: null };
     }
+    await loadDailyProgress();
     onChange(undefined, `review-feedback:${questionId}`, "review-title");
   }
 
@@ -197,25 +241,25 @@ export function createLearnerController(dependencies) {
   /** @param {LearningBatchGatewayFailure | null} failure */
   function friendly(failure) {
     if (failure === null) return "";
-    if (failure.kind === "LearningBatchGatewayUnauthenticated" || failure.kind === "LearningBatchGatewayUnauthorized") return "Sign in through the private learning service, then try again.";
-    if (failure.kind === "LearningBatchGatewayUnavailable" || failure.kind === "LearningBatchGatewayTimedOut") return "The learning service could not be reached. Try again; no batch was changed.";
-    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchInsufficientCandidates") return "A complete five-card learning batch is not available yet. Add or finish another source first.";
-    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchIncomplete") return "Finish the current five-card batch before refreshing it.";
-    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewRefreshLocked") return "Answer every question in the current Review batch before refreshing it.";
-    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradePending") return "Your answer is still being checked. Try again; this attempt has not been recorded.";
-    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradingUnavailable") return "Answer checking is temporarily unavailable. Your responses are still here; try again when the checker is available.";
-    return "The learning batch could not be updated. Try again.";
+    if (failure.kind === "LearningBatchGatewayUnauthenticated" || failure.kind === "LearningBatchGatewayUnauthorized") return feedMarkup(6);
+    if (failure.kind === "LearningBatchGatewayUnavailable" || failure.kind === "LearningBatchGatewayTimedOut") return feedMarkup(7);
+    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchInsufficientCandidates") return feedMarkup(8);
+    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchIncomplete") return feedMarkup(9);
+    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewRefreshLocked") return feedMarkup(10);
+    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradePending") return feedMarkup(11);
+    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradingUnavailable") return feedMarkup(12);
+    return feedMarkup(13);
   }
 
   function renderFeed() {
-    return feedMarkup(0) + `${renderFeedHeading()}<div class="daily-grid">${renderFeedBody()}</div></section>`;
+    return feedMarkup(0) + `${renderDailyGoal("learning")}${renderFeedHeading()}<div class="daily-grid">${renderFeedBody()}</div></section>`;
   }
 
   function renderFeedHeading() {
     const value = feed.value;
     if (value === null || value.batch === null || value.items.length === 0) return "";
     const complete = value.batch.status === "completed";
-    return `<div class="section-heading"><div><h2 id="feed-title">Your five ideas</h2><p>${value.items.length} cards in this batch</p></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-feed" ${actionState("feed-refresh")}>${actionLabel("feed-refresh", "Refresh batch", "Finding new ideas…")}</button>` : `<p class="batch-lock-status">Read all five, then mark this batch studied</p>`}</div>`;
+    return feedMarkup(14, String(value.items.length), complete ? feedMarkup(15, actionState("feed-refresh"), actionLabel("feed-refresh", "Refresh batch", "Finding new ideas…")) : feedMarkup(16));
   }
 
   function renderFeedBody() {
@@ -224,7 +268,7 @@ export function createLearnerController(dependencies) {
     const value = feed.value;
     if (value === null || value.batch === null || value.items.length === 0) return feedMarkup(1);
     const complete = value.batch.status === "completed";
-    return `${pending.has("feed-refresh") ? `<p class="spark-loading" role="status">${pendingSpark()}Finding your next five ideas…</p>` : ""}<section class="feed-column learner-feed" aria-labelledby="feed-title">${classificationMessage === "" ? "" : `<p role="status">${escapeHtml(classificationMessage)}</p>`}<div class="feed-stack">${value.items.map(renderCard).join("")}</div><div class="learner-feed-sentinel" data-learner-feed-sentinel><div><h2>${complete ? "Ready to bring it back?" : "A natural place to pause."}</h2><p role="status">${complete ? "Batch studied. Paired questions are unlocked in Review." : "When you’ve studied all five ideas, mark this batch studied to unlock its questions."}</p></div><div class="hero-actions">${complete ? `<button class="button primary" type="button" data-view="review">Open Review</button>` : `<button class="button primary" type="button" data-action="complete-learner-feed" ${actionState("feed-complete")}>${actionLabel("feed-complete", "Mark batch studied", "Saving study…")}</button>`}<button class="button quiet" type="button" data-view="progress">Explore your progress</button></div></div>${feed.state === "error" ? `<p class="state-inline" role="alert">${escapeHtml(friendly(feed.error))}</p>` : ""}</section>`;
+    return `${pending.has("feed-refresh") ? feedMarkup(26, pendingSpark()) : ""}<section class="feed-column learner-feed" aria-labelledby="feed-title">${classificationMessage === "" ? "" : `<p role="status">${escapeHtml(classificationMessage)}</p>`}<div class="feed-stack">${value.items.map(renderCard).join("")}</div>${complete ? feedMarkup(22) : feedMarkup(21, actionState("feed-complete"), actionLabel("feed-complete", "Mark batch studied", "Saving study…"))}${feed.state === "error" ? `<p class="state-inline" role="alert">${escapeHtml(friendly(feed.error))}</p>` : ""}</section>`;
   }
 
   /** @param {LearningKnowledgeCard} card */
@@ -259,9 +303,9 @@ export function createLearnerController(dependencies) {
     if (review.state === "loading" && review.value === null) return feedMarkup(4);
     if (review.state === "error" && review.value === null) return statePanel("Review", friendly(review.error), "retry-learner-review");
     const value = review.value;
-    if (value === null || value.questions.length === 0) return feedMarkup(2);
+    if (value === null || value.questions.length === 0) return renderDailyGoal("review") + feedMarkup(2);
     const complete = value.batch?.status === "completed" || [...answers.keys()].filter((id) => value.questions.some((question) => question.questionId === id)).length === value.questions.length;
-    return `<section class="review-route wide-view" aria-labelledby="review-title"><div class="section-heading"><div><p class="eyebrow">Due batch · ${value.questions.length} question${value.questions.length === 1 ? "" : "s"}</p><h1 id="review-title">Meet an idea again.</h1><p>Bring it back before you look. Then let the feedback guide your next attempt.</p></div>${complete ? `<button class="button secondary" type="button" data-action="refresh-learner-review" ${actionState("review-refresh")}>${actionLabel("review-refresh", "Refresh questions", "Finding questions…")}</button>` : `<p class="batch-lock-status">Answer every question before refreshing</p>`}</div>${review.error === null ? "" : `<p class="state-inline" role="alert">${escapeHtml(friendly(review.error))}</p>`}<div class="review-question-list">${value.questions.map(renderQuestion).join("")}</div></section>`;
+    return feedMarkup(17, renderDailyGoal("review"), String(value.questions.length), value.questions.length === 1 ? "" : "s", complete ? feedMarkup(18, actionState("review-refresh"), actionLabel("review-refresh", "Refresh questions", "Finding questions…")) : feedMarkup(19), review.error === null ? "" : feedMarkup(20, escapeHtml(friendly(review.error))), value.questions.map(renderQuestion).join(""));
   }
 
   /** @param {LearningReviewQuestion} question */
@@ -328,7 +372,7 @@ export function createLearnerController(dependencies) {
     root.querySelectorAll("[data-learner-review]").forEach((element) => element.addEventListener("submit", (event) => { event.preventDefault(); if (event.currentTarget instanceof HTMLFormElement) void answerReview(event.currentTarget); }));
   }
 
-  return freeze({ loadFeed, loadReview, renderFeed, renderReview, bind, hasDueReview: () => (review.value?.dueCount ?? 0) > 0 });
+  return freeze({ loadFeed, loadReview, refreshDay, renderFeed, renderReview, bind, hasDueReview: () => (review.value?.dueCount ?? 0) > 0 });
 }
 
 export {};

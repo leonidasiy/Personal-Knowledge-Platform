@@ -104,7 +104,6 @@
  * @typedef {{ readonly kind: "DailySettingsInvalid", readonly field: string }
  * | { readonly kind: "DailyTargetOutOfRange", readonly target: number }
  * | { readonly kind: "DailyRecallLimitOutOfRange", readonly limit: number }
- * | { readonly kind: "DailyTargetPairInvalid", readonly target: number, readonly limit: number }
  * | { readonly kind: "DailySettingsRevisionConflict", readonly expected: number, readonly actual: number }
  * | { readonly kind: "DailySettingsAlreadyRecorded", readonly revision: number }
  * | { readonly kind: "DailyAssignmentInvalid", readonly field: string }
@@ -114,7 +113,6 @@
  * | { readonly kind: "DailyStudySetUnknown", readonly studySetId: string }
  * | { readonly kind: "RecallAssignmentInvalid", readonly field: string }
  * | { readonly kind: "RecallAssignmentPromptIneligible", readonly promptId: string }
- * | { readonly kind: "RecallAssignmentRatioInvalid", readonly studySize: number, readonly recallSize: number }
  * | { readonly kind: "RecallAssignmentAlreadyRecorded", readonly idempotencyKey: string }
  * | { readonly kind: "NextStudySetLocked", readonly remainingStudy: number, readonly remainingRecall: number }
  * | { readonly kind: "DailyProjectionInvalid", readonly field: string }} DailyLearningFailure
@@ -165,7 +163,7 @@ export function validateSettingsCommand(value) {
   }
   if (
     typeof dailyRecallLimit !== "number" ||
-    !Number.isInteger(dailyRecallLimit) || dailyRecallLimit < 0
+    !Number.isSafeInteger(dailyRecallLimit) || dailyRecallLimit < 0
   ) {
     return {
       ok: false,
@@ -174,16 +172,6 @@ export function validateSettingsCommand(value) {
         limit: typeof dailyRecallLimit === "number"
           ? dailyRecallLimit
           : Number.NaN,
-      },
-    };
-  }
-  if (dailyRecallLimit >= dailyStudyTarget) {
-    return {
-      ok: false,
-      error: {
-        kind: "DailyTargetPairInvalid",
-        target: dailyStudyTarget,
-        limit: dailyRecallLimit,
       },
     };
   }

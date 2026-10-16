@@ -49,33 +49,21 @@ function saveDefaults(service) {
   });
 }
 
-Deno.test("daily settings accept 5/3 and require an atomic valid pair", () => {
+Deno.test("daily settings accept independent learning and review targets", () => {
   const { service } = setup();
   const saved = saveDefaults(service);
   assertEquals(saved.ok, true);
   if (!saved.ok) return;
   assertEquals(saved.value.revision, 1);
 
-  const invalid = service.saveSettings({
-    ownerId: "owner-a",
-    dailyStudyTarget: 1,
-    dailyRecallLimit: 1,
-    timeZone: "Asia/Hong_Kong",
-    expectedRevision: 1,
-    updatedAt: "2026-07-20T00:01:00.000Z",
-  });
-  assertEquals(invalid.ok, false);
-  if (!invalid.ok) assertEquals(invalid.error.kind, "DailyTargetPairInvalid");
-
-  const validOne = service.saveSettings({
-    ownerId: "owner-a",
-    dailyStudyTarget: 1,
-    dailyRecallLimit: 0,
-    timeZone: "Asia/Hong_Kong",
-    expectedRevision: 1,
-    updatedAt: "2026-07-20T00:02:00.000Z",
-  });
-  assertEquals(validOne.ok, true);
+  for (const [revision, learning, review] of [[1, 5, 5], [2, 5, 10], [3, 10, 2], [4, 1, 0]]) {
+    const result = service.saveSettings({ ownerId: "owner-a", dailyStudyTarget: learning, dailyRecallLimit: review, timeZone: "Asia/Hong_Kong", expectedRevision: revision, updatedAt: "2026-07-20T00:01:00.000Z" });
+    assertEquals(result.ok, true);
+  }
+  for (const review of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const result = service.saveSettings({ ownerId: "owner-a", dailyStudyTarget: 5, dailyRecallLimit: review, timeZone: "Asia/Hong_Kong", expectedRevision: 5, updatedAt: "2026-07-20T00:01:00.000Z" });
+    assertEquals(result.ok, false);
+  }
 });
 
 Deno.test("settings revision conflicts remain explicit", () => {
@@ -194,7 +182,7 @@ Deno.test("additional sets exclude every content identity already assigned that 
   assertEquals(second.value.ordinal, 2);
 });
 
-Deno.test("recall cohort is capped, underfilled, stable, and smaller than study", () => {
+Deno.test("recall cohort respects its review target and fair ordering", () => {
   const { service } = setup();
   saveDefaults(service);
   const study = service.createStudySet({
@@ -410,3 +398,13 @@ function fact(id, promptId, responseSequence, finalized, correct) {
     responseSequence,
   };
 }
+
+Deno.test("review cohort can exceed the learning target", () => {
+  const { service } = setup();
+  service.saveSettings({ ownerId: "owner-a", dailyStudyTarget: 1, dailyRecallLimit: 10, timeZone: "UTC", expectedRevision: 0, updatedAt: "2026-07-20T00:00:00.000Z" });
+  const study = service.createStudySet({ ownerId: "owner-a", learningDay: "2026-07-20", candidates, idempotencyKey: "set-independent", createdAt: "2026-07-20T01:00:00.000Z" });
+  if (!study.ok) throw new Error(study.error.kind);
+  const result = service.createRecallCohort({ ownerId: "owner-a", studySetId: study.value.id, eligiblePrompts: Array.from({ length: 12 }, (_, i) => prompt(`p-${i}`, `content-${i}`, i + 1)), idempotencyKey: "review-independent", createdAt: "2026-07-20T01:10:00.000Z" });
+  assertEquals(result.ok, true);
+  if (result.ok) assertEquals(result.value.prompts.length, 10);
+});

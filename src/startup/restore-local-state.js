@@ -223,7 +223,6 @@ export async function restoreLocalState(dependencies) {
           studySet.learningDay !== event.learningDay ||
           studySet.recallLimit !== event.limit ||
           event.prompts.length > event.limit ||
-          event.prompts.length >= studySet.items.length ||
           event.prompts.some((/** @type {RecallCandidateRef} */ prompt) => {
             const source = generated.get(prompt.promptId);
             return source === undefined ||
@@ -581,8 +580,7 @@ function isDailySettings(value) {
     ["dailyStudyTarget", "dailyRecallLimit", "revision"],
   ) &&
     integerBetween(value.dailyStudyTarget, 1, 50) &&
-    integerBetween(value.dailyRecallLimit, 0, 49) &&
-    Number(value.dailyRecallLimit) < Number(value.dailyStudyTarget) &&
+    Number.isSafeInteger(value.dailyRecallLimit) && Number(value.dailyRecallLimit) >= 0 &&
     positiveInteger(value.revision) &&
     Number.isFinite(Date.parse(String(value.updatedAt)));
 }
@@ -614,8 +612,7 @@ function isDailyStudySet(value) {
     positiveInteger(value.ordinal) &&
     positiveInteger(value.studyTarget) &&
     value.items.length === value.studyTarget &&
-    integerBetween(value.recallLimit, 0, 49) &&
-    Number(value.recallLimit) < Number(value.studyTarget) &&
+    Number.isSafeInteger(value.recallLimit) && Number(value.recallLimit) >= 0 &&
     Number.isFinite(Date.parse(String(value.createdAt)));
 }
 
@@ -641,7 +638,7 @@ function isDailyRecallCohort(value) {
           isRecord(prompt) ? prompt.promptId : null
         ),
       ).size === value.prompts.length &&
-    integerBetween(value.limit, 0, 49) &&
+    Number.isSafeInteger(value.limit) && Number(value.limit) >= 0 &&
     positiveInteger(value.revision) &&
     Number.isFinite(Date.parse(String(value.createdAt)));
 }

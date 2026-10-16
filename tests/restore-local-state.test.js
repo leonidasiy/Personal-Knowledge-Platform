@@ -715,3 +715,15 @@ function envelope(kind, id, recordedAt, payload) {
     recordedAt,
   };
 }
+
+Deno.test("independent daily targets survive restore without rewriting saved settings", async () => {
+  const settings = { ownerId: "owner-a", dailyStudyTarget: 5, dailyRecallLimit: 10, timeZone: "UTC", revision: 1, updatedAt: "2026-07-20T00:00:00.000Z" };
+  const persistence = new FixturePersistence([envelope("daily_learning_settings", "daily-settings:owner-a:1", settings.updatedAt, settings)]);
+  const restored = await restoreLocalState(setupDependencies("owner-a", persistence));
+  assertEquals(restored.ok, true);
+  if (restored.ok) {
+    assertEquals(restored.value.dailySettings?.dailyStudyTarget, 5);
+    assertEquals(restored.value.dailySettings?.dailyRecallLimit, 10);
+  }
+  assertEquals(persistence.appendCalls, 0);
+});
