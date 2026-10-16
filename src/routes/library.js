@@ -76,7 +76,7 @@ function renderCollection(model) {
         : shellMarkup(31));
   }
   const ordered = [...collection.items].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt) || b.id.localeCompare(a.id));
-  const selected = collection.subject ?? librarySourceSubjects(ordered[0], model.knowledge ?? [])[0];
+  const selected = collection.subject ?? "all";
   const subjects = [{ id: "all", label: "All" }, ...SUBJECTS, { id: "unclassified", label: "Unclassified" }];
   const visible = selected === "all" ? ordered : ordered.filter(source => librarySourceSubjects(source, model.knowledge ?? []).includes(selected));
   const subjectControl = shellMarkup(6, subjects.map(s => shellMarkup(7, s.id, selected === s.id ? "selected" : "", escapeHtml(s.label))).join(""), visible.length, visible.length === 1 ? "" : "s");

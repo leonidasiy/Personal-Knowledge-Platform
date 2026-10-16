@@ -87,11 +87,10 @@ export function createLibraryPage(dependencies) {
   /** @type {LibrarySource[]} */ let items = [];
   /** @type {string | null} */ let nextCursor = null;
   /** @type {string} */ let query = "";
-  /** @type {string|null} */ let subject = null;
-  let automaticSubject = true;
+  /** @type {string} */ let subject = "all";
   try {
     const stored = dependencies.storage?.getItem("resonance-library-subject");
-    if (stored === "all" || stored === "unclassified" || isSubjectId(stored)) {subject = stored;automaticSubject=false;}
+    if (stored === "all" || stored === "unclassified" || isSubjectId(stored)) subject = stored;
     else if (stored !== null && stored !== undefined) onError(libraryCopy(0));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -262,8 +261,6 @@ export function createLibraryPage(dependencies) {
         primarySubject: card.sourceClassification?.mainSubject ?? null,
         sourceTopic: card.sourceClassification?.topic ?? null,
       }));
-      const newest = [...items].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt) || b.id.localeCompare(a.id))[0];
-      if (automaticSubject && newest) subject = librarySourceSubjects(newest, knowledge)[0];
     })().finally(() => {
       knowledgeRead = null;
       rerender();
@@ -682,7 +679,6 @@ export function createLibraryPage(dependencies) {
       const select = event.currentTarget;
       if (!(select instanceof HTMLSelectElement) || !(select.value === "all" || select.value === "unclassified" || isSubjectId(select.value))) return;
       subject = select.value;
-      automaticSubject=false;
       try { dependencies.storage?.setItem("resonance-library-subject", subject); }
       catch (error) { if (!(error instanceof Error)) throw error; onError(libraryCopy(12)); }
       rerender();

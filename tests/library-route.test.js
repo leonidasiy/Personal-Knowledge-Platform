@@ -110,14 +110,14 @@ const sourceB = Object.freeze({
   interestAreaIds: Object.freeze(["area-a"]),
 });
 
-Deno.test("Library shelves default to newest subject and sort newest first with stable ties", () => {
+Deno.test("Library shelves default to All and sort newest first with stable ties", () => {
   const newer = { ...sourceB, approvedAt: "2026-09-19T08:00:00.000Z" };
   const tied = { ...newer, id: "source-c" };
   const knowledge = [source, newer, tied].map((item, i) => ({ knowledgeId: `k${i}`, sourceId: item.id, summary: "A retained idea.", questionLocked: true, primarySubject: SUBJECTS[i === 0 ? 0 : 1].id }));
   const model = { ...baseModel(), collection: { ...baseModel().collection, items: [source, newer, tied] }, knowledge };
   const html = renderLibraryRoute(model);
-  assert(html.includes(`value="${SUBJECTS[1].id}" selected`), "Default shelf must follow the newest source, not incoming array order.");
-  assert(!html.includes('data-library-source="source-a"'), "Other subjects must not be stacked into the selected shelf.");
+  assert(html.includes('value="all" selected'), "Library must default to All without a selected subject.");
+  assert(html.includes('data-library-source="source-a"'), "The default shelf includes sources from other subjects.");
   assert(html.indexOf('data-library-source="source-c"') < html.indexOf('data-library-source="source-b"'), "Tied dates need stable descending source identity.");
   const sameSubject = renderLibraryRoute({ ...model, knowledge: knowledge.map(point => ({ ...point, primarySubject: SUBJECTS[1].id })) });
   assert(sameSubject.indexOf('data-library-source="source-b"') < sameSubject.indexOf('data-library-source="source-a"'), "Newer dates must precede older sources.");
@@ -174,8 +174,8 @@ Deno.test("Library restores subject selection and reports unavailable or invalid
       createObserver: () => null, schedule: () => 1, cancel: () => {}, onNotice: () => {}, onError: message => errors.push(message), rerender: () => {},
     });
     await page.load();
-    const selected = stored === "all" || stored === "unclassified" ? stored : SUBJECTS[1].id;
-    assert(page.render({}).includes(`value="${selected}" selected`), "Valid saved choice or newest-source default must be selected.");
+    const selected = stored === SUBJECTS[1].id || stored === "unclassified" ? stored : "all";
+    assert(page.render({}).includes(`value="${selected}" selected`), "Valid saved choices are restored; missing, invalid or inaccessible preferences default to All.");
     assert(errors.length === (stored === "throws" || stored === "invalid" ? 1 : 0), "Invalid and inaccessible preferences need an explicit notice, missing storage does not.");
   }
 });
