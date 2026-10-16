@@ -91,7 +91,7 @@ export function createLibraryPage(dependencies) {
   let automaticSubject = true;
   try {
     const stored = dependencies.storage?.getItem("resonance-library-subject");
-    if (stored === "unclassified" || isSubjectId(stored)) {subject = stored;automaticSubject=false;}
+    if (stored === "all" || stored === "unclassified" || isSubjectId(stored)) {subject = stored;automaticSubject=false;}
     else if (stored !== null && stored !== undefined) onError(libraryCopy(0));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -680,7 +680,7 @@ export function createLibraryPage(dependencies) {
     }
     root.querySelector("[data-library-subject]")?.addEventListener("change", event => {
       const select = event.currentTarget;
-      if (!(select instanceof HTMLSelectElement) || !(select.value === "unclassified" || isSubjectId(select.value))) return;
+      if (!(select instanceof HTMLSelectElement) || !(select.value === "all" || select.value === "unclassified" || isSubjectId(select.value))) return;
       subject = select.value;
       automaticSubject=false;
       try { dependencies.storage?.setItem("resonance-library-subject", subject); }

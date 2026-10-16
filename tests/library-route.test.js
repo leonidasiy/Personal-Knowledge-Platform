@@ -137,6 +137,17 @@ Deno.test("Library sources appear on each represented primary subject and legacy
   assert(rejected, "Unknown selected subjects must fail validation.");
 });
 
+Deno.test("Library All shelf includes every subject and unclassified sources newest first without duplicates", () => {
+  const newer = { ...sourceB, approvedAt: "2026-09-19T08:00:00.000Z", primarySubject: "computing" };
+  const tied = { ...newer, id: "source-c", primarySubject: undefined };
+  const knowledge = SUBJECTS.slice(0, 2).map((subject, i) => ({ knowledgeId: `k${i}`, sourceId: source.id, summary: "A retained idea.", questionLocked: true, primarySubject: subject.id }));
+  const html = renderLibraryRoute({ ...baseModel(), collection: { ...baseModel().collection, subject: "all", items: [source, newer, tied], nextCursor: "next-page" }, knowledge });
+  assert(html.includes('value="all" selected>All</option>'), "All must be selectable using the existing accessible shelf control.");
+  const cards = [...html.matchAll(/data-library-source="([^"]+)"/g)].map(match => match[1]);
+  assert(cards.join(",") === "source-c,source-b,source-a", "All includes classified, multi-subject and unclassified sources once, sorted newest first with stable ties.");
+  assert(html.includes("3 loaded sources") && html.includes("data-library-load-more"), "All retains accurate counts and source pagination.");
+});
+
 Deno.test("Library keeps a classified source on its shelf while retry hides its published knowledge", () => {
   const classified = { ...source, primarySubject: "music" };
   for (const state of ["completed", "per-point-quiz-loop", "retryable-failure"]) {
@@ -148,7 +159,7 @@ Deno.test("Library keeps a classified source on its shelf while retry hides its 
 });
 
 Deno.test("Library restores subject selection and reports unavailable or invalid stored preferences", async () => {
-  for (const stored of [SUBJECTS[1].id, "unclassified", "invalid", "throws", null]) {
+  for (const stored of [SUBJECTS[1].id, "all", "unclassified", "invalid", "throws", null]) {
     const errors = /** @type {string[]} */ ([]);
     const page = createLibraryPage({
       fetch: async input => {
@@ -163,7 +174,7 @@ Deno.test("Library restores subject selection and reports unavailable or invalid
       createObserver: () => null, schedule: () => 1, cancel: () => {}, onNotice: () => {}, onError: message => errors.push(message), rerender: () => {},
     });
     await page.load();
-    const selected = stored === "unclassified" ? stored : SUBJECTS[1].id;
+    const selected = stored === "all" || stored === "unclassified" ? stored : SUBJECTS[1].id;
     assert(page.render({}).includes(`value="${selected}" selected`), "Valid saved choice or newest-source default must be selected.");
     assert(errors.length === (stored === "throws" || stored === "invalid" ? 1 : 0), "Invalid and inaccessible preferences need an explicit notice, missing storage does not.");
   }

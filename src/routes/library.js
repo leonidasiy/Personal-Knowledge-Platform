@@ -77,8 +77,8 @@ function renderCollection(model) {
   }
   const ordered = [...collection.items].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt) || b.id.localeCompare(a.id));
   const selected = collection.subject ?? librarySourceSubjects(ordered[0], model.knowledge ?? [])[0];
-  const subjects = [...SUBJECTS, { id: "unclassified", label: "Unclassified" }];
-  const visible = ordered.filter(source => librarySourceSubjects(source, model.knowledge ?? []).includes(selected));
+  const subjects = [{ id: "all", label: "All" }, ...SUBJECTS, { id: "unclassified", label: "Unclassified" }];
+  const visible = selected === "all" ? ordered : ordered.filter(source => librarySourceSubjects(source, model.knowledge ?? []).includes(selected));
   const subjectControl = shellMarkup(6, subjects.map(s => shellMarkup(7, s.id, selected === s.id ? "selected" : "", escapeHtml(s.label))).join(""), visible.length, visible.length === 1 ? "" : "s");
   const content = shellMarkup(8, subjectControl, visible.map(source => renderSource(model, source)).join(""), visible.length ? "" : shellMarkup(9));
   const retainedNotice = collection.message === null
@@ -201,7 +201,7 @@ function sourceHasAudioVideo(source) {
 function validate(model) {
   if (
     !Array.isArray(model.collection.items) ||
-    (model.collection.subject !== undefined && model.collection.subject !== null && model.collection.subject !== "unclassified" && !isSubjectId(model.collection.subject)) ||
+    (model.collection.subject !== undefined && model.collection.subject !== null && model.collection.subject !== "all" && model.collection.subject !== "unclassified" && !isSubjectId(model.collection.subject)) ||
     (model.knowledge !== undefined && !Array.isArray(model.knowledge)) ||
     (model.collection.searchScope !== undefined && model.collection.searchScope !== "sources" && model.collection.searchScope !== "knowledge") ||
     (model.knowledgeSearchResults !== undefined && (!Array.isArray(model.knowledgeSearchResults) || model.knowledgeSearchResults.some((result) => !isKnowledgeSearchResult(result)))) ||
