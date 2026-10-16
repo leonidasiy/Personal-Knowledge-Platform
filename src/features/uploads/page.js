@@ -223,7 +223,6 @@ export function createUploadPage(dependencies) {
       source: { ...context.source, title: result.value.title },
     };
     dependencies.onRenamed(context.source.id, context.source.title);
-    message = shellMarkup(17);
     renameAttempt = null;
     dependencies.onChange();
     return true;
@@ -330,9 +329,7 @@ export function createUploadPage(dependencies) {
             : "")
         : "", input === "pdf"
         ? shellMarkup(9, escape(String(draft.get("pageRange") ?? "")))
-        : "", shellMarkup(input === "link" ? 37 : 38), context === null
-        ? ""
-        : shellMarkup(10), busy ? " disabled" : "", busy ? input === "link" ? shellMarkup(35) : "Uploading…" : input === "link" ? shellMarkup(36) : shellMarkup(20), escape(message));
+        : "", shellMarkup(input === "link" ? 37 : 38), busy ? " disabled" : "", busy ? input === "link" ? shellMarkup(35) : "Uploading…" : input === "link" ? shellMarkup(36) : shellMarkup(20), escape(message));
   }
   /** @param {HTMLElement} root */
   function bind(root) {
@@ -358,19 +355,11 @@ export function createUploadPage(dependencies) {
       event.preventDefault();
       void submit(new FormData(form));
     });
-    root.querySelector("[data-upload-save-title]")?.addEventListener(
-      "click",
-      () => {
-        remember(new FormData(form));
-        void saveTitle(draft);
-      },
-    );
   }
   return Object.freeze({
     select,
     render,
     load,
-    saveTitle,
     submit,
     remember,
     bind,

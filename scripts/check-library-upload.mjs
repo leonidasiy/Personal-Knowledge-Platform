@@ -110,8 +110,7 @@ try {
   }
   await page.goto(`${origin}/#upload?sourceId=source-a&runId=run-a`);
   await page.locator('[name=title]').fill('Renamed synthetic source');
-  await page.getByRole('button',{name:'Save title',exact:true}).click();
-  await page.getByText('Title saved. You can upload material when ready.').waitFor();
+  assert.equal(await page.getByRole('button',{name:'Save title',exact:true}).count(),0);
   await page.locator('[name=content]').fill('Retained synthetic material');
   await page.locator('[name=attested]').check();
   await page.getByRole('button',{name:'Upload and process'}).click();

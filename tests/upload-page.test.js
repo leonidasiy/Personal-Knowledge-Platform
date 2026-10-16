@@ -154,7 +154,7 @@ Deno.test("Upload resolves bound identity independently of Library and rejects m
     "Conflict must not disclose internal IDs.",
   );
 });
-Deno.test("Upload saves a source title separately with the exact concurrency guard", async () => {
+Deno.test("Upload saves a source title on submission with the exact concurrency guard", async () => {
   const renamed = /** @type {string[]} */ ([]);
   const page = createUploadPage({
     ...deps,
@@ -194,10 +194,9 @@ Deno.test("Upload saves a source title separately with the exact concurrency gua
   await page.load("#upload?sourceId=source-a&runId=run-a");
   const form = new FormData();
   form.set("title", "New title");
-  assert(
-    await page.saveTitle(form),
-    "Title can be saved without material or attestation.",
-  );
+  form.set("content", "Synthetic material");
+  assert(!page.render().includes("Save title"), "Submission is the only save action.");
+  assert(await page.submit(form), "Submission saves the title automatically.");
   assert(
     renamed[0] === "source-a:New title" &&
       page.render().includes('value="New title"'),
@@ -304,7 +303,8 @@ Deno.test("A rename response cannot change a different Upload route", async () =
   await page.load("#upload?sourceId=source-a&runId=run-a");
   const form = new FormData();
   form.set("title", "Changed");
-  const pending = page.saveTitle(form);
+  form.set("content", "Synthetic material");
+  const pending = page.submit(form);
   await page.load("#upload");
   delayed.resolve(
     Response.json({
@@ -682,4 +682,28 @@ Deno.test('URL capture carries original-asset bundles through upload in text-onl
  const page=createUploadPage({...deps,fetch:async()=>new Response(new Uint8Array([80,75,80,67,1]),{headers:{'content-type':'application/x-knowledge-url-capture'}}),upload:async(_id,form)=>{
   const file=form.get('file');if(!(file instanceof File))throw new Error('Captured material is uploaded');assert(file.type==='application/x-knowledge-url-capture'&&file.name.endsWith('.pkpc'),'Original assets keep their capture type');assert(form.get('imageProcessing')==='off','PDF sheets never become images');return {ok:true,message:'Processing started'};
  }});await page.select('link');const form=new FormData();form.set('url','https://publisher.example/lesson');form.set('title','Captured lesson');assert(await page.submit(form),'Captured figures and PDF use normal source upload');
+});
+
+Deno.test('Capture and process saves the bound source title before uploading captured material', async () => {
+  const calls = /** @type {string[]} */ ([]);
+  const page = createUploadPage({...deps, fetch: async (url, init) => {
+    if (String(url).includes('upload-context')) return Response.json({result:{source,runId:'run-a',reason:'Copy required.'}});
+    if (String(url).endsWith('/url-capture')) {
+      calls.push('capture');
+      return new Response('%PDF-fixture',{headers:{'content-type':'application/pdf'}});
+    }
+    calls.push('rename');
+    assert(JSON.parse(String(init?.body)).title === 'Edited capture title', 'Save the current title.');
+    return Response.json({result:{sourceId:source.id,runId:'run-a',title:'Edited capture title',revision:2,reused:false}});
+  }, upload: async (id, form, context) => {
+    calls.push('upload');
+    assert(id === source.id && context?.source.title === 'Edited capture title' && form.get('title') === 'Edited capture title', 'The saved title accompanies captured material.');
+    return {ok:true,message:'Processing started.'};
+  }});
+  await page.load('#upload?sourceId=source-a&runId=run-a');
+  await page.select('link');
+  assert(!page.render().includes('Save title'), 'Capture has no separate save action.');
+  const form = new FormData();form.set('title','Edited capture title');form.set('url',source.canonicalUrl);
+  assert(await page.submit(form), 'Capture and process completes the save and upload together.');
+  assert(calls.join(',') === 'capture,rename,upload', 'Save the title before uploading captured material.');
 });

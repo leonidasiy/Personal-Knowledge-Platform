@@ -986,18 +986,18 @@ Deno.test('Library polls only active source statuses every minute and dispose in
  await page.resume();assert(timers.size===1,'Restoring a mounted controller resumes exactly one poll.');page.dispose();
 });
 
-Deno.test('Cancel processing asks confirmation, preserves data on decline, and clears confirmed run output before refresh finishes',async()=>{
- let confirmed=false,canceled=false,posts=0,confirmations=0,refreshPending=false;
+Deno.test('Cancel processing asks confirmation, preserves data on decline, and removes the source card before refresh finishes',async()=>{
+ let confirmed=false,canceled=false,disabled=false,posts=0,confirmations=0,refreshPending=false;
  /** @type {(response:Response)=>void} */let finishRefresh=()=>{};
  const pending=new Promise(resolve=>{finishRefresh=resolve;});
  const active={...workflowStatus('extraction-loop'),run:{...workflowStatus('extraction-loop').run,progress:sampleProgress()}};
  const knowledgeCard={knowledgeId:'knowledge-a',sourceId:source.id,sourceRevision:source.revision,questionId:'q-a',title:'Point',summary:'A beat groups durations into recurring patterns.',sourceUrl:source.canonicalUrl,evidenceAnchorIds:['anchor'],media:null,questionLocked:false,sourceClassification:null,sourceClassificationRevision:0};
- const page=createLibraryPage({fetch:async(input,init)=>{const url=new URL(String(input));if(url.pathname.endsWith('/source-library'))return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});if(url.pathname.endsWith('/library-knowledge')){if(canceled){refreshPending=true;return await pending;}return Response.json({result:{items:[knowledgeCard]}});}if(url.pathname.endsWith('/control')){posts++;const command=JSON.parse(String(init?.body));assert(command.action==='abandon'&&command.runId===active.run.runId,'Cancel command must target the selected run.');canceled=true;return Response.json({result:{...workflowStatus('abandoned').run,revision:2}});}return Response.json({result:canceled?workflowStatus('abandoned'):active});},gatewayBaseUrl:'https://app.example/',escapeHtml:v=>v,formatDate:v=>v,createId:()=> 'id',confirmDisable:()=>true,confirmCancel:()=>{confirmations++;return confirmed;},createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
+ const page=createLibraryPage({fetch:async(input,init)=>{const url=new URL(String(input));if(url.pathname.endsWith('/source-library'))return Response.json({result:{items:disabled?[]:[source],interestAreas:[],nextCursor:null}});if(url.pathname.endsWith('/disable')){assert(canceled,'Stop processing before removing the source.');const command=JSON.parse(String(init?.body));assert(command.sourceId===source.id&&command.expectedRevision===source.revision,'Remove only the selected source at its known revision.');disabled=true;return Response.json({result:{...source,state:'disabled',revision:source.revision+1}});}if(url.pathname.endsWith('/library-knowledge')){if(canceled){refreshPending=true;return await pending;}return Response.json({result:{items:[knowledgeCard]}});}if(url.pathname.endsWith('/control')){posts++;const command=JSON.parse(String(init?.body));assert(command.action==='abandon'&&command.runId===active.run.runId,'Cancel command must target the selected run.');canceled=true;return Response.json({result:{...workflowStatus('abandoned').run,revision:2}});}return Response.json({result:canceled?workflowStatus('abandoned'):active});},gatewayBaseUrl:'https://app.example/',escapeHtml:v=>v,formatDate:v=>v,createId:()=> 'id',confirmDisable:()=>true,confirmCancel:()=>{confirmations++;return confirmed;},createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:()=>{},rerender:()=>{}});
  await page.load();
  /** @type {(()=>void)|null} */let listener=null;
  page.bind(/** @type {HTMLElement} */(/** @type {unknown} */({querySelector:()=>null,querySelectorAll:(/** @type {string} */selector)=>selector==='[data-library-workflow-retry], [data-library-workflow-cancel]'?[{hasAttribute:(/** @type {string} */name)=>name==='data-library-workflow-cancel',getAttribute:(/** @type {string} */name)=>name==='data-library-workflow-cancel'?'run-source-a':'1',addEventListener:(/** @type {string} */_event,/** @type {()=>void} */handler)=>{listener=handler;}}]:[]})));
  if(listener===null)throw new Error('Cancel action not bound.');const click=/** @type {()=>void} */(listener);click();await new Promise(r=>setTimeout(r,0));assert(confirmations===1&&posts===0,'Declining confirmation cannot dispatch cancellation.');assert(page.render({}).includes(knowledgeCard.summary),'Declined cancellation preserves extracted content.');
- confirmed=true;click();await new Promise(r=>setTimeout(r,0));assert(confirmations===2&&posts===1&&refreshPending,'Confirmed cancellation dispatches once and immediately refreshes knowledge.');assert(!page.render({}).includes(knowledgeCard.summary),'Purged summaries disappear while the refresh is still pending.');assert(!page.renderProcessingStatus().includes('Processing'),'Confirmed canceled run stops the processing indicator immediately.');finishRefresh(Response.json({result:{items:[]}}));await new Promise(r=>setTimeout(r,0));page.dispose();
+ confirmed=true;click();await new Promise(r=>setTimeout(r,0));assert(confirmations===2&&posts===1&&refreshPending,'Confirmed cancellation dispatches once and immediately refreshes knowledge.');assert(disabled&&!page.render({}).includes('data-library-source="source-a"'),'Canceled source card disappears while the refresh is still pending.');assert(!page.render({}).includes(knowledgeCard.summary),'Purged summaries disappear while the refresh is still pending.');assert(!page.renderProcessingStatus().includes('Processing'),'Confirmed canceled run stops the processing indicator immediately.');finishRefresh(Response.json({result:{items:[]}}));await new Promise(r=>setTimeout(r,0));canceled=false;await page.load();assert(!page.render({}).includes('data-library-source="source-a"'),"Removed source stays absent after reloading Library.");page.dispose();
 });
 
 Deno.test('Extraction redirect opens a reused source on a later Library page and focuses its own shelf card',async()=>{
@@ -1202,4 +1202,37 @@ Deno.test("failed knowledge search keeps its query and retries without displayin
     assert(results.includes('data-library-knowledge="decoder"') && results.includes(`${phrase}, each with three sub-components.`), "Retry returns the individual matching knowledge card.");
     assert(results.includes(`href="${citation}"`) && !results.includes("data-library-source=") && !results.includes("could not complete"), "Valid section provenance is retained without error or source-card fallback.");
   } finally { page.dispose(); }
+});
+
+Deno.test('Cancellation keeps the source and a retry action until both run cancellation and removal succeed', async () => {
+  for (const failure of ['control', 'disable']) {
+    let canceled = false, disabled = false, failed = false;
+    const calls = /** @type {{path:string,key:string}[]} */ ([]);
+    const errors = /** @type {string[]} */ ([]);
+    const page = createLibraryPage({fetch:async(input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/source-library')) return Response.json({result:{items:disabled?[]:[source],interestAreas:[],nextCursor:null}});
+      if (path.endsWith('/library-knowledge')) return Response.json({result:{items:[]}});
+      if (path.endsWith('/control') || path.endsWith('/disable')) {
+        const command = JSON.parse(String(init?.body));calls.push({path,key:command.idempotencyKey});
+        if (!failed && path.endsWith('/'+failure)) {failed=true;return Response.json({error:'FixtureUnavailable'},{status:503});}
+        if (path.endsWith('/control')) {canceled=true;return Response.json({result:{...workflowStatus('abandoned').run,revision:2}});}
+        assert(canceled, 'Removal must follow confirmed cancellation.');disabled=true;
+        return Response.json({result:{...source,state:'disabled',revision:source.revision+1}});
+      }
+      return Response.json({result:canceled?{...workflowStatus('abandoned'),run:{...workflowStatus('abandoned').run,revision:2}}:workflowStatus('extraction-loop')});
+    },gatewayBaseUrl:'https://app.example/',escapeHtml:v=>v,formatDate:v=>v,createId:()=> 'id',confirmDisable:()=>true,confirmCancel:()=>true,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:()=>{},onError:message=>errors.push(message),rerender:()=>{}});
+    await page.load();
+    /** @type {(()=>void)|null} */ let click=null;
+    page.bind(/** @type {HTMLElement} */(/** @type {unknown} */({querySelector:()=>null,querySelectorAll:(/** @type {string} */selector)=>selector==='[data-library-workflow-retry], [data-library-workflow-cancel]'?[{hasAttribute:()=>true,getAttribute:(/** @type {string} */name)=>name==='data-library-workflow-cancel'?'run-source-a':'1',addEventListener:(/** @type {string} */_event,/** @type {()=>void} */handler)=>{click=handler;}}]:[]})));
+    if (click===null) throw new Error('Cancel action missing.');
+    const cancel=/** @type {()=>void} */(click);cancel();await new Promise(r=>setTimeout(r,0));
+    assert(errors.length===1 && page.render({}).includes('data-library-source="source-a"') && page.render({}).includes('data-library-workflow-cancel'), 'Failed cancellation/removal retains a truthful retry action.');
+    if (failure==='control') assert(calls.length===1, 'A failed cancellation must not remove the source.');
+    cancel();await new Promise(r=>setTimeout(r,0));
+    assert(disabled && !page.render({}).includes('data-library-source="source-a"'), 'Retry completes removal after cancellation.');
+    const controls=calls.filter(c=>c.path.endsWith('/control'));assert(controls.length===2 && controls[0].key===controls[1].key, 'Retry reuses the cancellation identity.');
+    const removals=calls.filter(c=>c.path.endsWith('/disable'));assert(removals.every(c=>c.key===removals[0].key), 'Removal retry reuses its identity.');
+    page.dispose();
+  }
 });

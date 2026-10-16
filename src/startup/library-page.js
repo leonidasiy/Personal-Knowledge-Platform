@@ -468,27 +468,36 @@ export function createLibraryPage(dependencies) {
     const command=cancellationRetries.get(runId) ?? {runId,expectedRevision,idempotencyKey:`workflow-${cancel?"cancel":"retry"}:${createId()}`,quizzes};
     if(cancel)cancellationRetries.set(runId,command);
     const result = await gateway[cancel?"cancelWorkflow":"retryWorkflow"](command);
-    pendingSourceId=null;
     if (!result.ok) {
+      pendingSourceId=null;
       onError(cancel ? libraryCopy(5) : friendly(result.error));
       await loadWorkflowStatuses(true);
       rerender();
       return;
     }
     if(cancel){
-      cancellationRetries.delete(runId);
       const removed=new Set(status.run.progress?.knowledgePoints.map(point=>point.knowledgeId)??[]);
       for(const id of removed)cancelledKnowledgeIds.add(id);
       knowledge=knowledge.filter(point=>!removed.has(point.knowledgeId));
       knowledgeSearchResults=knowledgeSearchResults.filter(point=>!removed.has(point.knowledgeId));
-      workflowStatuses=workflowStatuses.map(candidate=>candidate.sourceId===status.sourceId?{...candidate,run:null,reasonCode:null,message:libraryCopy(6)}:candidate);
+      const disabled=await gateway.disable({sourceId:status.sourceId,expectedRevision:source.revision,idempotencyKey:`${command.idempotencyKey}:disable`});
+      if(!disabled.ok){
+        pendingSourceId=null;
+        onError(libraryCopy(5));
+        await loadWorkflowStatuses(true);
+        rerender();
+        return;
+      }
+      cancellationRetries.delete(runId);
+      removeSource(status.sourceId);
     }
+    pendingSourceId=null;
     onNotice(
       cancel ? libraryCopy(6) : libraryCopy(7),
     );
     rerender();
     if(cancel)await loadKnowledge(true);
-    trackedSourceIds.add(status.sourceId);
+    if(!cancel)trackedSourceIds.add(status.sourceId);
     await loadWorkflowStatuses(true);
   }
 
