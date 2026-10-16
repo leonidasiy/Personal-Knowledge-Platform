@@ -1,4 +1,5 @@
 // @ts-check
+import { URL_CAPTURE_TYPE } from "../src/features/knowledge-workflows/url-capture.js";
 
 /** @import { Result, SourceIngestionFailure } from "../src/features/source-library/ingestion-contracts.js" */
 
@@ -152,7 +153,7 @@ function validIdentifier(value) {
 
 /** @param {unknown} value @returns {value is string} */
 function supportedContentType(value) {
-  return typeof value === "string" && (value.startsWith("text/") || value === "application/pdf" || value === "application/vnd.openxmlformats-officedocument.presentationml.presentation" || value === "image/png" || value === "image/jpeg" || value === "image/webp" || value === "image/gif" || value === "application/x-knowledge-images");
+  return typeof value === "string" && (value.startsWith("text/") || value === "application/pdf" || value === "application/vnd.openxmlformats-officedocument.presentationml.presentation" || value === "image/png" || value === "image/jpeg" || value === "image/webp" || value === "image/gif" || value === "application/x-knowledge-images" || value === URL_CAPTURE_TYPE);
 }
 
 export {};

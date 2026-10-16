@@ -1,6 +1,7 @@
 // @ts-check
 
 import { R2SourceContentStore } from "../worker/source-content-r2.js";
+import { URL_CAPTURE_TYPE, packUrlCapture } from "../src/features/knowledge-workflows/url-capture.js";
 /** @import { Result, SourceIngestionFailure } from "../src/features/source-library/ingestion-contracts.js" */
 /** @typedef {{readonly reservationId:string,readonly accountScope:string,readonly ownerId:string,readonly objectKey:string,readonly operation:"write"|"delete",readonly expectedStoredBytes:number,readonly month:string,readonly reservedAt:string}} Reservation */
 
@@ -93,6 +94,20 @@ Deno.test("R2 source content uses a server object ID and private owner metadata"
   const imageBundle = await new R2SourceContentStore({ bucket, capacity: usage.port, capacityOwnerId: "owner-a" }).stage({ ...command(), objectId: "opaque-images", mediaType: "application/x-knowledge-images" });
   assertEquals(imageBundle.ok, true);
   assertEquals(bucket.puts[1].options.httpMetadata.contentType, "application/x-knowledge-images");
+});
+
+Deno.test("R2 retains a parsed URL capture with its original bytes and content type", async () => {
+  const packed=packUrlCapture({sourceUrl:"https://example.org/article",responseUrl:"https://example.org/article",pdf:new TextEncoder().encode("%PDF-fixture"),images:[]});
+  if(!packed.ok)throw new Error(packed.error.kind);
+  const bucket=new Bucket(),usage=capacity();
+  const store=new R2SourceContentStore({bucket,capacity:usage.port,capacityOwnerId:"owner-a"});
+  const result=await store.stage({...command(),mediaType:URL_CAPTURE_TYPE,content:packed.value});
+  if(!result.ok)throw new Error(result.error.kind);
+  assertEquals(bucket.puts[0].options.httpMetadata.contentType,URL_CAPTURE_TYPE);
+  const read=await store.read("owner-a",result.value.objectKey);
+  if(!read.ok)throw new Error(read.error.kind);
+  assertEquals(read.value.length,packed.value.length);
+  assertEquals(read.value.join(","),packed.value.join(","));
 });
 
 Deno.test("R2 source content marks provider failures uncertain and blocks false cleanup success", async () => {
