@@ -490,6 +490,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       bucket: manualConfiguration.bucket,
       capacityOwnerId: configuration.value.ownerId,
       capacity: new D1R2CapacityLedger({
+        bucket: manualConfiguration.bucket,
         database: /** @type {import("./r2-capacity-d1.js").D1DatabasePort} */ (
           /** @type {unknown} */ (configuration.value.sourceLibraryDatabase)
         ),

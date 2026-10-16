@@ -19,7 +19,7 @@ const freeze = Object.freeze;
 export class D1R2CapacityLedger {
   #dependencies;
 
-  /** @param {{readonly database:D1DatabasePort,readonly now:()=>string,readonly createId:()=>string,readonly policy:{readonly accountScope:string,readonly storedBytesLimit:number,readonly classAMonthlyLimit:number,readonly classBMonthlyLimit:number,readonly observationMaximumAgeMs:number}}} dependencies */
+  /** @param {{readonly database:D1DatabasePort,readonly bucket?:Pick<import('./source-content-r2.js').R2BucketPort,'list'>,readonly now:()=>string,readonly createId:()=>string,readonly policy:{readonly accountScope:string,readonly storedBytesLimit:number,readonly classAMonthlyLimit:number,readonly classBMonthlyLimit:number,readonly observationMaximumAgeMs:number}}} dependencies */
   constructor(dependencies) {
     if (
       typeof dependencies?.database?.prepare !== "function" ||
@@ -69,7 +69,7 @@ export class D1R2CapacityLedger {
     const staleAfter = new Date(
       Date.parse(reservedAt) - policy.observationMaximumAgeMs,
     ).toISOString();
-    try {
+    for(let refreshed=false;;){try {
       const results = await this.#dependencies.database.batch([
         this.#dependencies.database.prepare(
           "INSERT INTO source_r2_monthly_capacity (account_scope, usage_month, class_a_operations, class_b_operations, updated_at) VALUES (?, ?, 0, 0, ?) ON CONFLICT(account_scope, usage_month) DO NOTHING",
@@ -96,8 +96,41 @@ export class D1R2CapacityLedger {
         : fail({ kind: "R2CapacityPersistenceFailed" });
     } catch (error) {
       if (!(error instanceof Error)) throw error;
+      if(!refreshed&&mapReservationFailure(error.message).kind==='R2CapacityReservationStale'&&typeof this.#dependencies.bucket?.list==='function'){
+        const observed=await this.#refreshObservation(reservation);
+        if(!observed.ok)return observed;
+        refreshed=true;continue;
+      }
       return fail(mapReservationFailure(error.message));
-    }
+    }}
+  }
+
+  /** @param {R2CapacityReservation} reservation @returns {Promise<Result<null,SourceIngestionFailure>>} */
+  async #refreshObservation(reservation){
+    const {database,bucket,policy}=this.#dependencies;
+    if(typeof bucket?.list!=='function')return fail({kind:'R2CapacityReservationStale'});
+    try{
+      const seeded=await database.prepare('INSERT INTO source_r2_monthly_capacity (account_scope, usage_month, class_a_operations, class_b_operations, updated_at) VALUES (?, ?, 0, 0, ?) ON CONFLICT(account_scope, usage_month) DO NOTHING').bind(policy.accountScope,reservation.month,reservation.reservedAt).run();
+      if(!seeded.success)return fail({kind:'R2CapacityPersistenceFailed'});
+      let total=0;
+      /** @type {string|undefined} */let cursor;
+      const seen=new Set();
+      do{
+        // Metadata listing is Class A usage; reserve each call without resetting counters.
+        const charged=await database.prepare('UPDATE source_r2_monthly_capacity SET class_a_operations=class_a_operations+1, updated_at=? WHERE account_scope=? AND usage_month=? AND class_a_operations<? RETURNING class_a_operations').bind(reservation.reservedAt,policy.accountScope,reservation.month,policy.classAMonthlyLimit).first();
+        if(charged===null)return fail({kind:'R2ClassAOperationsExceeded'});
+        if(!isRecord(charged)||!isPositiveInteger(charged.class_a_operations))return fail({kind:'R2CapacityPersistenceFailed'});
+        const page=await bucket.list(cursor===undefined?{}:{cursor});
+        if(!isRecord(page)||!Array.isArray(page.objects)||typeof page.truncated!=='boolean')return fail({kind:'R2CapacityPersistenceFailed'});
+        for(const object of page.objects){if(!isRecord(object)||typeof object.size!=='number'||!Number.isSafeInteger(object.size)||object.size<0||!Number.isSafeInteger(total+object.size))return fail({kind:'R2CapacityPersistenceFailed'});total+=object.size;}
+        if(!page.truncated)break;
+        if(!isNonEmptyText(page.cursor)||seen.has(page.cursor))return fail({kind:'R2CapacityPersistenceFailed'});
+        cursor=page.cursor;seen.add(cursor);
+      }while(true);
+      // Keep outstanding write reserves and any larger prior accounting estimate.
+      const updated=await database.prepare("UPDATE source_r2_account_capacity SET stored_bytes=MAX(stored_bytes,?+COALESCE((SELECT SUM(expected_stored_bytes) FROM source_r2_reservations WHERE account_scope=? AND operation='write' AND state IN ('active','uncertain')),0)), observed_at=MAX(observed_at,?), updated_at=? WHERE account_scope=?").bind(total,policy.accountScope,reservation.reservedAt,reservation.reservedAt,policy.accountScope).run();
+      return updated.success&&updated.meta?.changes===1?{ok:true,value:null}:fail({kind:'R2CapacityPersistenceFailed'});
+    }catch(error){if(!(error instanceof Error))throw error;return fail({kind:'R2CapacityPersistenceFailed'});}
   }
 
   /** @param {unknown} command @returns {Promise<Result<null,SourceIngestionFailure>>} */
