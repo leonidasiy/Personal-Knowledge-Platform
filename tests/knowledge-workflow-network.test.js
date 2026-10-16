@@ -21,3 +21,11 @@ Deno.test("network policy requires DNS answers and rejects private answers befor
   assertEquals(publicResult.ok, true);
   if (publicResult.ok) assertEquals(publicResult.value.length, 2);
 });
+
+Deno.test('serialized browser address policy has no dependency on bundle-local helpers', () => {
+  const isolated = new Function(`return (${isForbiddenAddress.toString()});`)();
+  for (const [address, forbidden] of [
+    ['8.8.8.8', false], ['2606:4700:4700::1111', false],
+    ['127.0.0.1', true], ['192.168.1.1', true], ['::ffff:127.0.0.1', true], ['', true],
+  ]) assertEquals(isolated(address), forbidden);
+});

@@ -4,12 +4,10 @@
 
 /** @typedef {{ readonly kind: "WorkflowDnsLookupFailed" | "WorkflowPrivateAddressRejected" }} WorkflowNetworkFailure */
 
-/** @param {unknown} value @returns {value is string} */
-function text(value) { return typeof value === "string" && value.trim() !== ""; }
-
+// Serialized into the browser sandbox; keep this function self-contained.
 /** @param {string} value @returns {boolean} */
 export function isForbiddenAddress(value) {
-  if (!text(value)) return true;
+  if (typeof value !== "string" || !value.trim()) return true;
   const normalized = value.trim().toLowerCase().replace(/^\[|\]$/gu, "");
   if (normalized.includes(".")) {
     const parts = normalized.split(".").map(Number);
