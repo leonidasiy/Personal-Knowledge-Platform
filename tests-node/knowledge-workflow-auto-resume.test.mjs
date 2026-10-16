@@ -91,3 +91,21 @@ test('removed and superseded runs are excluded from automatic recovery',async()=
     }finally{f.db.close();}
   }
 });
+
+
+test('one broken workflow instance cannot prevent later sources from recovering',async()=>{
+  const f=await fixture();try {
+    const second={...f.run,runId:'run-second',sourceId:'source-b',idempotencyKey:'second'};
+    f.unwrap(await new D1KnowledgeWorkflowRepository({database:f.dependencies.database,logger:()=>{}}).insert(second));
+    f.db.prepare("INSERT INTO library_sources SELECT owner_id,'source-b','https://example.test/second','https://example.test/second',title,description,adapter_json,identity_evidence_json,state,approved_at,updated_at,revision FROM library_sources WHERE source_id='source-a'").run();
+    const get=f.dependencies.binding.get,logs=[];
+    f.dependencies.logger=e=>logs.push(e);
+    f.dependencies.binding.get=async id=>{if(id.endsWith('run-auto'))throw new Error('Fixture instance unavailable');return get(id);};
+    assert.equal((await f.tick()).ok,false);
+    const stopped=f.unwrap(await f.service.status({ownerId:'owner-a',runId:'run-second'}));assert.equal(stopped.state,'retryable-failure');
+    f.advanceTime(120_000);assert.equal((await f.tick()).ok,false);
+    assert.equal(f.unwrap(await f.service.status({ownerId:'owner-a',runId:'run-second'})).state,'per-point-quiz-loop');assert.equal(f.counts().restarts,1);
+    assert(logs.some(e=>e.event==='knowledge-workflow-auto-resume-run-failure'&&e.runId==='run-auto'));
+    assert(logs.some(e=>e.event==='knowledge-workflow-auto-resume-success'&&e.runId==='run-second'));
+  }finally{f.db.close();}
+});

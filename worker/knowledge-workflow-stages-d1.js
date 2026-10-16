@@ -1,3 +1,4 @@
+import {observeWorkflowDatabase} from './knowledge-workflow-database.js';
 // @ts-check
 import {workflowPersistenceDiagnostic} from "./knowledge-workflow-logging.js";
 import {AgentExecutionBoundaryFailure} from '../src/features/knowledge-workflows/harness.js';
@@ -17,18 +18,12 @@ export class D1WorkflowStageRepository {
   /** @type {()=>string} */ #now;
   /** @type {(entry:{event:string,stage?:string,failureKind?:string,field?:string,diagnosticToken?:string})=>void} */ #logger;
   /** @param {{database:Database,now:()=>string,logger?:(entry:{event:string,stage?:string,failureKind?:string,field?:string,diagnosticToken?:string})=>void}} dependencies */
-  constructor(dependencies) { this.#database = dependencies.database; this.#now = dependencies.now; this.#logger=dependencies.logger??(()=>{}); }
+  constructor(dependencies) { this.#database = observeWorkflowDatabase(dependencies.database,dependencies.logger??(()=>{})); this.#now = dependencies.now; this.#logger=dependencies.logger??(()=>{}); }
 
   /** Read retries cannot dispatch a model or repeat an uncertain write.
    * @param {ReturnType<Database["prepare"]>} statement */
   async #readFirst(statement) {
-    for(let attempt=1;;attempt++) {
-      try{return await statement.first();}
-      catch(error){
-        if(attempt===4)throw error;
-        this.#logger({event:"workflow-stage-read-retry",stage:"stage-cache",field:`attempt-${attempt+1}`});
-      }
-    }
+    return statement.first();
   }
 
   /** A claimed call is deliberately never retried: its provider charge/output may be unknown.

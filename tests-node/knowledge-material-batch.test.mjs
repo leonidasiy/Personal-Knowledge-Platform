@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { createKnowledgeWorkflowRuntime } from "../worker/knowledge-workflow-runtime.js";
 import { createKnowledgeWorkflowService } from "../src/features/knowledge-workflows/workflow.js";
 import { createAgentConfigurationLoader } from "../src/features/knowledge-workflows/config.js";
-import { D1QuizRepository } from "../worker/knowledge-workflow-content-d1.js";
+import { D1QuizRepository, D1KnowledgeContentRepository } from "../worker/knowledge-workflow-content-d1.js";
 import { D1KnowledgeWorkflowRepository } from "../worker/knowledge-workflow-d1.js";
 import { D1KnowledgeWorkflowMaterialRepository } from "../worker/knowledge-workflow-material-d1.js";
 import { parseAuthorizedMaterial } from "../src/features/knowledge-workflows/material.js";
@@ -23,6 +23,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
     const migrations = new URL("../worker/migrations/", import.meta.url);
     for (const file of (await readdir(migrations)).filter((name) => name.endsWith(".sql")).sort()) db.exec(await readFile(new URL(file, migrations), "utf8"));
     let interruptCheckpoint = true;
+    const evidenceReads=new Map();
     const database = {
       prepare(query) {
         let values = [];
@@ -34,7 +35,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
           const result = db.prepare(query).run(...values);
           return { success: true, meta: { changes: Number(result.changes) } };
         };
-        return { bind(...bindings) { values = bindings; return this; }, async first() { return db.prepare(query).get(...values) ?? null; }, async all() { return { success: true, results: db.prepare(query).all(...values) }; }, async run() { return execute(); }, execute };
+        return { bind(...bindings) { values = bindings; return this; }, async first() { if(query.startsWith("SELECT evidence_json,evidence_digest")){const key=values[1]+":"+values[2];evidenceReads.set(key,(evidenceReads.get(key)??0)+1);}return db.prepare(query).get(...values) ?? null; }, async all() { return { success: true, results: db.prepare(query).all(...values) }; }, async run() { return execute(); }, execute };
       },
       async batch(statements) {
         db.exec("BEGIN IMMEDIATE");
@@ -43,7 +44,8 @@ test("production upload runtime resumes text batches and processes selected PDF 
       },
     };
     const unwrap = (result) => { assert.equal(result.ok, true, JSON.stringify(result.error)); return result.value; };
-    const logger = () => {};
+    const metricLogs=[];
+    const logger = entry => metricLogs.push(entry);
     const clock = () => new Date().toISOString();
     const ownerId = "batch-owner", runId = "batch-run", sourceId = "batch-source", sourceUrl = "https://example.test/lesson.pdf";
     const repository = new D1KnowledgeWorkflowRepository({ database, logger });
@@ -211,7 +213,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
       }
       run = unwrap(await repository.findById(ownerId, runId));
       const afterQuiz=db.prepare("SELECT COUNT(*) count FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-point-completed:%' AND status='completed'").get(runId).count;
-      assert(afterQuiz-beforeQuiz<=3,"Each runtime execution processes at most three pipelined quiz points");
+      assert(maximumDrafts<=3,"Continuously refilled work preserves the three-draft concurrency ceiling");
       if(afterQuiz>beforeQuiz)quizChunkSizes.push(afterQuiz-beforeQuiz);
       assert.equal(run.extractionDeadlineAt,extractionClock);
     }
@@ -221,7 +223,13 @@ test("production upload runtime resumes text batches and processes selected PDF 
     assert.equal(run.counts.pages, 7);
     assert.equal(run.counts.knowledgePoints, 6);
     assert.equal(run.counts.acceptedQuizzes, 6);
-    assert.deepEqual(quizChunkSizes,[3,3]);
+    assert.deepEqual(quizChunkSizes,[6],"Slots refill within the execution instead of waiting for a new batch");
+    assert.equal([...evidenceReads.entries()].filter(([key])=>key.startsWith(runId+':')).length,6);
+    assert([...evidenceReads.entries()].filter(([key])=>key.startsWith(runId+':')).every(([,count])=>count===1),'Generation, schema repair and review reuse immutable evidence');
+    assert(metricLogs.some(e=>e.event==='workflow-first-usable-quiz'&&e.runId===runId));
+    assert(metricLogs.some(e=>e.event==='workflow-completion'&&e.runId===runId&&e.count===6));
+    assert(metricLogs.some(e=>e.event==='quiz-stage-wait'));
+    assert(metricLogs.some(e=>e.event==='knowledge-model-usage'&&e.runId===runId&&e.costNanodollars===null));
     assert.equal(maximumDrafts,3);assert.equal(activeDrafts,0);assert.equal(reviewOverlappedDraft,true);
     assert.equal(db.prepare("SELECT COUNT(*) count FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-batch-classification:%' AND status='completed'").get(runId).count,1);
     const scratchpad = JSON.parse(db.prepare("SELECT scratchpad_json FROM extraction_scratchpads").get().scratchpad_json);
@@ -252,7 +260,8 @@ test("production upload runtime resumes text batches and processes selected PDF 
       assert.equal(command.binding.originalDigest,`sha256:${createHash('sha256').update(png).digest('hex')}`);
       originals.set(command.knowledgeId,{id:command.binding.imageId,bytes:command.bytes,mediaType:'image/png'});return {ok:true,value:null};
     }};
-    const reviewMedia={readOriginal:async scope=>{assert.equal(scope.ownerId,ownerId);assert.equal(scope.runId,imageRunId);assert.equal(scope.sourceRevision,1);return {ok:true,value:originals.get(scope.knowledgeId)??null};}};
+    let originalReviewReads=0;
+    const reviewMedia={readOriginal:async scope=>{assert.equal(scope.ownerId,ownerId);assert.equal(scope.runId,imageRunId);assert.equal(scope.sourceRevision,1);originalReviewReads++;return {ok:true,value:originals.get(scope.knowledgeId)??null};}};
     let reviewRuntime;
     for (let step = 0; step < 8 && imageRun.state !== "completed"; step++) {
       if (imageRun.state === "awaiting-time-limit-decision") imageRun = unwrap(await imageService.advance({ ownerId, runId:imageRunId, expectedRevision:imageRun.revision, nextState:"extraction-loop" }));
@@ -268,6 +277,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
     assert.deepEqual(materialReviews, []); // The new verdict-only critic replaces the legacy rewriting normalizer.
     assert.deepEqual(qualityReviews,[...Array(6).fill('text'),...Array(3).fill('image')]); // Interrupted text checkpoint replays completed review decisions.
     assert.equal(originals.size,3);
+    assert.equal(originalReviewReads,3,"Generation and review share one original image read per point");
     assert.equal(imageReads, 3); // One acquisition unit per durable execution.
     assert.equal(decodeCalls, 12); // Acquisition, attachment, independent review and media handoff each validate original pixels.
     assert.equal(imageRun.counts.pages, 3);
@@ -364,6 +374,18 @@ test("production upload runtime resumes text batches and processes selected PDF 
     assert.equal(parallelRun.state,'completed');assert.equal(parallelRun.failureKind,null);
     assert.equal(parallelRun.counts.acceptedQuizzes,3);assert.equal(recoveredDrafts,1,'Recovery reuses the saved draft');
     assert.equal(failedQuizReviews,5);assert.equal(modelCalls-beforeRecovery,1,'Successful peers and drafts require no repeated model calls');
+
+    const content=new D1KnowledgeContentRepository({database,logger});
+    const feedbackPoint=db.prepare('SELECT knowledge_id FROM extraction_knowledge_points WHERE run_id=? ORDER BY knowledge_id LIMIT 1').get(runId).knowledge_id;
+    db.prepare('INSERT INTO learner_preference_feedback VALUES (?,?,?,?,?)').run(ownerId,feedbackPoint,-1,'less',clock());
+    for(const selected of [{runId,sourceId,knowledgeId:feedbackPoint},{runId:imageRunId,sourceId:imageSourceId,knowledgeId:stage.point.id},{runId,sourceId:'unclassified-source',knowledgeId:'absent'}]) {
+      const scope={ownerId,...selected};
+      const full=unwrap(await content.reviewContext(scope));
+      const narrow=unwrap(await content.preferenceContext(scope));
+      assert.deepEqual(narrow.lessOften,full.lessOften,'Preference-only reads retain full review preference semantics');
+    }
+    db.prepare("UPDATE learner_preference_feedback SET choice='more',preference=1 WHERE owner_id=? AND knowledge_id=?").run(ownerId,feedbackPoint);
+    assert.deepEqual(unwrap(await content.preferenceContext({ownerId,runId,sourceId,knowledgeId:feedbackPoint})).lessOften,[],'Preference decisions stay fresh');
 
   } finally { db.close(); }
 });

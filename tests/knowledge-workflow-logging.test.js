@@ -103,3 +103,16 @@ Deno.test('persistence diagnostics identify nested platform limits without expos
  const cycle=new Error('private SQL and secret');cycle.cause=cycle;assertEquals(workflowPersistenceDiagnostic(cycle),'database-error');
  assertEquals(workflowPersistenceDiagnostic('private data'),'database-error');
 });
+
+Deno.test('concurrent stages retain independent timers and cost fields stay numeric',()=>{
+  let elapsed=0;
+  /** @type {Record<string,unknown>[]} */const records=[];
+  const logger=createKnowledgeWorkflowLogger({now:()=>new Date(Date.parse('2026-10-16T00:00:00Z')+elapsed).toISOString(),sink:e=>records.push(e)});
+  logger({event:'generate-entry',runId:'run-a',stage:'generation'});
+  elapsed=10;logger({event:'review-entry',runId:'run-a',stage:'review'});
+  elapsed=30;logger({event:'generate-success',runId:'run-a',stage:'generation'});
+  elapsed=50;logger({event:'review-success',runId:'run-a',stage:'review'});
+  assertEquals(records[2].durationMs,30);assertEquals(records[3].durationMs,40);
+  assertEquals(resultOk(logger({event:'knowledge-model-usage',costNanodollars:2000})),true);
+  assertEquals(resultErrorKind(logger(/** @type {never} */({event:'knowledge-model-usage',costNanodollars:'private'}))),'KnowledgeWorkflowLogEntryInvalid');
+});

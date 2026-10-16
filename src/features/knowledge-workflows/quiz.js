@@ -1,3 +1,4 @@
+import {waitForTransientRetry} from './retry.js';
 // @ts-check
 import {AgentExecutionBoundaryFailure} from './harness.js';
 
@@ -96,7 +97,7 @@ import { validateAssembledQuizPair } from "./quiz-pair.js";
  *   readonly purge: (command: { readonly ownerId: string, readonly runId: string, readonly knowledgeId: string, readonly before: string }) => Promise<Result<null, unknown>>
  * }} QuizRepository
  */
-/** @typedef {{ readonly generator: QuestionGenerator, readonly reviewer: QuestionReviewer, readonly repository: QuizRepository, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly knowledgeId?: string, readonly failureKind?: string }) => void, readonly maxAttempts: number, readonly technicalRetries?:boolean, readonly beforeGenerate?: (knowledge: KnowledgePoint) => Promise<Result<boolean, {readonly kind:string}>>, readonly publicationPolicy?: { readonly samplingVersion: string, readonly factualSamplingRatePercent: number } }} QuizDependencies */
+/** @typedef {{ readonly generator: QuestionGenerator, readonly reviewer: QuestionReviewer, readonly repository: QuizRepository, readonly now: () => string, readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly knowledgeId?: string, readonly failureKind?: string,readonly durationMs?:number }) => void, readonly maxAttempts: number, readonly technicalRetries?:boolean, readonly beforeGenerate?: (knowledge: KnowledgePoint) => Promise<Result<boolean, {readonly kind:string}>>, readonly publicationPolicy?: { readonly samplingVersion: string, readonly factualSamplingRatePercent: number } }} QuizDependencies */
 
 const freeze = Object.freeze;
 // Initial generation plus three corrective retries.
@@ -198,9 +199,10 @@ function retryableTechnicalFailure(error) {
  * @param {"QuizGeneratorFailed"|"QuizEvaluatorFailed"} fallback
  * @param {(failure:unknown)=>void} [repair]
  * @param {boolean} [retry]
+ * @param {(failure:unknown,durationMs:number)=>void} [onRetry]
  * @returns {Promise<Result<T,QuizFailure>>}
  */
-async function technicalCall(work,parse,fallback,repair,retry=true) {
+async function technicalCall(work,parse,fallback,repair,retry=true,onRetry=()=>{}) {
   for (let technicalAttempt=1;technicalAttempt<=(retry?4:1);technicalAttempt++) {
     /** @type {Result<T,unknown>} */ let result;
     try { const raw=await work(technicalAttempt); result=raw.ok?parse(raw.value):raw; }
@@ -211,6 +213,8 @@ async function technicalCall(work,parse,fallback,repair,retry=true) {
     if(!retryableTechnicalFailure(failure))return {ok:false,error:{kind:fallback,...(record(failure)&&text(failure.kind)?{causeKind:text(failure.causeKind)?failure.causeKind:failure.kind}:{}),...(record(failure)&&failure.technicalRetriesExhausted===true?{technicalRetriesExhausted:true,technicalAttempts:4}:{})}};
     if(!retry)return {ok:false,error:failure};
     if(failure.technicalRetriesExhausted || technicalAttempt===4)return {ok:false,error:{...failure,technicalRetriesExhausted:true,technicalAttempts:failure.technicalAttempts??technicalAttempt}};
+    const delay=await waitForTransientRetry(failure,technicalAttempt);
+    onRetry(failure,delay);
     repair?.(failure);
   }
   throw new Error("Quiz technical attempt limit violated");
@@ -228,6 +232,8 @@ export function createQuizActorCritic(dependencies) {
       /** @type {QuizDisposition[]} */
       const dispositions = [];
       for (const knowledge of command.points) {
+        /** @param {unknown} failure @param {number} durationMs */
+        const onRetry=(failure,durationMs)=>dependencies.logger({event:'quiz-technical-retry',runId:command.runId,knowledgeId:knowledge.id,failureKind:record(failure)&&text(failure.kind)?failure.kind:'QuizTechnicalFailure',durationMs});
         let existing;
         try { existing = await dependencies.repository.findPublished({ownerId:command.ownerId,runId:command.runId,knowledgeId:knowledge.id}); }
         catch (error) { if (!(error instanceof Error)) throw error; return fail({kind:"QuizPersistenceFailed"},dependencies,command.runId,knowledge.id); }
@@ -266,7 +272,7 @@ export function createQuizActorCritic(dependencies) {
               technicalFeedback=feedback===null?draftRepairFeedback:feedback+"\n"+draftRepairFeedback;
               if(Array.isArray(failure.validationIssues)&&failure.validationIssues.length&&failure.validationIssues.every(text))technicalFeedback+="\nPaired-quiz validation issues from the previous draft; fix every listed issue:\n"+failure.validationIssues.join("\n");
             }
-          },dependencies.technicalRetries!==false);
+          },dependencies.technicalRetries!==false,onRetry);
           if (!generated.ok) {
             if(generated.error.kind!=="QuizDuplicate"&&generated.error.kind!=="QuizDraftUngrounded")return fail(generated.error,dependencies,command.runId,knowledge.id);
             lastFailure=generated.error.kind;
@@ -287,7 +293,7 @@ export function createQuizActorCritic(dependencies) {
           let evaluationRubric="10 means the draft tests the key concept precisely; 1 means irrelevant or too general.";
           const evaluated=await technicalCall(technicalAttempt=>dependencies.reviewer.evaluate({draft,knowledge:{id:knowledge.id,summary:knowledge.summary,evidenceAnchors:knowledge.evidenceAnchors},deterministicValidation:{ok:true},attempt,technicalAttempt,rubric:evaluationRubric}),value=>validEvaluation(value)?{ok:true,value}:{ok:false,error:{kind:"QuizEvaluatorOutputInvalid"}},"QuizEvaluatorFailed",failure=>{
             if(record(failure)&&["QuizEvaluatorOutputInvalid","KnowledgeModelResponseInvalid","KnowledgeModelResponseDuplicateKey"].includes(String(failure.kind)))evaluationRubric="10 means the draft tests the key concept precisely; 1 means irrelevant or too general. Previous response failed format validation. Return the required JSON schema exactly: score is an integer from 1 to 10; reasons is a nonempty string array; feedback is a string; groundingProblems is a string array; knowledgeGroundingProblems is an array of typed claim/kind/reason objects citing an exact current summary claim, or [] when there is no point-level fault. Re-evaluate this unchanged draft using the same quality standards.";
-          },dependencies.technicalRetries!==false);
+          },dependencies.technicalRetries!==false,onRetry);
           if(!evaluated.ok)return fail(evaluated.error,dependencies,command.runId,knowledge.id);
           const evaluation = evaluated.value;
           lastFailure = evaluation.knowledgeGroundingProblems?.length ? "QuizKnowledgeUngrounded" : evaluation.score >= 8 && evaluation.groundingProblems.length === 0 ? null : evaluation.score >= 8 ? "QuizDraftUngrounded" : "QuizScoreBelowThreshold";

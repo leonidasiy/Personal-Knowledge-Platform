@@ -1,3 +1,4 @@
+import {observeWorkflowDatabase} from './knowledge-workflow-database.js';
 import { WEBPAGE_IMAGE_POLICY } from './webpage-image-budget.js';
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import { D1KnowledgeWorkflowRepository } from "./knowledge-workflow-d1.js";
@@ -80,7 +81,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     }
     const runId = payload.runId;
     const ownerId = payload.ownerId;
-    const database = this.env.SOURCE_LIBRARY_DB;
+    let database = this.env.SOURCE_LIBRARY_DB;
     if (!database || typeof database.prepare !== "function" || typeof database.batch !== "function") {
       throw new TypeError("Knowledge workflow database binding is unavailable.");
     }
@@ -90,6 +91,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     const now = () => new Date().toISOString();
     const workerFetch = globalThis.fetch.bind(globalThis);
     const logger = createKnowledgeWorkflowLogger({ sink: (record) => console.info(JSON.stringify(record)), now });
+    database=observeWorkflowDatabase(database,entry=>logger({...entry,ownerId,runId}));
     const acquisition = createAcquisitionClient({
       binding: this.env.PUBLIC_ACQUISITION,
       endpoint: this.env.PUBLIC_ACQUISITION_ENDPOINT,
@@ -133,7 +135,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     });
     const repository = new D1KnowledgeWorkflowRepository({
       database,
-      logger: (entry) => logger({ event: entry.event, runId: entry.runId, ownerId: entry.ownerId, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken }),
+      logger,
     });
     const materialRepository = new D1KnowledgeWorkflowMaterialRepository({
       database,
@@ -176,7 +178,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       endpoint: "https://openrouter.ai/api/v1/chat/completions",
       now,
       nowMs: () => Date.now(),
-      logger: (entry) => logger({ event: entry.event, runId: entry.runId, ownerId, stage: entry.stage, failureKind: entry.failureKind, field: entry.field, diagnosticToken: entry.diagnosticToken, phase: entry.phase, durationMs: entry.durationMs, requestId: entry.requestId, inputTokens: entry.inputTokens, outputTokens: entry.outputTokens }),
+      logger: (entry) => logger({...entry,ownerId,runId}),
       configSnapshots: configurations.value,
       media,
       publicEgress,

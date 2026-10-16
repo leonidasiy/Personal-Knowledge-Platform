@@ -360,11 +360,11 @@ test('transient stage reads retry three times without repeating model work; exha
  for(const failCount of [3,4]) {
   let reads=0,writes=0,work=0;
   const events=[];
-  const database={prepare(query){return {bind(){return this;},async first(){if(query.startsWith('SELECT state')){if(++reads<=failCount)throw new Error('Constructed database read interruption');return {state:'per-point-quiz-loop'};}return {created_at:'2026-10-15T00:00:00Z'};},async run(){writes++;return {success:true,meta:{changes:1}};},async all(){return {success:true,results:[]};}};},async batch(){return [];}};
+  const database={prepare(query){return {bind(){return this;},async first(){if(query.startsWith('SELECT state')){if(++reads<=failCount)throw new Error('Network connection lost: constructed transient read');return {state:'per-point-quiz-loop'};}return {created_at:'2026-10-15T00:00:00Z'};},async run(){writes++;return {success:true,meta:{changes:1}};},async all(){return {success:true,results:[]};}};},async batch(){return [];}};
   const stages=new D1WorkflowStageRepository({database,now:()=> '2026-10-15T00:00:00Z',logger:e=>events.push(e)});
   const result=await stages.run({ownerId:'fixture-owner',runId:'fixture-run'},'question-evaluator:fixture','fixture-digest',async()=>{work++;return {ok:true,value:{accepted:true}};},{modelCall:true});
   assert.equal(reads,4);assert.equal(result.ok,failCount===3);assert.equal(work,failCount===3?1:0);assert.equal(writes,failCount===3?2:0);
-  assert.equal(events.filter(e=>e.event==='workflow-stage-read-retry').length,3);
+  assert.equal(events.filter(e=>e.event==='workflow-database-read-retry').length,3);
   if(!result.ok)assert.equal(result.error.kind,'WorkflowStagePersistenceFailed');
  }
 });

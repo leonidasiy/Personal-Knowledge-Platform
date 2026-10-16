@@ -1,3 +1,4 @@
+import {waitForTransientRetry} from './retry.js';
 // @ts-check
 
 /** @typedef {import('./extraction.js').KnowledgePoint} KnowledgePoint */
@@ -287,6 +288,7 @@ export function createKnowledgeQualityReviewer(dependencies) {
           if(!reviewed.ok) {
             if(!retryableTechnicalReviewFailure(reviewed.error))return reviewed;
             if(technicalAttempt===maximumTechnicalAttempts)return {ok:false,error:{...reviewed.error,attempts:technicalAttempt,technicalAttempts:technicalAttempt,technicalRetriesExhausted:true}};
+            await waitForTransientRetry(reviewed.error,technicalAttempt);
             continue;
           }
           let issue='AssessmentShapeInvalid';
@@ -322,6 +324,7 @@ export function createKnowledgeQualityReviewer(dependencies) {
           if(!repaired.ok) {
             if(!retryableTechnicalReviewFailure(repaired.error))return repaired;
             if(technicalAttempt===maximumTechnicalAttempts)return {ok:false,error:{...repaired.error,attempts:technicalAttempt,technicalAttempts:technicalAttempt,technicalRetriesExhausted:true}};
+            await waitForTransientRetry(repaired.error,technicalAttempt);
             continue;
           }
           const candidate=repaired.value;

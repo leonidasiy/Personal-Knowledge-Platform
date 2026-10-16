@@ -157,6 +157,24 @@ export class D1KnowledgeContentRepository {
     }
   }
 
+  /** Current owner preferences without loading quiz history or unrelated knowledge.
+   * @param {{ownerId:string,runId:string,sourceId:string,knowledgeId:string}} scope
+   * @returns {Promise<{ok:true,value:{lessOften:{id:string,summary:string}[]}}|{ok:false,error:{kind:string}}>} */
+  async preferenceContext(scope) {
+    try {
+      const rows=await this.#database.prepare("SELECT p.knowledge_id,p.point_json FROM extraction_knowledge_points p JOIN learner_preference_feedback f ON f.owner_id=p.owner_id AND f.knowledge_id=p.knowledge_id AND f.choice='less' WHERE p.owner_id=? AND (p.knowledge_id=? OR p.source_id=? OR EXISTS (SELECT 1 FROM source_classifications selected JOIN source_classifications wanted ON wanted.owner_id=selected.owner_id AND wanted.main_subject=selected.main_subject WHERE selected.owner_id=p.owner_id AND selected.source_id=p.source_id AND wanted.source_id=? AND selected.status='classified' AND wanted.status='classified') OR NOT EXISTS (SELECT 1 FROM source_classifications wanted WHERE wanted.owner_id=p.owner_id AND wanted.source_id=? AND wanted.status='classified')) ORDER BY p.created_at,p.knowledge_id").bind(scope.ownerId,scope.knowledgeId,scope.sourceId,scope.sourceId,scope.sourceId).all();
+      if(!rows.success)return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
+      const lessOften=[];
+      for(const row of rows.results) {
+        if(!isRecord(row)||!text(row.point_json)||!text(row.knowledge_id))return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
+        const point=JSON.parse(row.point_json);
+        if(!isKnowledgePoint(point))return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};
+        lessOften.push({id:row.knowledge_id,summary:point.summary});
+      }
+      return {ok:true,value:{lessOften}};
+    }catch(error){this.#logger({event:'knowledge-preference-context-failure',ownerId:scope.ownerId,runId:scope.runId,failureKind:'KnowledgeReviewContextFailed'});return {ok:false,error:{kind:'KnowledgeReviewContextFailed'}};}
+  }
+
   /** @param {{ownerId:string,runId:string,sourceId:string,knowledgeId:string}} scope @returns {Promise<{ok:true,value:import('../src/features/knowledge-workflows/quality-review.js').ReviewContext}|{ok:false,error:{kind:string}}>} */
   async reviewContext(scope) {
     try {

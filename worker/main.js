@@ -623,7 +623,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
     ? null
     : new D1KnowledgeWorkflowRepository({
       database: /** @type {import("./knowledge-workflow-d1.js").D1DatabasePort} */ (configuration.value.sourceLibraryDatabase),
-      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken }),
+      logger: knowledgeWorkflowLogger,
     });
   const knowledgeWorkflowService = knowledgeWorkflowRepository === null
     ? null

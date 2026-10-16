@@ -1,3 +1,5 @@
+import {observeWorkflowDatabase} from './knowledge-workflow-database.js';
+import {waitForTransientRetry} from '../src/features/knowledge-workflows/retry.js';
 import { ACQUISITION_POLICY } from './acquisition-policy.js';
 import { createWebpageImageBudget, isWebpageImagePolicy, WEBPAGE_EXTRACTION_POLICY } from './webpage-image-budget.js';
 import { validateUploadedImage } from './upload-image-boundary.js';
@@ -542,7 +544,7 @@ export async function requestMaterialBatch(dependencies) {
       const retryableOutput = response.error.kind === "KnowledgeModelResponseInvalid";
       const retryableProvider = response.error.kind === "KnowledgeModelUnavailable" || response.error.kind === "KnowledgeModelTimeout" || response.error.kind === "KnowledgeModelRejected" && ((response.error.status ?? 0) >= 200 && (response.error.status ?? 0) < 300 || [408, 429, 500, 502, 503, 504].includes(response.error.status ?? 0));
       dependencies.logger({ event: attempt === 0 && retryableOutput ? "knowledge-workflow-material-batch-schema-retry" : attempt === 0 && retryableProvider ? "knowledge-workflow-material-batch-provider-retry" : "knowledge-workflow-material-batch-failure", failureKind: response.error.kind });
-      if (!response.error.technicalRetriesExhausted && retryableTechnicalFailure(response.error)) { if (attempt < maximumTechnicalAttempts-1) { if (retryableOutput) correction = repairInstruction; continue; } return {ok:false,error:{...response.error,technicalRetriesExhausted:true,technicalAttempts:maximumTechnicalAttempts}}; }
+      if (!response.error.technicalRetriesExhausted && retryableTechnicalFailure(response.error)) { if (attempt < maximumTechnicalAttempts-1) { if (retryableOutput) correction = repairInstruction; await waitForTransientRetry(response.error,attempt+1); continue; } return {ok:false,error:{...response.error,technicalRetriesExhausted:true,technicalAttempts:maximumTechnicalAttempts}}; }
       return response;
     }
     const payload = record(response.value) ? response.value : null;
@@ -598,7 +600,7 @@ export async function webpageImageCommandKey(model,configDigest,command) {
  return command.taskId+':'+await imageHash(new TextEncoder().encode(JSON.stringify({model,configDigest,systemPrompt:command.systemPrompt,input:command.input,maxOutputTokens:command.maxOutputTokens,responseSchema:command.responseSchema,attachments:await Promise.all((command.attachments??[]).map(async a=>({id:a.id,mediaType:a.mediaType,digest:a.bytes instanceof Uint8Array?await imageHash(a.bytes):a.url})))})));
 }
 
-/** @param {{ readonly technicalRetries?:boolean, readonly modelProtocols?:Partial<Record<import("./knowledge-workflow-model.js").KnowledgeAgentRole,import("./knowledge-workflow-model.js").KnowledgeModelProtocol>>, readonly reviewedNavigation?:import("./hybrid-navigation.js").NavigationPlan, readonly preflightModelWork?:(role:import("../src/features/knowledge-workflows/memory.js").AgentRole,identity:{ownerId:string,runId:string,stageKey:string,inputDigest:string,createdAt:string})=>void, readonly authorizeFailedReviewCall?:(identity:import("./knowledge-workflow-stages-d1.js").FailedModelStage)=>Promise<{attemptKey:string,allowAdditionalAttempt?:boolean}|null>, readonly authorizeClaimedModelCall?:(identity:{ownerId:string,runId:string,stageKey:string,inputDigest:string,createdAt:string})=>Promise<boolean>, readonly webpageStructuredOutput?:boolean, readonly extractionDurationMs?:number, readonly imagePolicy:import("./webpage-image-budget.js").WebpageImagePolicy, readonly database: RuntimeDatabase, readonly fetch: typeof fetch, readonly browser: KnowledgeWorkflowBrowser, readonly apiKey: string | null, readonly endpoint: string, readonly now: () => string, readonly nowMs: () => number, readonly logger: (entry: { readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?:import("./webpage-facts.js").WebpagePhase,readonly durationMs?:number,readonly count?:number,readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null }) => void, readonly transition: (command: { readonly run: KnowledgeWorkflowRun, readonly nextState: import("../src/features/knowledge-workflows/workflow.js").WorkflowState, readonly counts?: { readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }, readonly failureKind?: string | null, readonly robotsEvidence?: import("../src/features/knowledge-workflows/workflow.js").WorkflowRobotsEvidence | null }) => Promise<Result<KnowledgeWorkflowRun, unknown>>, readonly configSnapshots: Readonly<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>, readonly resolveAddresses?: (hostname: string) => Promise<Result<readonly string[], { readonly kind: string }>>, readonly publicEgress?: import("../src/features/knowledge-workflows/media.js").MediaPublicEgress, readonly media?: { readonly ingest: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>, readonly ingestBytes?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>> }, readonly imageSearch?: { readonly search: (command: { readonly query: string }) => Promise<Result<readonly unknown[], { readonly kind: string }>> }, readonly fallbackManifest?: import("../src/features/knowledge-workflows/media.js").UserAttestedLocalManifest, readonly reviewMedia?: {readonly readOriginal:(scope:{ownerId:string,runId:string,knowledgeId:string,sourceRevision:number})=>Promise<Result<{id:string,bytes:Uint8Array,mediaType:'image/png'|'image/jpeg'|'image/webp'|'image/gif',purpose?:'illustration'|'evidence'}|null,{kind:string}>>}, readonly mediaBucket?: Partial<import("./webpage-image-cache.js").ImageCacheBucket> & { readonly delete: (key: string) => Promise<unknown> } | null, readonly material?: { readonly read: (ownerId: string, runId: string) => Promise<Result<StoredMaterial | null, { readonly kind: string }>> }, readonly decodeImage?: import("./upload-image-boundary.js").ImageDecoder, readonly materialContent?: { readonly read: (ownerId: string, objectKey: string, identity: {readonly sourceId:string,readonly runId:string,readonly sourceRevision:number,readonly digest:string}) => Promise<Result<Uint8Array, { readonly kind: string }>> } }} dependencies @returns {KnowledgeWorkflowRuntime} */
+/** @param {{ readonly technicalRetries?:boolean, readonly modelProtocols?:Partial<Record<import("./knowledge-workflow-model.js").KnowledgeAgentRole,import("./knowledge-workflow-model.js").KnowledgeModelProtocol>>, readonly reviewedNavigation?:import("./hybrid-navigation.js").NavigationPlan, readonly preflightModelWork?:(role:import("../src/features/knowledge-workflows/memory.js").AgentRole,identity:{ownerId:string,runId:string,stageKey:string,inputDigest:string,createdAt:string})=>void, readonly authorizeFailedReviewCall?:(identity:import("./knowledge-workflow-stages-d1.js").FailedModelStage)=>Promise<{attemptKey:string,allowAdditionalAttempt?:boolean}|null>, readonly authorizeClaimedModelCall?:(identity:{ownerId:string,runId:string,stageKey:string,inputDigest:string,createdAt:string})=>Promise<boolean>, readonly webpageStructuredOutput?:boolean, readonly extractionDurationMs?:number, readonly imagePolicy:import("./webpage-image-budget.js").WebpageImagePolicy, readonly database: RuntimeDatabase, readonly fetch: typeof fetch, readonly browser: KnowledgeWorkflowBrowser, readonly apiKey: string | null, readonly endpoint: string, readonly now: () => string, readonly nowMs: () => number, readonly logger: (entry: { readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?:import("./webpage-facts.js").WebpagePhase,readonly durationMs?:number,readonly count?:number,readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null,readonly costNanodollars?:number|null }) => void, readonly transition: (command: { readonly run: KnowledgeWorkflowRun, readonly nextState: import("../src/features/knowledge-workflows/workflow.js").WorkflowState, readonly counts?: { readonly pages: number, readonly knowledgePoints: number, readonly acceptedQuizzes: number, readonly pendingQuizzes: number }, readonly failureKind?: string | null, readonly robotsEvidence?: import("../src/features/knowledge-workflows/workflow.js").WorkflowRobotsEvidence | null }) => Promise<Result<KnowledgeWorkflowRun, unknown>>, readonly configSnapshots: Readonly<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>, readonly resolveAddresses?: (hostname: string) => Promise<Result<readonly string[], { readonly kind: string }>>, readonly publicEgress?: import("../src/features/knowledge-workflows/media.js").MediaPublicEgress, readonly media?: { readonly ingest: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>, readonly ingestBytes?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>> }, readonly imageSearch?: { readonly search: (command: { readonly query: string }) => Promise<Result<readonly unknown[], { readonly kind: string }>> }, readonly fallbackManifest?: import("../src/features/knowledge-workflows/media.js").UserAttestedLocalManifest, readonly reviewMedia?: {readonly readOriginal:(scope:{ownerId:string,runId:string,knowledgeId:string,sourceRevision:number})=>Promise<Result<{id:string,bytes:Uint8Array,mediaType:'image/png'|'image/jpeg'|'image/webp'|'image/gif',purpose?:'illustration'|'evidence'}|null,{kind:string}>>}, readonly mediaBucket?: Partial<import("./webpage-image-cache.js").ImageCacheBucket> & { readonly delete: (key: string) => Promise<unknown> } | null, readonly material?: { readonly read: (ownerId: string, runId: string) => Promise<Result<StoredMaterial | null, { readonly kind: string }>> }, readonly decodeImage?: import("./upload-image-boundary.js").ImageDecoder, readonly materialContent?: { readonly read: (ownerId: string, objectKey: string, identity: {readonly sourceId:string,readonly runId:string,readonly sourceRevision:number,readonly digest:string}) => Promise<Result<Uint8Array, { readonly kind: string }>> } }} dependencies @returns {KnowledgeWorkflowRuntime} */
 export function createKnowledgeWorkflowRuntime(dependencies) {
   if ((dependencies?.extractionDurationMs!==undefined&&(!Number.isSafeInteger(dependencies.extractionDurationMs)||dependencies.extractionDurationMs<=0)) || (dependencies?.preflightModelWork!==undefined&&typeof dependencies.preflightModelWork!=="function") || (dependencies?.webpageStructuredOutput!==undefined&&typeof dependencies.webpageStructuredOutput!=="boolean") || !isWebpageImagePolicy(dependencies?.imagePolicy) || typeof dependencies?.database?.prepare !== "function" || typeof dependencies.database.batch !== "function" || typeof dependencies.fetch !== "function" || typeof dependencies.browser?.readPage !== "function" || (dependencies.browser.readImage!==undefined&&typeof dependencies.browser.readImage!=="function") || typeof dependencies.browser.readRobots !== "function" || typeof dependencies.browser.screenshot !== "function" || typeof dependencies.browser.close !== "function" || (dependencies.apiKey !== null && typeof dependencies.apiKey !== "string") || !text(dependencies.endpoint) || !timestamp(dependencies.now()) || typeof dependencies.nowMs !== "function" || typeof dependencies.logger !== "function" || typeof dependencies.transition !== "function" || !record(dependencies.configSnapshots) || (dependencies.resolveAddresses !== undefined && typeof dependencies.resolveAddresses !== "function") || (dependencies.media !== undefined && (typeof dependencies.media.ingest !== "function" || (dependencies.media.ingestBytes !== undefined && typeof dependencies.media.ingestBytes !== "function"))) || (dependencies.imageSearch !== undefined && typeof dependencies.imageSearch.search !== "function") || (dependencies.fallbackManifest !== undefined && (!record(dependencies.fallbackManifest) || !Array.isArray(dependencies.fallbackManifest.entries) || typeof dependencies.fallbackManifest.resolve !== "function")) || (dependencies.material !== undefined && typeof dependencies.material.read !== "function") || (dependencies.materialContent !== undefined && typeof dependencies.materialContent.read !== "function")) throw new TypeError("Knowledge workflow runtime dependencies are invalid.");
   // GLM-5.3-Flash is configured by the provider with a 1,048,576-token context;
@@ -606,7 +608,12 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
   // not an exact token conversion and remains separate from output-token limits.
   const reviewedNavigation=dependencies.reviewedNavigation;
   if(reviewedNavigation!==undefined&&(!record(reviewedNavigation)||!text(reviewedNavigation.rationale)||!Array.isArray(reviewedNavigation.lessonUrls)||!reviewedNavigation.lessonUrls.length||new Set(reviewedNavigation.lessonUrls).size!==reviewedNavigation.lessonUrls.length||!reviewedNavigation.lessonUrls.every(url=>typeof url==="string"&&navigationWithinScope(reviewedNavigation.sourceRootUrl,url))||!Array.isArray(reviewedNavigation.observations)||!reviewedNavigation.observations.every(isNavigationObservation)))throw new TypeError("ReviewedNavigationInvalid");
-  const model = createRoleConfiguredKnowledgeModel({ modelProtocols:dependencies.modelProtocols, apiKey: dependencies.apiKey, endpoint: dependencies.endpoint, configSnapshots: dependencies.configSnapshots, maximumInputCharacters: 3_000_000, fetch: dependencies.fetch, now: dependencies.nowMs, logger: (entry) => dependencies.logger({ event: entry.event, stage: entry.role, failureKind: entry.failureKind, field: entry.field, diagnosticToken: entry.diagnosticToken,phase:entry.phase,durationMs:entry.durationMs,requestId:entry.requestId,inputTokens:entry.inputTokens,outputTokens:entry.outputTokens }) });
+  dependencies={...dependencies,database:observeWorkflowDatabase(dependencies.database,dependencies.logger)};
+  /** @param {KnowledgeWorkflowRun} [run] */
+  function configuredModel(run) {
+    return createRoleConfiguredKnowledgeModel({ modelProtocols:dependencies.modelProtocols, apiKey: dependencies.apiKey, endpoint: dependencies.endpoint, configSnapshots: dependencies.configSnapshots, maximumInputCharacters: 3_000_000, fetch: dependencies.fetch, now: dependencies.nowMs, logger: (entry) => dependencies.logger({ event: entry.event, stage: entry.role, failureKind: entry.failureKind, field: entry.field, diagnosticToken: entry.diagnosticToken,phase:entry.phase,durationMs:entry.durationMs,requestId:entry.requestId,inputTokens:entry.inputTokens,outputTokens:entry.outputTokens,costNanodollars:entry.costNanodollars,...(run?{ownerId:run.ownerId,runId:run.runId}:{}) }) });
+  }
+  const model=configuredModel();
   const rightsRegistry = new D1SourceRightsRegistry({ database: /** @type {import("./source-rights-registry-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (dependencies.database)), now: dependencies.now, logger: (entry) => dependencies.logger({ event: entry.event, failureKind: entry.failureKind }) });
   const stages = new D1WorkflowStageRepository({database:dependencies.database,now:dependencies.now,logger:dependencies.logger});
   const progress = new D1KnowledgeWorkflowProgressRepository({database:dependencies.database,logger:dependencies.logger});
@@ -782,7 +789,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     const existing = agentRuntimes.get(run.runId);
     if (existing !== undefined) return existing;
     const runtime = createKnowledgeWorkflowAgentRuntime({
-      model,
+      model:configuredModel(run),
       memory: agentMemory,
       eventLedger: agentEvents,
       compactor: createContextCompactor({ now: dependencies.now, digest: stableDigest, appendRecord: (record) => compactionRecords.appendRecord(record), logger: (entry) => dependencies.logger({ event: entry.event, runId: entry.runId, stage: entry.role, failureKind: entry.failureKind }) }),
@@ -830,6 +837,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       if (result.ok || managed || !retryableTechnicalFailure(result.error)) return result;
       dependencies.logger({event:'knowledge-workflow-technical-retry',ownerId:run.ownerId,runId:run.runId,stage:agentRole,failureKind:result.error.kind});
       if (attempt === maximumAttempts) return {ok:false,error:{...result.error,technicalRetriesExhausted:true,technicalAttempts:maximumAttempts}};
+      await waitForTransientRetry(result.error,attempt);
     }
     return {ok:false,error:{kind:'WorkflowStageCommandInvalid'}};
   }
@@ -903,6 +911,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
           if(attempt===maximumAttempts){technicalFailure={...failure,technicalRetriesExhausted:true,technicalAttempts:maximumAttempts};return {ok:false,error:technicalFailure};}
           if(failure.kind==="SourceClassificationOutputInvalid"||failure.kind==="KnowledgeModelResponseInvalid"||failure.kind==="KnowledgeModelResponseDuplicateKey")correction="The previous response failed output validation. Return exactly mainSubject and topic, with no extra keys: mainSubject must be an exact approved ID from the supplied schema; topic must be 1–120 trimmed characters without HTML or control characters. Classify the same complete, unchanged point set under the original evidence and quality instructions.";
           dependencies.logger({event:"knowledge-workflow-technical-retry",ownerId:run.ownerId,runId:run.runId,stage:"source-classifier",failureKind:failure.kind});
+          await waitForTransientRetry(failure,attempt);
         }
         return {ok:false,error:{kind:"SourceClassificationInferenceFailed"}};
       } },
@@ -1462,7 +1471,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     const reviewerSuffix=retryGeneration?`-quiz-retry-${retryGeneration}`:"";
     /** @param {KnowledgePoint} knowledge @returns {Promise<Result<boolean,{kind:string}>>} */
     async function beforeGenerate(knowledge) {
-      const context=await content.reviewContext({ownerId:run.ownerId,runId:run.runId,sourceId:run.sourceId,knowledgeId:knowledge.id});
+      const context=await content.preferenceContext({ownerId:run.ownerId,runId:run.runId,sourceId:run.sourceId,knowledgeId:knowledge.id});
       if(!context.ok)return context;
       if(!context.value.lessOften.length)return {ok:true,value:true};
       if(context.value.lessOften.some(item=>item.id===knowledge.id))return {ok:true,value:false};
@@ -1477,15 +1486,28 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       const key=publication&&awaitReview ? `quiz-publication-context:${knowledge.id}:${retryGeneration}` : `quiz-review-context:${knowledge.id}`;
       return stages.run(run,key,signature,()=>content.reviewContext({ownerId:run.ownerId,runId:run.runId,sourceId:run.sourceId,knowledgeId:knowledge.id}),{resumeSafe:true});
     }
-    /** @param {KnowledgePoint} point @param {boolean} [publication] @returns {Promise<Result<{sourceEvidence:unknown,context:import('../src/features/knowledge-workflows/quality-review.js').ReviewContext,attachments:readonly import('./knowledge-workflow-model.js').KnowledgeModelAttachment[],imagePurpose?:'illustration'|'evidence'},{kind:string}>>} */
+    /** Successful immutable evidence is shared only within this actor; mutable context stays fresh.
+     * @type {Map<string,Promise<Result<{sourceEvidence:unknown,attachments:readonly import('./knowledge-workflow-model.js').KnowledgeModelAttachment[],imagePurpose?:'illustration'|'evidence'},{kind:string}>>>} */
+    const evidenceCache=new Map();
+    /** @param {KnowledgePoint} point @param {boolean} [publication] */
     async function quizEvidence(point, publication = false) {
-      const sourceEvidence=await content.readReviewEvidence({ownerId:run.ownerId,runId:run.runId,knowledgeId:point.id,sourceRevision:run.sourceRevision});
-      if(!sourceEvidence.ok)return sourceEvidence;
+      let evidence=evidenceCache.get(point.id);
+      if(!evidence) {
+        evidence=(async()=>{
+          const sourceEvidence=await content.readReviewEvidence({ownerId:run.ownerId,runId:run.runId,knowledgeId:point.id,sourceRevision:run.sourceRevision});
+          if(!sourceEvidence.ok)return sourceEvidence;
+          const original=point.mediaCandidates.length?await dependencies.reviewMedia?.readOriginal({ownerId:run.ownerId,runId:run.runId,knowledgeId:point.id,sourceRevision:run.sourceRevision}):{ok:/** @type {const} */(true),value:null};
+          if(original===undefined||!original.ok||point.mediaCandidates.length&&original.value===null)return {ok:/** @type {const} */(false),error:{kind:original!==undefined&&!original.ok?original.error.kind:'KnowledgeReviewImageUnavailable'}};
+          return {ok:/** @type {const} */(true),value:{sourceEvidence:sourceEvidence.value,attachments:original.value===null?[]:[original.value],...(original.value?.purpose===undefined?{}:{imagePurpose:original.value.purpose})}};
+        })();
+        evidenceCache.set(point.id,evidence);
+      }
+      let captured;
+      try{captured=await evidence;}catch(error){evidenceCache.delete(point.id);throw error;}
+      if(!captured.ok){evidenceCache.delete(point.id);return captured;}
       const context=await quizContext(point,publication);
       if(!context.ok)return context;
-      const original=point.mediaCandidates.length?await dependencies.reviewMedia?.readOriginal({ownerId:run.ownerId,runId:run.runId,knowledgeId:point.id,sourceRevision:run.sourceRevision}):{ok:/** @type {const} */(true),value:null};
-      if(original===undefined||!original.ok||point.mediaCandidates.length&&original.value===null)return {ok:false,error:{kind:original!==undefined&&!original.ok?original.error.kind:'KnowledgeReviewImageUnavailable'}};
-      return {ok:true,value:{sourceEvidence:sourceEvidence.value,context:context.value,attachments:original.value===null?[]:[original.value],...(original.value?.purpose===undefined?{}:{imagePurpose:original.value.purpose})}};
+      return {ok:/** @type {const} */(true),value:{...captured.value,context:context.value}};
     }
     /** @type {import("../src/features/knowledge-workflows/quiz.js").QuestionGenerator} */
     const generator = { generate: async (input) => {
@@ -1499,7 +1521,9 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       const heading=quizHeadings.find(h=>record(h)&&h.level===1);
       const quizProgress=await progress.save({ownerId:run.ownerId,runId:run.runId,currentUrl:input.knowledge.attribution.sourceUrl,pageTitle:record(heading)&&text(heading.text)?heading.text:null,sectionTitle:record(heading)&&text(heading.text)?heading.text:null,stage:"Generating quizzes",updatedAt:dependencies.now()});if(!quizProgress.ok)return quizProgress;
       const {technicalAttempt, ...generationInput}=input;
+      const generationStarted=dependencies.nowMs();
       const generated = await generate(run, "question-generator", `quiz-generator-${input.knowledge.id}-${input.attempt}${generatorSuffix}`, questionGeneratorPrompt, {...generationInput,sourceEvidence:captured.value.sourceEvidence,...captured.value.context,...(captured.value.imagePurpose===undefined?{}:{imagePurpose:captured.value.imagePurpose})}, 16384, captured.value.attachments, { responseSchema: quizPairSchema(true),technicalAttempt });
+      dependencies.logger({event:'quiz-stage-duration',runId:run.runId,stage:'generation',durationMs:Math.max(0,dependencies.nowMs()-generationStarted),...(generated.ok?{}:{failureKind:generated.error.kind})});
       if (!generated.ok) return generated.error.kind === 'KnowledgeModelResponseInvalid' ? {ok:false,error:{kind:'QuizDraftSchemaInvalid'}} : generated;
       const draftValue = normalizeQuizPairDraftAliases(generated.value);
       if (!isQuizPairDraft(draftValue)) return { ok: false, error: { kind: "QuizDraftSchemaInvalid", validationIssues: quizPairDraftValidationIssues(draftValue) } };
@@ -1517,7 +1541,9 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     } };
     /** @type {import("../src/features/knowledge-workflows/quiz.js").QuestionReviewer} */
     const reviewer = { evaluate: async (input) => {
+      const queuedAt=dependencies.nowMs();
       await awaitReview?.();
+      dependencies.logger({event:'quiz-stage-wait',runId:run.runId,stage:'review',durationMs:Math.max(0,dependencies.nowMs()-queuedAt)});
       if(phase)phase.phase="review";
       const evidence = await invokeTool(run, "question-evaluator", `quiz-evidence-${input.draft.id}-${input.attempt}${reviewerSuffix}`, "quiz.evidence.lookup", input);
       if (!evidence.ok) return { ok: false, error: { kind: evidence.error.kind } };
@@ -1528,11 +1554,13 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       const captured=await quizEvidence(point,true);
       if(!captured.ok)return captured;
       const {technicalAttempt, ...reviewInput}=input;
+      const reviewStarted=dependencies.nowMs();
       const evaluated = await generate(run, "question-evaluator", `quiz-evaluator-${input.draft.id}-${input.attempt}${reviewerSuffix}`, questionEvaluatorPrompt, {...reviewInput,sourceEvidence:captured.value.sourceEvidence,...captured.value.context,...(captured.value.imagePurpose===undefined?{}:{imagePurpose:captured.value.imagePurpose})}, 2048, captured.value.attachments, { responseSchema: questionEvaluationSchema,technicalAttempt });
+      dependencies.logger({event:'quiz-stage-duration',runId:run.runId,stage:'review',durationMs:Math.max(0,dependencies.nowMs()-reviewStarted),...(evaluated.ok?{}:{failureKind:evaluated.error.kind})});
       if (!evaluated.ok) return evaluated;
       return normalizeKnowledgeQuizEvaluation(evaluated.value, input.knowledge);
     } };
-    return createQuizActorCritic({ technicalRetries:dependencies.technicalRetries, generator, reviewer, beforeGenerate, repository: quizRepository, now: dependencies.now, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, failureKind: entry.failureKind }), maxAttempts: QUIZ_MAX_ATTEMPTS });
+    return createQuizActorCritic({ technicalRetries:dependencies.technicalRetries, generator, reviewer, beforeGenerate, repository: quizRepository, now: dependencies.now, logger: (entry) => dependencies.logger({ event: entry.event, runId: run.runId, failureKind: entry.failureKind,durationMs:entry.durationMs }), maxAttempts: QUIZ_MAX_ATTEMPTS });
   }
 
   return Object.freeze({
@@ -1665,23 +1693,35 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         const pending = command.points.filter(point => !completedIds.has(point.id) && (failures.get(point.id)===undefined || (failures.get(point.id)?.generation??generation)<generation));
         const started=dependencies.nowMs();
         dependencies.logger({event:'quiz-pipeline-entry',runId:current.runId,count:Math.min(pending.length,QUIZ_PIPELINE_WIDTH)});
+        let failed=false,firstUsable=current.counts.acceptedQuizzes>0;
+        // Stop admitting at the existing model request envelope; finish admitted jobs durably.
+        const admissionDeadline=started+Math.max(dependencies.configSnapshots['question-generator'].limits.timeoutMs,dependencies.configSnapshots['question-evaluator'].limits.timeoutMs);
         const results=await runQuizPipeline(pending,async(point,awaitReview)=>{
           /** @type {{phase:"generation"|"review"}} */ const phase={phase:"generation"};
           const prior=failures.get(point.id);
           const processed = await successfulCheckpoint(`quiz-point-completed:${point.id}`, () => quizzes(current,prior,phase,awaitReview).run({...command,points:[point]}));
           if (!processed.ok) {
-            if(!exhaustedQuizTechnicalFailure(processed.error))return processed;
+            if(!exhaustedQuizTechnicalFailure(processed.error)){failed=true;return processed;}
             const error=/** @type {{kind:string,causeKind?:string,status?:number}} */(processed.error);
             const failure={knowledgeId:point.id,summary:point.summary,failureKind:error.kind,...(error.causeKind?{causeKind:error.causeKind}:{}),...(error.status===undefined?{}:{status:error.status}),attempts:4,failedAt:dependencies.now(),generation,phase:phase.phase,generatorGeneration:prior?.phase==="review"?prior.generatorGeneration:generation};
             const noted=await successfulCheckpoint(`quiz-point-failed:${point.id}:${generation}`,async()=>({ok:true,value:failure}));
-            if(!noted.ok)return noted;
+            if(!noted.ok){failed=true;return noted;}
             return {ok:/** @type {const} */(true),value:[]};
           }
+          if(!firstUsable&&processed.value.dispositions.some(d=>d.status==='accepted'&&d.publicationStatus==='published')) {
+            firstUsable=true;
+            const metric=await successfulCheckpoint('metrics:first-usable-quiz',async()=>{
+              const durationMs=Math.max(0,dependencies.nowMs()-Date.parse(current.createdAt));
+              dependencies.logger({event:'workflow-first-usable-quiz',runId:current.runId,durationMs,count:1});
+              return {ok:/** @type {const} */(true),value:{durationMs}};
+            });
+            if(!metric.ok)dependencies.logger({event:'workflow-first-usable-metric-failure',runId:current.runId,failureKind:metric.error.kind});
+          }
           return {ok:/** @type {const} */(true),value:processed.value.dispositions};
-        });
+        },()=>!failed&&dependencies.nowMs()<admissionDeadline);
         for(const result of results){if(!result.ok)return result;dispositions.push(...result.value);}
         dependencies.logger({event:'quiz-pipeline-success',runId:current.runId,count:results.length,durationMs:Math.max(0,dependencies.nowMs()-started)});
-        return {ok:true,value:{dispositions,hasMore:pending.length>QUIZ_PIPELINE_WIDTH}};
+        return {ok:true,value:{dispositions,hasMore:pending.length>results.length}};
       }
       const executor = createKnowledgeWorkflowExecutor({ transition, robots: { check: (command) => robots.check({ rights: command.rights, userAgent: "knowledge-platform" }) }, extraction: { run: async (command) => { const startedAtMs = command.run.extractionStartedAt === null ? dependencies.nowMs() : Date.parse(command.run.extractionStartedAt); const deadlineAtMs = command.run.extractionDeadlineAt === null ? startedAtMs + 30 * 60 * 1_000 : Date.parse(command.run.extractionDeadlineAt); if (!Number.isFinite(startedAtMs) || !Number.isFinite(deadlineAtMs)) return { ok: false, error: { kind: "WorkflowExtractionClockInvalid" } }; if (command.run.materialId !== null && command.run.materialId !== undefined) { const materialRunner = await authorizedMaterialExtraction(command.run, command.rights); if (!materialRunner.ok) return materialRunner; return materialRunner.value.run({ ownerId: command.run.ownerId, runId: command.run.runId, sourceId: command.run.sourceId, sourceRevision: command.run.sourceRevision, rootUrl: command.run.canonicalSourceIdentity, startedAtMs, deadlineAtMs }); } let navigation=command.run.extractionScope === "page" ? undefined : reviewedNavigation;
         if(navigation&&!navigationWithinScope(navigation.sourceRootUrl,command.run.canonicalSourceIdentity))return {ok:false,error:{kind:"ReviewedNavigationScopeInvalid"}};

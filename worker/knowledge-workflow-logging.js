@@ -1,7 +1,7 @@
 // @ts-check
 
-/** @typedef {{ readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly action?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?: import("./webpage-facts.js").WebpagePhase, readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null, readonly httpStatus?: number, readonly durationMs?: number, readonly count?: number, readonly itemCount?: number }} KnowledgeWorkflowLogEntry */
-/** @typedef {{ readonly component: "knowledge-workflow", readonly event: string, readonly correlationId: string, readonly occurredAt: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly action?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?: import("./webpage-facts.js").WebpagePhase, readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null, readonly httpStatus?: number, readonly durationMs?: number, readonly count?: number, readonly itemCount?: number }} KnowledgeWorkflowLogRecord */
+/** @typedef {{ readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly action?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?: import("./webpage-facts.js").WebpagePhase, readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null,readonly costNanodollars?:number|null, readonly httpStatus?: number, readonly durationMs?: number, readonly count?: number, readonly itemCount?: number }} KnowledgeWorkflowLogEntry */
+/** @typedef {{ readonly component: "knowledge-workflow", readonly event: string, readonly correlationId: string, readonly occurredAt: string, readonly ownerId?: string, readonly runId?: string, readonly stage?: string, readonly action?: string, readonly failureKind?: string, readonly field?: string, readonly diagnosticToken?: string,readonly phase?: import("./webpage-facts.js").WebpagePhase, readonly requestId?:string,readonly inputTokens?:number|null,readonly outputTokens?:number|null,readonly costNanodollars?:number|null, readonly httpStatus?: number, readonly durationMs?: number, readonly count?: number, readonly itemCount?: number }} KnowledgeWorkflowLogRecord */
 /** @typedef {{ readonly kind: "KnowledgeWorkflowLogEntryInvalid" | "KnowledgeWorkflowLogTimestampInvalid" }} KnowledgeWorkflowLogFailure */
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 
@@ -41,6 +41,7 @@ export function createKnowledgeWorkflowLogger(dependencies) {
       (entry.requestId!==undefined&&!boundedCategory(entry.requestId)) ||
       (entry.inputTokens!==undefined&&entry.inputTokens!==null&&!nonNegativeInteger(entry.inputTokens)) ||
       (entry.outputTokens!==undefined&&entry.outputTokens!==null&&!nonNegativeInteger(entry.outputTokens)) ||
+      (entry.costNanodollars!==undefined&&entry.costNanodollars!==null&&!nonNegativeInteger(entry.costNanodollars)) ||
       (entry.httpStatus !== undefined && (!Number.isSafeInteger(entry.httpStatus) || entry.httpStatus < 100 || entry.httpStatus > 599)) ||
       (entry.durationMs !== undefined && !nonNegativeInteger(entry.durationMs)) ||
       (entry.count !== undefined && !nonNegativeInteger(entry.count)) ||
@@ -53,9 +54,10 @@ export function createKnowledgeWorkflowLogger(dependencies) {
     const explicitDuration = entry.durationMs === undefined ? undefined : entry.durationMs;
     const isEntry = entry.event.endsWith("-entry");
     const isTerminal = entry.event.endsWith("-success") || entry.event.endsWith("-failure");
-    if (isEntry) started.set(correlationId, Date.parse(occurredAt));
-    const inferredDuration = explicitDuration ?? (isTerminal && started.has(correlationId) ? Math.max(0, Date.parse(occurredAt) - /** @type {number} */ (started.get(correlationId))) : undefined);
-    if (isTerminal) started.delete(correlationId);
+    const timerKey = `${correlationId}:${entry.stage??""}:${entry.event.replace(/-(entry|success|failure)$/u,"")}`;
+    if (isEntry) started.set(timerKey, Date.parse(occurredAt));
+    const inferredDuration = explicitDuration ?? (isTerminal && started.has(timerKey) ? Math.max(0, Date.parse(occurredAt) - /** @type {number} */ (started.get(timerKey))) : undefined);
+    if (isTerminal) started.delete(timerKey);
     /** @type {KnowledgeWorkflowLogRecord} */
     const safe = {
       component: "knowledge-workflow",
@@ -73,6 +75,7 @@ export function createKnowledgeWorkflowLogger(dependencies) {
       ...(entry.requestId===undefined?{}:{requestId:entry.requestId}),
       ...(entry.inputTokens===undefined?{}:{inputTokens:entry.inputTokens}),
       ...(entry.outputTokens===undefined?{}:{outputTokens:entry.outputTokens}),
+      ...(entry.costNanodollars===undefined?{}:{costNanodollars:entry.costNanodollars}),
       ...(entry.httpStatus === undefined ? {} : { httpStatus: entry.httpStatus }),
       ...(inferredDuration === undefined ? {} : { durationMs: inferredDuration }),
       ...(nonNegativeInteger(entry.count) ? { count: entry.count } : {}),
@@ -93,8 +96,14 @@ export function workflowPersistenceDiagnostic(error) {
     if(error.message.includes("Too many subrequests"))return "subrequest-limit";
     if(error.message.includes("SQLITE_CONSTRAINT"))return "sqlite-constraint";
     if(error.message.includes("SQLITE_TOOBIG"))return "sqlite-too-big";
-    if(error.message.includes("SQLITE_BUSY"))return "sqlite-busy";
+    if(error.message.includes("SQLITE_BUSY")||error.message.includes("SQLITE_LOCKED"))return "sqlite-busy";
     if(error.message.includes("D1 DB is overloaded"))return "d1-overloaded";
+    if(/storage caused object to be reset|reset because its code was updated|temporarily unavailable/i.test(error.message))return "d1-reset";
+    if(/Network connection lost/i.test(error.message))return "d1-network";
+    if(/no such (table|column)/i.test(error.message))return "sqlite-schema";
+    if(/too many (sql variables|columns)/i.test(error.message))return "sqlite-limit";
+    if(/CPU time limit/i.test(error.message))return "cpu-limit";
+    if(error.message.includes("SQLITE_ERROR"))return "sqlite-error";
     error=error.cause;
   }
   return "database-error";
