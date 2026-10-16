@@ -46,8 +46,13 @@ export function createUrlPdfCapture({binding,capacity,fetch,now,logger,launcher=
           const checked=validatePublisherDestination(target);
           const resolved=checked.ok ? await lookup(new URL(target).hostname) : {ok:false};
           if(!resolved.ok){
-            if(!rejection)logger({event:'url-capture-network-failure',ownerId,stage:request.isNavigationRequest()?'navigation':'resource',failureKind:'error' in resolved?resolved.error.kind:'SourceExtractionUrlInvalid'});
-            rejection='KnowledgeBrowserNetworkRejected';
+            const failureKind='error' in resolved?resolved.error.kind:'SourceExtractionUrlInvalid';
+            // An unavailable asset stays blocked without discarding the public article.
+            if(!request.isNavigationRequest()&&failureKind==='WorkflowDnsLookupFailed')logger({event:'url-capture-resource-unavailable',ownerId,stage:'resource',failureKind});
+            else{
+              if(!rejection)logger({event:'url-capture-network-failure',ownerId,stage:request.isNavigationRequest()?'navigation':'resource',failureKind});
+              rejection='KnowledgeBrowserNetworkRejected';
+            }
             return await request.abort();
           }
           if(!['GET','HEAD'].includes(request.method()))return await request.abort();
