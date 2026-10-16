@@ -1160,7 +1160,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         if(!preferences.ok)return preferences;
         // All committed knowledge is authoritative, including points saved before an interrupted page completed.
         const previousKnowledge=preferences.value.previousKnowledge;
-        const observed = await requestPageObservation({normalizeClaims:true,deferQualityReview,structuredOutput:dependencies.webpageStructuredOutput,attemptPolicy,taskId:`scraper-observe-${url}${retrySuffix}`,input:{url:acquired.value.responseUrl,evidence:acquired.value.evidence,coverageGoals:plan.coverageGoals,lessOften:preferences.value.lessOften,previousKnowledge},maxOutputTokens:4096,
+        const observed = await requestPageObservation({normalizeClaims:true,deferQualityReview,structuredOutput:dependencies.webpageStructuredOutput,attemptPolicy,taskId:`scraper-observe-${url}${retrySuffix}`,input:{url:acquired.value.responseUrl,evidence:acquired.value.evidence,coverageGoals:plan.coverageGoals,lessOften:preferences.value.lessOften,previousKnowledge},maxOutputTokens:16384,
           generate:imageModel,
           logger:dependencies.logger});
         if (!observed.ok) return observed;

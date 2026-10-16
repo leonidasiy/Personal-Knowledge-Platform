@@ -9,17 +9,17 @@ function fixture(options={}){
  let clock=1000,location='about:blank',token='',status=200,closedRobots=0,imagesVisible=true;
  const calls=[],reserves=[],logs=[],listeners=new Map();let guard;
  const evidence=()=>({url:location,headings:[],blocks:[{id:'p1',locator:'p',sectionId:'root',kind:'text',text:options.changedEvidence&&reserves.length>1?'Changed source content.':'Fixture educational text.',figureId:null}],images:(imagesVisible?options.images??[]:[]).map((image,i)=>({id:'image:'+i,url:image.url,occurrences:[{id:'occurrence:'+i,locator:'main img',sectionId:'root',figureId:null,captionId:null,alt:'Fixture raster'}],occurrenceWindows:[['occurrence:'+i]]})),warnings:[]});
- let bodyReads=0,lazyLoads=0;
+ let bodyReads=0,lazyLoads=0,loaded=false;
  function emitImages(lazy){for(const image of options.images??[]){if(!!image.lazy!==lazy)continue;let request=null;for(const url of image.chain??[image.url]){const previous=request;request={url:()=>url,isNavigationRequest:()=>false,resourceType:()=>image.resourceType??'image',redirectedFrom:()=>previous};}listeners.get('response')?.({request:()=>request,status:()=>image.status??200,headers:()=>({'content-type':image.mediaType??'image/png',...(image.declaredBytes===undefined?{}:{'content-length':String(image.declaredBytes)})}),body:async()=>{bodyReads++;if(image.bodyError)throw new Error('Fixture body unavailable');if(image.bodyWait)return image.bodyWait();return image.bytes??png;}});}}
  const page={
   url:()=>location,mainFrame:()=>page,
   unroute:async()=>{guard=null;},route:async(_pattern,handler)=>{guard=handler;},
   on:(name,handler)=>listeners.set(name,handler),off:name=>listeners.delete(name),
-  async goto(url){location=url;listeners.get('response')?.({request:()=>({isNavigationRequest:()=>true,frame:()=>page}),status:()=>status,headers:()=>({'content-type':'text/html'})});emitImages(false);},
+  async goto(url,options){loaded=options?.waitUntil==='load';location=url;listeners.get('response')?.({request:()=>({isNavigationRequest:()=>true,frame:()=>page}),status:()=>status,headers:()=>({'content-type':'text/html'})});emitImages(false);},
   waitForLoadState:async()=>{if(options.waitError)throw options.waitError;},content:async()=>'<main><p>Fixture educational text.</p></main>',screenshot:async()=>png,
   locator:()=>({click:async()=>{if(options.clickError)throw options.clickError;location=second;await page.goto(second);}}),
   async evaluate(fn,arg){
-   if(fn.name==='collectWebpageEvidence')return {ok:true,value:evidence()};
+   if(fn.name==='collectWebpageEvidence')return {ok:true,value:{...evidence(),...(options.delayedContent&&!loaded?{blocks:[]}: {})}};
    if(fn.toString().includes('image.scrollIntoView')){lazyLoads++;if(options.lazyDom)return runInContext('('+fn.toString()+')(command)',createContext({...options.lazyDom,command:arg,URL,setTimeout,clearTimeout}));emitImages(true);return;}
    if(fn.toString().includes('const valid='))throw new Error('Unexpected fixture branch');
    if(fn.toString().includes('document.documentElement.setAttribute')){token=arg.token;if(options.navigationDom)return runInContext('('+fn.toString()+')(command)',createContext({...options.navigationDom,command:arg,URL}));const navigation={url:location,title:'Fixture lesson',controls:[{id:'control-0',label:'Next lesson',role:'link',url:second,region:'course contents',order:0,selected:false},{id:'control-1',label:'Course content',role:'tab',url:null,region:'tabs',order:1,selected:true}],truncated:false};const transformed=options.navigationTransform?options.navigationTransform(navigation,reserves.length):navigation;return {...transformed,controls:transformed.controls.map(c=>({...c,id:arg.token+'-'+c.id}))};}
@@ -304,4 +304,8 @@ test('same-page hidden panel retains bounded original archive but cannot expose 
  f.setImagesVisible(false);const hidden=await f.browser.inspect({url:first,rootUrl:root});assert.equal(hidden.ok,true);assert.equal(hidden.value.evidence.images.length,0);const before=f.calls.length;assert.equal((await f.browser.readImage(imageCommand())).error.kind,'KnowledgeBrowserObservationStale');assert.equal(f.calls.length,before);
  f.setImagesVisible(true);const visible=await f.browser.inspect({url:first,rootUrl:root});assert.equal(visible.ok,true);assert.equal(visible.value.evidence.images[0].url,cover);const calls=f.calls.length;const restored=await f.browser.readImage(imageCommand());assert.equal(restored.ok,true);assert.deepEqual(restored.value.bytes,new Uint8Array(png));assert.equal(f.calls.length,calls);assert.equal(f.bodyReads,1);
  f.setImagesVisible(false);await f.browser.readPage({url:second,rootUrl:root});f.setImagesVisible(true);await f.browser.inspect({url:second,rootUrl:root});assert.equal((await f.browser.readImage(imageCommand(cover,second))).error.kind,'MediaFetchFailed');await f.browser.close();
+});
+
+test('waits for page scripts to load before capturing educational evidence',async()=>{
+ const f=fixture({delayedContent:true});try{const result=await f.browser.readPage({url:first,rootUrl:root});assert.equal(result.ok,true);assert.equal(result.value.evidence.blocks.length,1);}finally{await f.browser.close();}
 });

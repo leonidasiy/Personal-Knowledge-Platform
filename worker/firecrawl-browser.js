@@ -105,7 +105,7 @@ try{
    await page.locator('[data-pkp-navigation-id="'+input.targetId+'"]').click({timeout:input.timeoutMs});
    operationStage='wait-load';
    await page.waitForLoadState('domcontentloaded',{timeout:input.timeoutMs});
-  }else if(page.url()!==input.url||input.previousStatus===null){operationStage='read-navigation';await page.goto(input.url,{waitUntil:'domcontentloaded',timeout:input.timeoutMs});}
+  }else if(page.url()!==input.url||input.previousStatus===null){operationStage='read-navigation';await page.goto(input.url,{waitUntil:'load',timeout:input.timeoutMs});}
   operationStage='navigation-verification';
   if(rejection)throw new Error(rejection);
   if(!scopedUrl(page.url()))throw new Error('KnowledgeBrowserNavigationRejected');

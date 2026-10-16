@@ -201,6 +201,18 @@ Deno.test("agent runtime preserves safe provider error termination metadata with
  const result=await runtime.run({ownerId:"synthetic-owner",runId:"synthetic-run",role:"question-evaluator",taskId:"synthetic-first-critic",systemPrompt:"Constructed only",input:{claim:"Constructed"},maxOutputTokens:2048});assertEquals(result.ok,false);if(result.ok)throw new Error("Provider error cannot become successful model output");assertEquals(result.error.kind,"KnowledgeModelRejected");assertEquals(result.error.status,200);assertEquals(/** @type {{finishReason?:string}} */(result.error).finishReason,"error");assertEquals(calls,1);
 });
 
+Deno.test("agent runtime retains the model response rejection field in its saved failure", async () => {
+  const runtime = createKnowledgeWorkflowAgentRuntime({
+    model: {generate: async () => ({ok:false,error:{kind:"KnowledgeModelResponseInvalid",field:"finish_reason"}})},
+    memory: memory(), eventLedger: {append:async()=>null},
+    compactor: createContextCompactor({now:()=>"2026-10-16T00:00:00Z",digest:value=>`digest:${value.length}`,appendRecord:async()=>null,logger:()=>{}}),
+    configSnapshots: await configurationSnapshots(), now:()=>"2026-10-16T00:00:00Z", logger:()=>{},
+  });
+  const result = await runtime.run({ownerId:"diagnostic-owner",runId:"diagnostic-run",role:"knowledge-scraper",taskId:"page",systemPrompt:"Return JSON",input:{},maxOutputTokens:4096});
+  assertEquals(result.ok,false);
+  if (!result.ok) assertEquals(/** @type {{field?:string}} */(result.error).field,"finish_reason");
+});
+
 Deno.test("agent runtime accepts configured request windows above 90 seconds and clamps overrides", async () => {
   const snapshots = await configurationSnapshots();
   const configured = snapshots["knowledge-scraper"].limits.timeoutMs;
