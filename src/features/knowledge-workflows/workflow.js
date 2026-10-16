@@ -373,8 +373,8 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
       return { ok: true, value: freeze({ run, reused: false }) };
     },
 
-    /** @param {unknown} command @returns {Promise<Result<KnowledgeWorkflowRun, WorkflowFailure>>} */
-    async control(command) {
+    /** @param {unknown} command @param {{executionStopped?:boolean}} [execution] @returns {Promise<Result<KnowledgeWorkflowRun, WorkflowFailure>>} */
+    async control(command, execution = {}) {
       if (!isControlCommand(command)) return { ok: false, error: { kind: "WorkflowCommandInvalid", field: "command" } };
       dependencies.logger({ event: "knowledge-workflow.control-entry", ownerId: command.ownerId, runId: command.runId, action: command.action });
       const runResult = await repository.findById(command.ownerId, command.runId);
@@ -394,7 +394,8 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
       const deadlineReached = run.extractionDeadlineAt !== null && Date.parse(now) >= Date.parse(run.extractionDeadlineAt);
       const retryingAbandon = command.action === "abandon" && run.state === "abandoned" && (run.failureKind === "WorkflowAbandoned" || run.failureKind === "WorkflowSourceRevoked") && command.expectedRevision + 1 === run.revision;
       if (!retryingAbandon && run.revision !== command.expectedRevision) return { ok: false, error: { kind: "WorkflowControlStale" } };
-      if (!retryingAbandon && !isAllowedControl(run, command.action, deadlineReached)) return { ok: false, error: { kind: "WorkflowControlInvalid" } };
+      const recoveringExecution = execution.executionStopped === true && command.action === "resume" && isWorkflowRetryStage(run.state);
+      if (!retryingAbandon && !recoveringExecution && !isAllowedControl(run, command.action, deadlineReached)) return { ok: false, error: { kind: "WorkflowControlInvalid" } };
       if (retryingAbandon) {
         if (dependencies.cleanup !== undefined) {
           const cleaned = await dependencies.cleanup.abandonRun({ run, reason: "workflow-abandoned" });
@@ -405,7 +406,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         dependencies.logger({ event: "knowledge-workflow.control-success", ownerId: command.ownerId, runId: command.runId, action: command.action });
         return { ok: true, value: cloneRun(run) };
       }
-      const next = nextForControl(run, command.action, now, deadlineReached, envelopeMs);
+      const next = nextForControl(recoveringExecution ? {...run,state:"retryable-failure",retryState:run.state} : run, command.action, now, deadlineReached, envelopeMs);
       const updated = await repository.update({ ownerId: command.ownerId, runId: command.runId, expectedRevision: command.expectedRevision, next });
       if (!updated.ok) return updated;
       if (command.action === "abandon" && dependencies.cleanup !== undefined) {

@@ -62,7 +62,7 @@ import { LearningGenerationStatusService } from "../src/features/learning-genera
 import { LearningGenerationEnqueuer } from "./learning-generation-enqueuer.js";
 import { createLearningCostModel } from "./learning-generation-cost.js";
 import { D1KnowledgeWorkflowRepository } from "./knowledge-workflow-d1.js";
-import { createKnowledgeWorkflowService } from "../src/features/knowledge-workflows/workflow.js";
+import { createKnowledgeWorkflowService, isWorkflowRetryStage } from "../src/features/knowledge-workflows/workflow.js";
 import { D1KnowledgeMediaRepository } from "./knowledge-workflow-media-d1.js";
 import { createMediaPipeline, createMediaPublicEgress } from "../src/features/knowledge-workflows/media.js";
 import { createCloudflareImageDerivative, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
@@ -623,7 +623,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
     ? null
     : new D1KnowledgeWorkflowRepository({
       database: /** @type {import("./knowledge-workflow-d1.js").D1DatabasePort} */ (configuration.value.sourceLibraryDatabase),
-      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind }),
+      logger: (entry) => knowledgeWorkflowLogger({ event: entry.event, ownerId: entry.ownerId, runId: entry.runId, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken }),
     });
   const knowledgeWorkflowService = knowledgeWorkflowRepository === null
     ? null
@@ -705,7 +705,9 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       },
       /** @param {unknown} command */
       status: async (command) => {
-        const status = await knowledgeWorkflowService.status(command);
+        const stored = await knowledgeWorkflowService.status(command);
+        if (!stored.ok) return stored;
+        const status = await projectKnowledgeWorkflowExecution(stored.value,knowledgeWorkflowBinding);
         if (!status.ok) return status;
         const progress = await new D1KnowledgeWorkflowProgressRepository({database:/** @type {import('./knowledge-workflow-d1.js').D1DatabasePort} */(configuration.value.sourceLibraryDatabase),logger:knowledgeWorkflowLogger}).read(status.value);
         return progress.ok ? {ok:true,value:{...status.value,progress:progress.value}} : progress;
@@ -715,7 +717,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         if (!isRecord(command) || typeof command.ownerId !== "string" || command.ownerId.trim() === "" || typeof command.sourceId !== "string" || command.sourceId.trim() === "") return { ok: false, error: { kind: "WorkflowCommandInvalid" } };
         const listed = await /** @type {import("./knowledge-workflow-d1.js").D1KnowledgeWorkflowRepository} */ (knowledgeWorkflowRepository).listBySource(command.ownerId, command.sourceId, undefined);
         if (!listed.ok) return listed;
-        const run=listed.value[0] ?? null;
+        const storedRun=listed.value[0] ?? null;
+        const projected=storedRun===null?{ok:/** @type {const} */(true),value:null}:await projectKnowledgeWorkflowExecution(storedRun,knowledgeWorkflowBinding);
+        if(!projected.ok)return projected;
+        const run=projected.value;
         const warnings=run===null ? {ok:/** @type {const} */(true),value:[]} : await new D1KnowledgeContentRepository({database:/** @type {import('./knowledge-workflow-content-d1.js').D1DatabasePort} */(configuration.value.sourceLibraryDatabase),logger:knowledgeWorkflowLogger}).loadImageWarnings({ownerId:command.ownerId,runId:run.runId});
         if(!warnings.ok)return warnings;
         const progress = run === null ? {ok:/** @type {const} */(true),value:null} : await new D1KnowledgeWorkflowProgressRepository({database:/** @type {import('./knowledge-workflow-d1.js').D1DatabasePort} */(configuration.value.sourceLibraryDatabase),logger:knowledgeWorkflowLogger}).read(run);
@@ -743,7 +748,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
           ? await knowledgeWorkflowService.status(command)
           : null;
         if (prior !== null && !prior.ok) return prior;
-      const controlled = await knowledgeWorkflowService.control(command);
+      const projected = prior?.ok ? await projectKnowledgeWorkflowExecution(prior.value,knowledgeWorkflowBinding) : null;
+      if(projected!==null&&!projected.ok)return projected;
+      const stopped = prior?.ok && projected?.ok && isWorkflowRetryStage(prior.value.state) && projected.value.state === "retryable-failure";
+      const controlled = await knowledgeWorkflowService.control(command,{executionStopped:Boolean(stopped)});
       if (!controlled.ok) return controlled;
       if (!isRecord(command) || (command.action !== "stop" && command.action !== "resume" && command.action !== "generate" && command.action !== "abandon" && command.action !== "retry-quizzes")) return controlled;
       try {
@@ -751,7 +759,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
         await deliverKnowledgeWorkflowControl(instance, command.action, Boolean(prior?.ok && prior.value.state === "completed" && ["WorkflowPagesFailed","WorkflowQuizItemsFailed"].includes(prior.value.failureKind??"")));
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        const rollback = workflowControlRollback(command, prior, controlled);
+        const rollback = workflowControlRollback(command, stopped && projected?.ok ? projected : prior, controlled);
         if (rollback !== null) {
           const rolledBack = await knowledgeWorkflowService.advance(rollback);
           knowledgeWorkflowLogger({
@@ -2521,6 +2529,19 @@ async function reconcileKnowledgeWorkflowLaunch(binding, run, params, reused) {
   }
 }
 
+/** A platform crash may prevent the executor from saving its retryable state to D1.
+ * @param {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} run
+ * @param {KnowledgeWorkflowBinding} binding
+ * @returns {Promise<Result<import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun,{kind:string}>>} */
+async function projectKnowledgeWorkflowExecution(run,binding) {
+  if(!isWorkflowRetryStage(run.state))return {ok:true,value:run};
+  try {
+    const instance=await binding.get(workflowInstanceId(run.runId));
+    if(typeof instance.status!=="function" || (await instance.status()).status!=="errored")return {ok:true,value:run};
+    return {ok:true,value:{...run,state:"retryable-failure",retryState:run.state,failureKind:"WorkflowExecutionStopped"}};
+  }catch(error){if(!(error instanceof Error))throw error;return {ok:false,error:{kind:"WorkflowInstanceStatusFailed"}};}
+}
+
 /**
  * Deliver a control command to a live Workflow instance. A retryable Workflow
  * is waiting at step.waitForEvent, so the matching event is authoritative and
@@ -2629,4 +2650,5 @@ export {
   workflowControlRollback,
   workflowInstanceId,
   reconcileKnowledgeWorkflowLaunch,
+  projectKnowledgeWorkflowExecution,
 };

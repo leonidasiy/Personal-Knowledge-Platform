@@ -83,3 +83,19 @@ export function createKnowledgeWorkflowLogger(dependencies) {
   }
   return Object.freeze(log);
 }
+
+/** Return only platform error categories; exception text can contain private SQL/input.
+ * @param {unknown} error @returns {string} */
+export function workflowPersistenceDiagnostic(error) {
+  const visited=new Set();
+  while(error instanceof Error&&!visited.has(error)) {
+    visited.add(error);
+    if(error.message.includes("Too many subrequests"))return "subrequest-limit";
+    if(error.message.includes("SQLITE_CONSTRAINT"))return "sqlite-constraint";
+    if(error.message.includes("SQLITE_TOOBIG"))return "sqlite-too-big";
+    if(error.message.includes("SQLITE_BUSY"))return "sqlite-busy";
+    if(error.message.includes("D1 DB is overloaded"))return "d1-overloaded";
+    error=error.cause;
+  }
+  return "database-error";
+}

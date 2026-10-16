@@ -94,3 +94,12 @@ Deno.test("knowledge workflow logger excludes raw content from every allowed out
   const serialized = JSON.stringify(records);
   for (const value of ["raw search query", "raw source text", "raw summary", "raw prompt", "raw provider output"]) assertEquals(serialized.includes(value), false);
 });
+
+Deno.test('persistence diagnostics identify nested platform limits without exposing exception text',async()=>{
+ const {workflowPersistenceDiagnostic}=await import('../worker/knowledge-workflow-logging.js');
+ assertEquals(workflowPersistenceDiagnostic(new Error('D1_ERROR: private SQL',{cause:new Error('Too many subrequests.')})),'subrequest-limit');
+ assertEquals(workflowPersistenceDiagnostic(new Error('SQLITE_CONSTRAINT: private values')),'sqlite-constraint');
+ assertEquals(workflowPersistenceDiagnostic(new Error('SQLITE_TOOBIG: private values')),'sqlite-too-big');
+ const cycle=new Error('private SQL and secret');cycle.cause=cycle;assertEquals(workflowPersistenceDiagnostic(cycle),'database-error');
+ assertEquals(workflowPersistenceDiagnostic('private data'),'database-error');
+});

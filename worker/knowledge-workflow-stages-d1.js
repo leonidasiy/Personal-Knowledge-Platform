@@ -1,4 +1,5 @@
 // @ts-check
+import {workflowPersistenceDiagnostic} from "./knowledge-workflow-logging.js";
 import {AgentExecutionBoundaryFailure} from '../src/features/knowledge-workflows/harness.js';
 
 /** @typedef {import('./knowledge-workflow-content-d1.js').D1DatabasePort} Database */
@@ -14,8 +15,8 @@ function text(value) { return typeof value === 'string' && value.trim() !== ''; 
 export class D1WorkflowStageRepository {
   /** @type {Database} */ #database;
   /** @type {()=>string} */ #now;
-  /** @type {(entry:{event:string,stage?:string,failureKind?:string,field?:string})=>void} */ #logger;
-  /** @param {{database:Database,now:()=>string,logger?:(entry:{event:string,stage?:string,failureKind?:string,field?:string})=>void}} dependencies */
+  /** @type {(entry:{event:string,stage?:string,failureKind?:string,field?:string,diagnosticToken?:string})=>void} */ #logger;
+  /** @param {{database:Database,now:()=>string,logger?:(entry:{event:string,stage?:string,failureKind?:string,field?:string,diagnosticToken?:string})=>void}} dependencies */
   constructor(dependencies) { this.#database = dependencies.database; this.#now = dependencies.now; this.#logger=dependencies.logger??(()=>{}); }
 
   /** Read retries cannot dispatch a model or repeat an uncertain write.
@@ -114,7 +115,7 @@ export class D1WorkflowStageRepository {
     } catch (error) {
       if (error instanceof AgentExecutionBoundaryFailure) throw error;
       if (!(error instanceof Error)) throw error;
-      this.#logger({event:'workflow-stage-persistence-failure',stage:key.split(':')[0],failureKind:'WorkflowStagePersistenceFailed',field:error instanceof TypeError?'type-error':error instanceof SyntaxError?'syntax-error':'database-error'});
+      this.#logger({event:'workflow-stage-persistence-failure',stage:key.split(':')[0],failureKind:'WorkflowStagePersistenceFailed',field:error instanceof TypeError?'type-error':error instanceof SyntaxError?'syntax-error':'database-error',diagnosticToken:workflowPersistenceDiagnostic(error)});
       return {ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
     }
   }

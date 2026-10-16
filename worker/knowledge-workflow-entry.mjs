@@ -133,7 +133,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
     });
     const repository = new D1KnowledgeWorkflowRepository({
       database,
-      logger: (entry) => logger({ event: entry.event, runId: entry.runId, ownerId: entry.ownerId, failureKind: entry.failureKind }),
+      logger: (entry) => logger({ event: entry.event, runId: entry.runId, ownerId: entry.ownerId, failureKind: entry.failureKind, diagnosticToken: entry.diagnosticToken }),
     });
     const materialRepository = new D1KnowledgeWorkflowMaterialRepository({
       database,

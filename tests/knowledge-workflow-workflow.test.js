@@ -452,3 +452,35 @@ Deno.test("extraction scope persists through reload and cannot change under the 
   assertEquals(invalid.ok,false);
   if (!invalid.ok) assertEquals(invalid.error.kind,"WorkflowCommandInvalid");
 });
+
+Deno.test('only server-confirmed stopped executions resume their exact active phase and retain checkpoints',async()=>{
+ for(const state of ['extraction-loop','per-point-quiz-loop']){
+  const {service}=setup();let run=(await createRun(service)).run;
+  for(const nextState of ['rights-assessment','robots-check','extraction-loop',...(state==='per-point-quiz-loop'?['extraction-finalized','per-point-quiz-loop']:[])]){
+   const next=await service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState,...(nextState===state?{counts:{pages:11,knowledgePoints:31,acceptedQuizzes:1,pendingQuizzes:0}}:{})});if(!next.ok)throw new Error(next.error.kind);run=next.value;
+  }
+  const command={ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,action:'resume',idempotencyKey:'recover-crash'};
+  const normal=await service.control(command);assertEquals(normal.ok,false);
+  const forged=await service.control({...command,executionStopped:true});assertEquals(forged.ok,false);
+  const stale=await service.control({...command,expectedRevision:run.revision-1},{executionStopped:true});assertEquals(stale.ok,false);
+  const resumed=await service.control(command,{executionStopped:true});
+  if(!resumed.ok)throw new Error(`Continue rejected: ${resumed.error.kind}`);
+  assertEquals(resumed.value.state,state);assertEquals(JSON.stringify(resumed.value.counts),JSON.stringify(run.counts));assertEquals(resumed.value.revision,run.revision+1);
+  const replay=await service.control(command);if(!replay.ok)throw new Error(replay.error.kind);assertEquals(replay.value.revision,resumed.value.revision);
+ }
+});
+
+Deno.test('platform crash projection is read-only, preserves revision, and does not offer recovery for healthy or terminal runs',async()=>{
+ const {projectKnowledgeWorkflowExecution}=await import('../worker/main.js');
+ const {service,runs}=setup();let run=(await createRun(service)).run;
+ for(const nextState of ['rights-assessment','robots-check','extraction-loop','extraction-finalized','per-point-quiz-loop']){
+  const r=await service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState});if(!r.ok)throw new Error(r.error.kind);run=r.value;
+ }
+ let reads=0;const forbidden=async()=>{throw new Error('Unexpected workflow mutation');};
+ let status='errored';const binding={create:forbidden,get:async()=>({id:run.runId,status:async()=>{reads++;return {status};},pause:forbidden,resume:forbidden,restart:forbidden,sendEvent:forbidden,terminate:forbidden})};
+ const projected=await projectKnowledgeWorkflowExecution(run,binding);if(!projected.ok)throw new Error(projected.error.kind);
+ assertEquals(projected.value.state,'retryable-failure');assertEquals(projected.value.retryState,'per-point-quiz-loop');assertEquals(projected.value.revision,run.revision);assertEquals(runs[0].state,'per-point-quiz-loop');
+ status='running';const healthy=await projectKnowledgeWorkflowExecution(run,binding);if(!healthy.ok)throw new Error(healthy.error.kind);assertEquals(healthy.value,run);
+ const unavailable=await projectKnowledgeWorkflowExecution(run,{...binding,get:forbidden});assertEquals(unavailable.ok,false);
+ const terminal={...run,state:/** @type {const} */('completed')};const done=await projectKnowledgeWorkflowExecution(terminal,binding);if(!done.ok)throw new Error(done.error.kind);assertEquals(done.value,terminal);assertEquals(reads,2);
+});

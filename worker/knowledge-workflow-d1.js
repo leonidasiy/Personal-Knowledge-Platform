@@ -1,4 +1,5 @@
 // @ts-check
+import {workflowPersistenceDiagnostic} from "./knowledge-workflow-logging.js";
 
 import { isRecord } from "./contracts.js";
 import { isKnowledgeWorkflowRun } from "../src/features/knowledge-workflows/workflow.js";
@@ -8,7 +9,7 @@ import { isKnowledgeWorkflowRun } from "../src/features/knowledge-workflows/work
 /** @typedef {{ readonly success: boolean, readonly meta?: { readonly changes?: number } }} D1Result */
 /** @typedef {{ readonly bind: (...values: readonly (string | number | null)[]) => D1Statement, readonly first: () => Promise<unknown | null>, readonly all: () => Promise<{ readonly success: boolean, readonly results: readonly unknown[] }>, readonly run: () => Promise<D1Result> }} D1Statement */
 /** @typedef {{ readonly prepare: (query: string) => D1Statement, readonly batch: (statements: readonly D1Statement[]) => Promise<readonly D1Result[]> }} D1DatabasePort */
-/** @typedef {{ readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly failureKind?: string }} WorkflowD1Log */
+/** @typedef {{ readonly event: string, readonly ownerId?: string, readonly runId?: string, readonly failureKind?: string,readonly diagnosticToken?: string }} WorkflowD1Log */
 
 const freeze = Object.freeze;
 
@@ -72,7 +73,7 @@ export class D1KnowledgeWorkflowRepository {
       const run = parseRun(row.run_json);
       return run === null || run.ownerId !== ownerId ? { ok: false, error: { kind: "WorkflowPersistenceFailed" } } : { ok: true, value: freeze({ ...run, configDigests: freeze({ ...run.configDigests }), counts: freeze({ ...run.counts }) }) };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -87,7 +88,7 @@ export class D1KnowledgeWorkflowRepository {
       const run = parseRun(row.run_json);
       return run === null || run.ownerId !== ownerId ? { ok: false, error: { kind: "WorkflowPersistenceFailed" } } : { ok: true, value: freeze({ ...run, configDigests: freeze({ ...run.configDigests }), counts: freeze({ ...run.counts }) }) };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, runId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, runId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -104,7 +105,7 @@ export class D1KnowledgeWorkflowRepository {
         ? { ok: false, error: { kind: "WorkflowPersistenceFailed" } }
         : { ok: true, value: freeze({ ...run, configDigests: freeze({ ...run.configDigests }), counts: freeze({ ...run.counts }) }) };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -127,7 +128,7 @@ export class D1KnowledgeWorkflowRepository {
       }
       return { ok: true, value: Object.freeze(runs) };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, runId: sourceId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, runId: sourceId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -141,7 +142,7 @@ export class D1KnowledgeWorkflowRepository {
       const reuse = parseReuse(row);
       return reuse === null ? { ok: false, error: { kind: "WorkflowPersistenceFailed" } } : { ok: true, value: reuse };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -156,7 +157,7 @@ export class D1KnowledgeWorkflowRepository {
       this.#logger({ event: "knowledge-workflow-d1-insert-success", ownerId: run.ownerId, runId: run.runId });
       return { ok: true, value: null };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId: run.ownerId, runId: run.runId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId: run.ownerId, runId: run.runId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -172,7 +173,7 @@ export class D1KnowledgeWorkflowRepository {
       }
       return { ok: true, value: command.next };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId: command.ownerId, runId: command.runId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId: command.ownerId, runId: command.runId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -187,7 +188,7 @@ export class D1KnowledgeWorkflowRepository {
       const run = parseRun(row.result_json);
       return run === null || run.ownerId !== ownerId ? { ok: false, error: { kind: "WorkflowPersistenceFailed" } } : { ok: true, value: freeze({ fingerprint: row.command_fingerprint, run }) };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -199,7 +200,7 @@ export class D1KnowledgeWorkflowRepository {
       const result = await this.#database.prepare("INSERT INTO knowledge_workflow_controls (owner_id, control_id, run_id, idempotency_key, command_fingerprint, result_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(command.ownerId, `control:${encodeURIComponent(command.idempotencyKey)}`, command.runId, command.idempotencyKey, command.fingerprint, JSON.stringify(command.run), command.run.updatedAt).run();
       return changedOne(result) ? { ok: true, value: null } : { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId: command.ownerId, runId: command.runId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId: command.ownerId, runId: command.runId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -211,7 +212,7 @@ export class D1KnowledgeWorkflowRepository {
       const result = await this.#database.prepare("INSERT INTO knowledge_source_manifests (canonical_source_identity, source_revision, content_signature, config_digests_json, counts_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?) ON CONFLICT(canonical_source_identity, source_revision, content_signature) DO UPDATE SET config_digests_json = excluded.config_digests_json, counts_json = excluded.counts_json, status = 'completed', updated_at = excluded.updated_at").bind(reuse.canonicalSourceIdentity, reuse.sourceRevision, reuse.contentSignature, JSON.stringify(reuse.configDigests), JSON.stringify(reuse.counts), reuse.createdAt, reuse.updatedAt).run();
       return changedOne(result) ? { ok: true, value: null } : { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -226,7 +227,7 @@ export class D1KnowledgeWorkflowRepository {
       const result = await statement.run();
       return result.success === true ? { ok: true, value: null } : { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
@@ -243,7 +244,7 @@ export class D1KnowledgeWorkflowRepository {
       const current = await this.findById(command.run.ownerId, command.run.runId);
       return current.ok && current.value?.state === "abandoned" ? { ok: true, value: null } : { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     } catch (error) {
-      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId: command.run.ownerId, runId: command.run.runId, failureKind: "WorkflowPersistenceFailed" });
+      this.#logger({ event: "knowledge-workflow-d1-failure", ownerId: command.run.ownerId, runId: command.run.runId, failureKind: "WorkflowPersistenceFailed",diagnosticToken:workflowPersistenceDiagnostic(error) });
       return { ok: false, error: { kind: "WorkflowPersistenceFailed" } };
     }
   }
