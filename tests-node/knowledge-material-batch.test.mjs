@@ -65,6 +65,8 @@ test("production upload runtime resumes text batches and processes selected PDF 
     const qualityReviews = [];
     let activeParallelReviews=0,maximumParallelReviews=0,parallelSelections=0;
     let captionCalls=0, decisionCalls=0, decisionRefused=false;
+    let activeDrafts=0,maximumDrafts=0,draftOrdinal=0,reviewOverlappedDraft=false;
+    let allowQuizRecovery=false,failedQuizReviews=0,recoveredDrafts=0;
     let modelCalls = 0; let invalidPairedDraftInjected = false, pairedFeedbackSeen = false;
     const transport = async (_url, init) => {
       assert(++modelCalls < 120, "Bound the synthetic model fixture.");
@@ -162,10 +164,23 @@ test("production upload runtime resumes text batches and processes selected PDF 
           : { pages: task.sections.map((section) => ({ url: section.url, notes: "Synthetic concise progress.", candidates: section.text === "" ? [] : [{ summary: section.text, normalizedHash: section.id, evidenceAnchors: [{ url: section.url, selector: section.locator }], coverageGoalIds: [], mediaCandidates: [] }] })) };
         if(task.sections[0]?.id==='parallel-page')output.pages[0].candidates=Array.from({length:3},(_,i)=>({...output.pages[0].candidates[0],summary:`Parallel fixture relationship ${i}`,normalizedHash:`parallel-${i}`}));
       } else if (task.source && task.points) output = { mainSubject: "music", topic: "Synthetic material" };
-      else if (task.draft) output = { score: 9, reasons: ["Synthetic fixture"], feedback: "Accepted fixture", groundingProblems: [], knowledgeGroundingProblems: [] };
+      else if (task.draft) {
+        reviewOverlappedDraft ||= activeDrafts>0;
+        const committed=db.prepare("SELECT COUNT(*) n FROM knowledge_workflow_quizzes WHERE source_id=(SELECT source_id FROM extraction_knowledge_points WHERE knowledge_id=? LIMIT 1)").get(task.knowledge.id).n;
+        assert.equal(task.previousQuizzes.length,committed,"Review must see earlier committed quizzes, not the prefetched draft's stale context");
+        output = { score: 9, reasons: ["Synthetic fixture"], feedback: "Accepted fixture", groundingProblems: [], knowledgeGroundingProblems: [] };
+        if(task.knowledge.summary==='Parallel fixture relationship 0') {
+          failedQuizReviews++;
+          if(!allowQuizRecovery)output.score=11;
+        }
+      }
       else if (task.knowledge) output = { knowledgeId: task.knowledge.id, knowledgeRevision: task.knowledge.sourceRevision, canonicalAnswers: ["fixture"], citedEvidenceUrls: task.knowledge.evidenceAnchors.map((anchor) => anchor.url), multipleChoice: { prompt: `Which fixture belongs to ${task.knowledge.normalizedHash}?`, options: [{ key: "choice-a", text: "Fixture" }, { key: "choice-b", text: "Other" }], correctOptionKeys: ["choice-a"], correctOptionAnswers: [{ key: "choice-a", canonicalAnswer: "fixture" }], explanation: "Fixture is supported by the source." }, fillBlank: { prompt: "The supported answer is ____.", blanks: [{ id: "blank-1", canonicalAnswer: "fixture", acceptedAnswers: ["fixture"] }], explanation: "Fixture is supported by the source." } };
       else assert.fail("Unexpected synthetic model task");
       if(body.response_format?.json_schema?.name === "paired_quiz_v3") {
+        if(task.knowledge.summary==='Parallel fixture relationship 0')recoveredDrafts++;
+        activeDrafts++;maximumDrafts=Math.max(maximumDrafts,activeDrafts);
+        try { await new Promise(resolve=>setTimeout(resolve,20*(++draftOrdinal%3+1))); }
+        finally {activeDrafts--;}
         if (!invalidPairedDraftInjected) { invalidPairedDraftInjected=true; output.fillBlank.blanks[0].canonicalAnswer="other";output.fillBlank.blanks[0].acceptedAnswers=["other","ＯＴＨＥＲ"]; }
         else if(task.feedback?.includes("Paired-quiz validation issues")) { pairedFeedbackSeen=true;assert.match(task.feedback,/canonicalAnswer:/);assert.match(task.feedback,/acceptedAnswers\[0\]:/);assert.match(task.feedback,/NFKC-equivalent/);assert.equal(task.attempt,1,"Schema correction retains its quality attempt");assert(task.sourceEvidence.sections.length>0); }
       }
@@ -196,7 +211,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
       }
       run = unwrap(await repository.findById(ownerId, runId));
       const afterQuiz=db.prepare("SELECT COUNT(*) count FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-point-completed:%' AND status='completed'").get(runId).count;
-      assert(afterQuiz-beforeQuiz<=1,"Each runtime execution processes at most one quiz point");
+      assert(afterQuiz-beforeQuiz<=3,"Each runtime execution processes at most three pipelined quiz points");
       if(afterQuiz>beforeQuiz)quizChunkSizes.push(afterQuiz-beforeQuiz);
       assert.equal(run.extractionDeadlineAt,extractionClock);
     }
@@ -206,7 +221,8 @@ test("production upload runtime resumes text batches and processes selected PDF 
     assert.equal(run.counts.pages, 7);
     assert.equal(run.counts.knowledgePoints, 6);
     assert.equal(run.counts.acceptedQuizzes, 6);
-    assert.deepEqual(quizChunkSizes,[1,1,1,1,1,1]);
+    assert.deepEqual(quizChunkSizes,[3,3]);
+    assert.equal(maximumDrafts,3);assert.equal(activeDrafts,0);assert.equal(reviewOverlappedDraft,true);
     assert.equal(db.prepare("SELECT COUNT(*) count FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-batch-classification:%' AND status='completed'").get(runId).count,1);
     const scratchpad = JSON.parse(db.prepare("SELECT scratchpad_json FROM extraction_scratchpads").get().scratchpad_json);
     assert.equal(scratchpad.pendingBatch, undefined);
@@ -330,12 +346,24 @@ test("production upload runtime resumes text batches and processes selected PDF 
     unwrap(await materials.persist({ownerId,runId:parallelRunId,materialId:'parallel-material',idempotencyKey:parallelRunId,fingerprint:parallelMaterial.contentDigest,objectKey:'synthetic-parallel',material:parallelMaterial,createdAt:clock()}));
     parallelRun=unwrap(await parallelService.attachMaterial({ownerId,runId:parallelRunId,materialId:'parallel-material'}));
     db.prepare("INSERT INTO library_sources (owner_id,source_id,submitted_url,canonical_url,title,description,adapter_json,identity_evidence_json,state,approved_at,updated_at,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(ownerId,parallelSourceId,parallelUrl,parallelUrl,'Parallel source','Offline concurrency fixture',JSON.stringify({kind:'private-document'}),'[]','active',clock(),clock(),1);
-    for(let step=0;step<4&&parallelRun.state!=='per-point-quiz-loop';step++){
+    for(let step=0;step<4&&parallelRun.state!=='completed';step++){
       const runtime=createKnowledgeWorkflowRuntime({imagePolicy:WEBPAGE_IMAGE_POLICY,database,fetch:transport,browser:{readPage:forbidden,readRobots:forbidden,screenshot:forbidden,close:async()=>({ok:true,value:null})},apiKey:'offline-fixture',endpoint:'https://example.test/model',now:clock,nowMs:Date.now,logger,configSnapshots:configs,material:materials,transition:({run:current,nextState,...rest})=>parallelService.advance({ownerId,runId:parallelRunId,expectedRevision:current.revision,nextState,...rest})});
       unwrap(await runtime.execute(parallelRun));parallelRun=unwrap(await repository.findById(ownerId,parallelRunId));
     }
     assert.equal(parallelRun.counts.knowledgePoints,3);
     assert.equal(maximumParallelReviews,3);assert.equal(activeParallelReviews,0);assert.equal(parallelSelections,1);
+
+    assert.equal(parallelRun.state,'completed');assert.equal(parallelRun.failureKind,'WorkflowQuizItemsFailed');
+    assert.equal(parallelRun.counts.acceptedQuizzes,2,'A failed critic must not prevent its peers from publishing');
+    assert.equal(failedQuizReviews,4);assert.equal(recoveredDrafts,1);
+    const beforeRecovery=modelCalls;
+    allowQuizRecovery=true;
+    parallelRun=unwrap(await parallelService.control({ownerId,runId:parallelRunId,expectedRevision:parallelRun.revision,action:'retry-quizzes',idempotencyKey:'recover-quiz-fixture'}));
+    const recoveryRuntime=createKnowledgeWorkflowRuntime({imagePolicy:WEBPAGE_IMAGE_POLICY,database,fetch:transport,browser:{readPage:forbidden,readRobots:forbidden,screenshot:forbidden,close:async()=>({ok:true,value:null})},apiKey:'offline-fixture',endpoint:'https://example.test/model',now:clock,nowMs:Date.now,logger,configSnapshots:configs,material:materials,transition:({run:current,nextState,...rest})=>parallelService.advance({ownerId,runId:parallelRunId,expectedRevision:current.revision,nextState,...rest})});
+    unwrap(await recoveryRuntime.execute(parallelRun));parallelRun=unwrap(await repository.findById(ownerId,parallelRunId));
+    assert.equal(parallelRun.state,'completed');assert.equal(parallelRun.failureKind,null);
+    assert.equal(parallelRun.counts.acceptedQuizzes,3);assert.equal(recoveredDrafts,1,'Recovery reuses the saved draft');
+    assert.equal(failedQuizReviews,5);assert.equal(modelCalls-beforeRecovery,1,'Successful peers and drafts require no repeated model calls');
 
   } finally { db.close(); }
 });
