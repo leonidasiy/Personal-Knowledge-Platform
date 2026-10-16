@@ -39,6 +39,7 @@ import { validateSourceRightsProfile } from "../source-library/rights-profile.js
  *   readonly sourceId: string,
  *   readonly sourceRevision: number,
  *   readonly canonicalSourceIdentity: string,
+ *   readonly extractionScope?: "page" | "platform",
  *   readonly contentSignature: string,
  *   readonly rightsProfile?: SourceRightsProfile | null,
  *   readonly userAuthorization?: UserLinkAuthorization | null,
@@ -181,6 +182,7 @@ function isRun(value) {
   return isRecord(value) && isNonEmptyText(value.ownerId) && isNonEmptyText(value.runId) &&
     isNonEmptyText(value.sourceId) && isPositiveInteger(value.sourceRevision) &&
     isNonEmptyText(value.canonicalSourceIdentity) && isNonEmptyText(value.contentSignature) &&
+    (value.extractionScope === undefined || value.extractionScope === "page" || value.extractionScope === "platform") &&
     isWorkflowState(value.state) && typeof value.revision === "number" && Number.isSafeInteger(value.revision) && value.revision >= 0 &&
     isNonEmptyText(value.idempotencyKey) && isConfigDigests(value.configDigests) &&
     (value.extractionStartedAt === null || isNonEmptyText(value.extractionStartedAt)) &&
@@ -302,6 +304,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         !isConfigDigests(command.configDigests)) {
         return { ok: false, error: { kind: "WorkflowCommandInvalid", field: "command" } };
       }
+      if (command.extractionScope !== undefined && command.extractionScope !== "page" && command.extractionScope !== "platform") return {ok:false,error:{kind:"WorkflowCommandInvalid",field:"extractionScope"}};
       if (command.sourceOrigin !== undefined && command.sourceOrigin !== "private-document" && command.sourceOrigin !== "url-material") {
         return { ok: false, error: { kind: "WorkflowCommandInvalid", field: "sourceOrigin" } };
       }
@@ -316,7 +319,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
       dependencies.logger({ event: "knowledge-workflow.create-entry", ownerId: command.ownerId });
       let attemptKey = command.idempotencyKey;
       /** @param {KnowledgeWorkflowRun} existing */
-      const matches = (existing) => existing.sourceId === command.sourceId && existing.sourceRevision === command.sourceRevision && existing.canonicalSourceIdentity === command.canonicalSourceIdentity && existing.contentSignature === command.contentSignature && fingerprint(existing.configDigests) === fingerprint(command.configDigests) && fingerprint(existing.rightsProfile ?? null) === fingerprint(normalizedRightsProfile) && fingerprint(existing.userAuthorization ?? null) === fingerprint(command.userAuthorization ?? null);
+      const matches = (existing) => existing.extractionScope === command.extractionScope && existing.sourceId === command.sourceId && existing.sourceRevision === command.sourceRevision && existing.canonicalSourceIdentity === command.canonicalSourceIdentity && existing.contentSignature === command.contentSignature && fingerprint(existing.configDigests) === fingerprint(command.configDigests) && fingerprint(existing.rightsProfile ?? null) === fingerprint(normalizedRightsProfile) && fingerprint(existing.userAuthorization ?? null) === fingerprint(command.userAuthorization ?? null);
       while (true) {
         const replay = await repository.findByIdempotency(command.ownerId, attemptKey);
         if (!replay.ok) return replay;
@@ -336,6 +339,7 @@ export function createKnowledgeWorkflowService(repository, dependencies) {
         sourceId: command.sourceId,
         sourceRevision: command.sourceRevision,
         canonicalSourceIdentity: command.canonicalSourceIdentity,
+        ...(command.extractionScope === undefined ? {} : {extractionScope: command.extractionScope}),
         contentSignature: command.contentSignature,
         rightsProfile: normalizedRightsProfile,
         userAuthorization: /** @type {UserLinkAuthorization|null} */(command.userAuthorization ?? null),

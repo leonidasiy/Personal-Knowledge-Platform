@@ -213,7 +213,7 @@
  * }} ExtractionDependencies
  */
 
-/** @typedef {{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number, readonly rootUrl: string, readonly startedAtMs: number, readonly deadlineAtMs: number }} ExtractionCommand */
+/** @typedef {{ readonly ownerId: string, readonly runId: string, readonly sourceId: string, readonly sourceRevision: number, readonly rootUrl: string, readonly extractionScope?: "page" | "platform", readonly startedAtMs: number, readonly deadlineAtMs: number }} ExtractionCommand */
 
 const freeze = Object.freeze;
 const extractionVersion = "knowledge-extraction-v1";
@@ -276,7 +276,7 @@ function validScratchpad(value) {
 
 /** @param {unknown} command @returns {command is ExtractionCommand} */
 function validCommand(command) {
-  return isRecord(command) && text(command.ownerId) && text(command.runId) && text(command.sourceId) && positiveInteger(command.sourceRevision) && publicHttps(command.rootUrl) && nonNegativeInteger(command.startedAtMs) && positiveInteger(command.deadlineAtMs) && typeof command.deadlineAtMs === "number" && typeof command.startedAtMs === "number" && command.deadlineAtMs > command.startedAtMs;
+  return isRecord(command) && text(command.ownerId) && text(command.runId) && text(command.sourceId) && positiveInteger(command.sourceRevision) && publicHttps(command.rootUrl) && (command.extractionScope === undefined || command.extractionScope === "page" || command.extractionScope === "platform") && nonNegativeInteger(command.startedAtMs) && positiveInteger(command.deadlineAtMs) && typeof command.deadlineAtMs === "number" && typeof command.startedAtMs === "number" && command.deadlineAtMs > command.startedAtMs;
 }
 
 /** @param {ExtractionScratchpad} value @returns {ExtractionScratchpad} */
@@ -377,7 +377,7 @@ export function createExtractionRunner(dependencies) {
       const persistedFrontier = Array.isArray(loaded.value.frontier) ? loaded.value.frontier : [];
       const retryCheckpoint = loaded.value.planCheckpoint;
       const approvedInventory = retryCheckpoint?.batchKey === (dependencies.batchAcquirer?.key ?? null) && retryCheckpoint.retryGeneration === (loaded.value.retryGeneration ?? null) && retryCheckpoint.orderedUrls !== null ? retryCheckpoint.orderedUrls : persistedFrontier;
-      const orderedUrls = loaded.value.retryingFailedPages === true ? approvedInventory : dependencies.orderedUrls;
+      const orderedUrls = command.extractionScope === "page" ? [root.href] : loaded.value.retryingFailedPages === true ? approvedInventory : dependencies.orderedUrls;
       let scratchpad = cloneScratchpad({
         ...loaded.value,
         discoveredUrls: (orderedUrls ?? [...new Set([
@@ -473,7 +473,7 @@ export function createExtractionRunner(dependencies) {
           return completeExtraction("agent-blocked");
         }
         const destination = new URL(nextUrl);
-        if (destination.origin !== root.origin || !withinPath(root, destination)) return fail({ kind: "UnsafeDestination" }, dependencies, command.runId);
+        if (command.extractionScope === "page" && destination.href !== root.href || destination.origin !== root.origin || !withinPath(root, destination)) return fail({ kind: "UnsafeDestination" }, dependencies, command.runId);
         if (dependencies.checkRobots !== undefined) {
           let checked;
           try { checked = await dependencies.checkRobots(destination.href); } catch (error) { return fail({ kind: "ExtractionAcquisitionFailed", causeKind: "RobotsCheckFailed" }, dependencies, command.runId); }

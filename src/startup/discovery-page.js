@@ -123,6 +123,7 @@ export function createDiscoveryPage(dependencies) {
   /** @type {Map<string, import("../routes/discover.js").DiscoverRouteItem>} */ const routeItems =
     new Map();
   /** @type {Set<string>} */ const suppressed = new Set();
+  /** @type {Record<string,"page"|"platform">} */ const extractionScopes = {};
   let sourceActionsAvailable = false;
   return freeze({
     async load() {
@@ -237,7 +238,8 @@ export function createDiscoveryPage(dependencies) {
             "data-discovery-approve",
           );
           if (itemId !== null) {
-            void approve(itemId);
+            const scope = new FormData(event.currentTarget).get("extractionScope");
+            void approve(itemId, scope === "platform" ? "platform" : "page");
           }
         })
       );
@@ -299,6 +301,7 @@ export function createDiscoveryPage(dependencies) {
           : projectedModel.stateMessage,
         selectedItemId: route.selectedItemId,
         pendingId: pendingDecisionItemId,
+        extractionScopes,
         canAct: sourceActionsAvailable && route.online,
         search: searchModel(route.online),
         markup,
@@ -402,8 +405,8 @@ export function createDiscoveryPage(dependencies) {
     return result;
   }
 
-  /** @param {string} itemId */
-  async function approve(itemId) {
+  /** @param {string} itemId @param {"page"|"platform"} [extractionScope] */
+  async function approve(itemId, extractionScope = extractionScopes[itemId] ?? "page") {
     if (pendingDecisionItemId !== null) return;
     const item = routeItems.get(itemId);
     if (item === undefined) { onError(markup.sourceUnavailable); return; }
@@ -411,10 +414,12 @@ export function createDiscoveryPage(dependencies) {
       onError(markup.failureMessages.SourceFormatUnsupported ?? markup.sourceUnavailable);
       return;
     }
+    extractionScopes[item.id] = extractionScope;
     pendingDecisionItemId = item.id;
     rerender();
     const result = await sourceLibrary.extract({
       ...item.candidate,
+      extractionScope,
       identityStatus: "resolved",
       interestAreaIds: [],
       idempotencyKey: `approve:${createId()}`,

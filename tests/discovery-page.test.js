@@ -345,15 +345,20 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
 
   const selectedTitle = list.match(new RegExp(`data-discovery-item-id="${itemIds[0]}"[^>]*>[\\s\\S]*?<strong>([^<]+)</strong>`))?.[1];
   assert(selectedTitle !== undefined, "Selected source has a real title.");
+  const scopeDetail = page.render({selectedItemId:itemIds[0],online:true});
+  assert(scopeDetail.includes('name="extractionScope"') && scopeDetail.includes('value="page" selected') && scopeDetail.includes("Entire platform"), "Discover offers page-only extraction by default and platform extraction.");
   conflict = true;
   const errorsBeforePrompt=errors.length;
   await page.approve(itemIds[0]);
+  assert(approvalCommands.at(-1)?.extractionScope === "page", "Default extraction submits page scope.");
   assert(prompts.length===1 && prompts[0].includes("Automatic processing could not start") && !prompts[0].includes("Library") && prompts[0].includes("Would you like to open"),"Conflict explains the cause and asks for manual upload.");
   assert(uploadTitles.length===0,"Declining upload must retain Discover.");
   assert(errors.length===errorsBeforePrompt,"The popup must not duplicate the failure as a toast.");
   assert(promptedUrls[0]!==undefined && promptedUrls[0].startsWith("https://"),"The confirmation receives the original source URL to open.");
   acceptUpload = true;
-  await page.approve(itemIds[0]);
+  await page.approve(itemIds[0], "platform");
+  assert(approvalCommands.at(-1)?.extractionScope === "platform", "Platform extraction submits the explicit scope.");
+  assert(page.render({selectedItemId:itemIds[0],online:true}).includes('value="platform" selected'), "A failed request preserves the scope selection.");
   assert(uploadTitles[0]===selectedTitle,"Confirming upload pre-fills the selected source title.");
   conflict = false;
   prompts.length=0;uploadTitles.length=0;uploadReasons.length=0;errors.length=0;approvalCommands.length=0;decisionRequests=0;

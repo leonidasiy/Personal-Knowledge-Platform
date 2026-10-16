@@ -435,3 +435,20 @@ Deno.test("quiz scheduling advances revision with monotonic counts and preserves
   const decrease=await fixture.service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:chunk.value.revision,nextState:"per-point-quiz-loop",counts:{pages:3,knowledgePoints:2,acceptedQuizzes:0,pendingQuizzes:0}});assertEquals(decrease.ok,false);
   const dropped=await fixture.service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:chunk.value.revision,nextState:"per-point-quiz-loop",counts:chunk.value.counts});assertEquals(dropped.ok,true);
 });
+
+Deno.test("extraction scope persists through reload and cannot change under the same idempotency key", async () => {
+  const fixture = setup();
+  const command = {ownerId:"owner-a",sourceId:"source-a",sourceRevision:1,canonicalSourceIdentity:"https://example.test/source",contentSignature:"source-a",configDigests:{},idempotencyKey:"scoped-run",extractionScope:"page"};
+  const created = await fixture.service.createRun(command);
+  assertEquals(created.ok,true);
+  if (!created.ok) return;
+  const loaded = await fixture.service.status({ownerId:"owner-a",runId:created.value.run.runId});
+  assertEquals(loaded.ok,true);
+  if (loaded.ok) assertEquals(loaded.value.extractionScope,"page");
+  const conflict = await fixture.service.createRun({...command,extractionScope:"platform"});
+  assertEquals(conflict.ok,false);
+  if (!conflict.ok) assertEquals(conflict.error.kind,"WorkflowIdempotencyConflict");
+  const invalid = await fixture.service.createRun({...command,extractionScope:"all"});
+  assertEquals(invalid.ok,false);
+  if (!invalid.ok) assertEquals(invalid.error.kind,"WorkflowCommandInvalid");
+});

@@ -293,7 +293,16 @@ Deno.test("explicit Link extraction validates URL and starts the shared owner-bo
     const response=await fixture.worker.fetch(request({...command,url}));assertEquals(response.status,400);
   }
   assertEquals(fixture.started.length,0);
+  assertEquals((await fixture.worker.fetch(request({...command,extractionScope:"all"}))).status,400);
+  assertEquals(fixture.started.length,0);
   const response=await fixture.worker.fetch(request(command));assertEquals(response.status,200);assertEquals(fixture.started.length,1);
+  assertEquals(fixture.started[0].extractionScope,undefined);
+  assertEquals((await fixture.worker.fetch(request({...command,extractionScope:"page"}))).status,200);
+  assertEquals(fixture.started[1].extractionScope,"page");
+  const pageKey=fixture.started[1].idempotencyKey;
+  assertEquals((await fixture.worker.fetch(request({...command,extractionScope:"platform"}))).status,200);
+  assertEquals(fixture.started[2].extractionScope,"platform");
+  assertEquals(fixture.started[2].idempotencyKey === pageKey,false);
   const authorization=/** @type {Record<string,unknown>} */(fixture.started[0].userAuthorization);
   assertEquals(authorization.kind,"user-authorized-link");assertEquals(authorization.ownerId,"owner-a");assertEquals(fixture.legacyIngestion.length,0);
 });

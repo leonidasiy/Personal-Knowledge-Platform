@@ -587,9 +587,12 @@ export function createDiscoveryWorker(configuration, dependencies) {
         }
         let approvalInput = document;
         if (sourceExtraction) {
+          if (document.extractionScope !== undefined && document.extractionScope !== "page" && document.extractionScope !== "platform") return json({error:"WorkflowCommandInvalid",field:"extractionScope"},400);
           if (dependencies.knowledgeWorkflow == null) return knowledgeWorkflowFailureResponse({kind:"KnowledgeWorkflowUnavailable"});
-          if (Object.hasOwn(document,"url")) {
-            const prepared = prepareSubmittedLink(document, dependencies.now?.() ?? new Date().toISOString(),urlMaterial);
+          const {extractionScope: _extractionScope, ...sourceDocument} = document;
+          approvalInput = sourceDocument;
+          if (Object.hasOwn(sourceDocument,"url")) {
+            const prepared = prepareSubmittedLink(sourceDocument, dependencies.now?.() ?? new Date().toISOString(),urlMaterial);
             if (!prepared.ok) return json({error:prepared.error.kind,field:prepared.error.field},400);
             approvalInput = prepared.value;
           }
@@ -629,7 +632,8 @@ export function createDiscoveryWorker(configuration, dependencies) {
         let workflowStart = null;
         if (result.ok && sourceAction === "approve" && dependencies.knowledgeWorkflow !== null && dependencies.knowledgeWorkflow !== undefined) {
           const rightsProfile = dependencies.sourceRightsProfileFor?.(result.value.source.canonicalUrl) ?? null;
-          workflowStart = await dependencies.knowledgeWorkflow.start({ ownerId: authenticated.value.ownerId, sourceId: result.value.source.id, sourceRevision: result.value.source.revision, canonicalSourceIdentity: result.value.source.canonicalUrl, contentSignature: `source-revision:${result.value.source.canonicalUrl}:${result.value.source.revision}`, configDigests: {}, idempotencyKey: urlMaterial ? `url-material:${result.value.source.id}:${document.idempotencyKey}` : `knowledge-workflow:${result.value.source.id}:${result.value.source.revision}`, ...(urlMaterial ? {sourceOrigin:"url-material"} : {}), userAuthorization: {kind:"user-authorized-link",ownerId:authenticated.value.ownerId,sourceId:result.value.source.id,sourceRevision:result.value.source.revision,url:result.value.source.canonicalUrl,recordedAt:result.value.source.approvedAt}, rightsProfile });
+          const extractionScope = sourceExtraction && !urlMaterial ? document.extractionScope : undefined;
+          workflowStart = await dependencies.knowledgeWorkflow.start({ ownerId: authenticated.value.ownerId, sourceId: result.value.source.id, sourceRevision: result.value.source.revision, canonicalSourceIdentity: result.value.source.canonicalUrl, contentSignature: `source-revision:${result.value.source.canonicalUrl}:${result.value.source.revision}`, configDigests: {}, ...(extractionScope === undefined ? {} : {extractionScope}), idempotencyKey: urlMaterial ? `url-material:${result.value.source.id}:${document.idempotencyKey}` : `knowledge-workflow:${result.value.source.id}:${result.value.source.revision}${extractionScope === undefined ? "" : `:${extractionScope}`}`, ...(urlMaterial ? {sourceOrigin:"url-material"} : {}), userAuthorization: {kind:"user-authorized-link",ownerId:authenticated.value.ownerId,sourceId:result.value.source.id,sourceRevision:result.value.source.revision,url:result.value.source.canonicalUrl,recordedAt:result.value.source.approvedAt}, rightsProfile });
           if (!workflowStart.ok) return knowledgeWorkflowFailureResponse(workflowStart.error);
         }
         if (result.ok && sourceAction === "approve" && workflowStart === null && !result.value.reused && result.value.job !== null && dependencies.sourceIngestion !== null && dependencies.sourceIngestion !== undefined && result.value.source.adapter.capabilities.includes("bounded-ingestion")) {

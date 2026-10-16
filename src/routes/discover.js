@@ -2,7 +2,7 @@
 
 /** @typedef {"never-run" | "loading" | "partial" | "error" | "offline" | "empty" | "success"} DiscoverRouteState */
 /** @typedef {"link-only" | "learner-notes" | "publisher-transcript" | "user-original"} DiscoverEvidenceStatus */
-/** @typedef {{readonly exploreUnavailable:string,readonly exploreLink:string,readonly provider:string,readonly podcast:string,readonly extractionUnavailable:string,readonly decisionUnavailable:string,readonly offlineNotice:string,readonly stateNotice:string,readonly youtubeNotice:string,readonly workspace:string,readonly neverRunState:string,readonly loadingState:string,readonly emptyState:string,readonly errorState:string,readonly offlineState:string,readonly partialState:string,readonly route:string,readonly controls:string,readonly missingDetail:string,readonly selectDetail:string,readonly evidenceBoundary:string,readonly statePanel:string,readonly results:string,readonly resultRow:string,readonly youtubeConnected:string,readonly youtubeDisconnected:string,readonly youtubeUnavailable:string,readonly failureMessages:Readonly<Record<string,string>>,readonly youtubeSource:import("../startup/discovery-runtime.js").YouTubeSourceContract,readonly sourceUnavailable:string,readonly sourceLink:string,readonly detail:string,readonly youtubePolicy:string,readonly youtubeActions:string,readonly youtubeTranscriptGuidance:string,readonly manualUploadGuidance:string,readonly manualUpload:string,readonly decisionActions:string,readonly sourceAreaRequired:string,readonly sourceAlreadyAdded:string,readonly sourceAdded:string,readonly uploadRequired:string,readonly uploadReadFailed:string,readonly uploadStoreFailed:string,readonly uploadStored:string,readonly sourceRejected:string,readonly enterDiscoveryValue:string,readonly sourceReconnect:string,readonly sourceSignIn:string,readonly sourceAreaMissing:string,readonly sourceDecisionFailed:string}} DiscoverMarkup */
+/** @typedef {{readonly exploreUnavailable:string,readonly exploreLink:string,readonly provider:string,readonly podcast:string,readonly extractionUnavailable:string,readonly decisionUnavailable:string,readonly offlineNotice:string,readonly stateNotice:string,readonly youtubeNotice:string,readonly workspace:string,readonly neverRunState:string,readonly loadingState:string,readonly emptyState:string,readonly errorState:string,readonly offlineState:string,readonly partialState:string,readonly route:string,readonly controls:string,readonly missingDetail:string,readonly selectDetail:string,readonly evidenceBoundary:string,readonly statePanel:string,readonly results:string,readonly resultRow:string,readonly youtubeConnected:string,readonly youtubeDisconnected:string,readonly youtubeUnavailable:string,readonly failureMessages:Readonly<Record<string,string>>,readonly youtubeSource:import("../startup/discovery-runtime.js").YouTubeSourceContract,readonly sourceUnavailable:string,readonly sourceLink:string,readonly detail:string,readonly youtubePolicy:string,readonly youtubeActions:string,readonly youtubeTranscriptGuidance:string,readonly manualUploadGuidance:string,readonly manualUpload:string,readonly decisionActions:string,readonly extractionScope:string,readonly sourceAreaRequired:string,readonly sourceAlreadyAdded:string,readonly sourceAdded:string,readonly uploadRequired:string,readonly uploadReadFailed:string,readonly uploadStoreFailed:string,readonly uploadStored:string,readonly sourceRejected:string,readonly enterDiscoveryValue:string,readonly sourceReconnect:string,readonly sourceSignIn:string,readonly sourceAreaMissing:string,readonly sourceDecisionFailed:string}} DiscoverMarkup */
 
 /**
  * @typedef {{
@@ -38,6 +38,7 @@
  *   readonly items: readonly DiscoverRouteItem[],
  *   readonly selectedItemId: string | null,
  *   readonly maxVisibleItems: number,
+ *   readonly extractionScopes?: Readonly<Record<string,"page"|"platform">>,
  *   readonly pendingId: string | null,
  *   readonly canAct: boolean,
  *   readonly search: { readonly query:string, readonly limit:number, readonly capabilities:readonly {readonly id:string,readonly label:string,readonly resultKind:string,readonly priority:number,readonly enabled:boolean}[], readonly selectedProviderIds:readonly string[], readonly available:boolean },
@@ -220,6 +221,11 @@ function renderDecisionActions(model, item, offline) {
     sourceCapabilities: remoteText(model, item.candidate.adapter.capabilities.join(",")),
     submitDisabled: unsupported || unavailable ? "disabled" : "",
     submitLabel: pending ? "Starting…" : "Extract Knowledge Points",
+    extractionScope: unsupported ? "" : template(model, "extractionScope", {
+      scopeDisabled: unavailable ? "disabled" : "",
+      pageSelected: model.extractionScopes?.[item.id] !== "platform" ? "selected" : "",
+      platformSelected: model.extractionScopes?.[item.id] === "platform" ? "selected" : "",
+    }),
     unavailable: unsupported
       ? model.markup.extractionUnavailable
       : model.canAct

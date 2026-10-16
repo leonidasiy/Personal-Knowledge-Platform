@@ -247,3 +247,16 @@ test('unchanged repeated invalid IDs halt and discovery also returns typed fresh
  const staleChoice={action:'click',targetId:'historical-close',rationale:'Select an obsolete control.'};const repeated=lessonFixture([staleChoice,staleChoice]);assert.equal((await navigateHybridLesson(repeated.deps)).error.kind,'NavigationActionRepeated');assert.equal(repeated.calls.filter(c=>c[0]==='click').length,0);assert.equal(repeated.inputs.length,2);
  const f=fixture([choice('click'),choice('click'),choice()]);const r=await discoverHybridNavigation(f.deps);assert.equal(r.ok,true,JSON.stringify(r));assert.equal(f.inputs[2].input.lastDecisionFailure.kind,'NavigationTargetObservationStale');assert.equal(f.inputs[2].input.lastDecisionFailure.targetId,'tab');assert.equal(f.calls.filter(c=>c[0]==='click').length,1);assert.ok(f.memories.some(m=>m.phase==='navigation-target-rejected'));assert.match(f.inputs[2].systemPrompt,/Only currentPage.controls supplies authoritative clickable IDs/);
 });
+
+test('platform navigation includes observed sibling courses and stays on the selected origin',async()=>{
+  const sibling='https://example.test/other-course/lesson';
+  const f=fixture([{...choice('ready',[source,sibling]),sourceRootUrl:'https://example.test/'}]);
+  f.deps.extractionScope='platform';
+  f.deps.inspect=async c=>{f.calls.push(['inspect',c]);return {ok:true,value:{navigation:{...initial.navigation,controls:[control('sibling','Other course',sibling,0)]}}};};
+  const r=await discoverHybridNavigation(f.deps);
+  assert.equal(r.ok,true);assert.deepEqual(r.value.lessonUrls,[source,sibling]);
+  assert.equal(f.calls.find(c=>c[0]==='inspect')[1].rootUrl,'https://example.test/');
+  assert.match(f.inputs[0].systemPrompt,/entire same-origin platform/);
+  const narrowed=fixture([choice('ready',[source])]);narrowed.deps.extractionScope='platform';
+  assert.equal((await discoverHybridNavigation(narrowed.deps)).error.kind,'NavigationLessonScopeInvalid');
+});
