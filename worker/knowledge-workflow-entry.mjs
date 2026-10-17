@@ -192,14 +192,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       resolveAddresses: (hostname) => resolvePublicAddresses(hostname, workerFetch),
       transition: (command) => service.advance({ ownerId: command.run.ownerId, runId: command.run.runId, expectedRevision: command.run.revision, nextState: command.nextState, ...(command.counts === undefined ? {} : { counts: command.counts }), ...(command.failureKind === undefined ? {} : { failureKind: command.failureKind }), ...(command.robotsEvidence === undefined ? {} : { robotsEvidence: command.robotsEvidence }) }),
     });
-    const workflowBinding=this.env.KNOWLEDGE_WORKFLOW;
-    const restartFromCheckpoint=async run=>{
-      await step.do(`restart from checkpoint ${run.revision}`,{timeout:'1 minute',retries:{limit:0,delay:0}},async()=>{
-        const instance=await workflowBinding.get(event.instanceId);
-        await instance.restart();
-      });
-      return {runId,state:run.state,revision:run.revision,configDigests:run.configDigests};
-    };
+    const continueFromCheckpoint=run=>({runId,state:run.state,revision:run.revision,configDigests:run.configDigests,continuation:true});
     if (current.value.state === "source-added") {
       const assessed = await step.do("begin rights assessment", async () => service.advance({ ownerId, runId, expectedRevision: current.value.revision, nextState: "rights-assessment" }));
       if (!assessed.ok) throw new Error(assessed.error.kind);
@@ -253,7 +246,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       if (!current.ok) throw new Error(current.error.kind);
       if (result.state !== current.value.state || result.run?.revision !== current.value.revision) result = { ...result, state: current.value.state, run: current.value };
       if (result.state === "per-point-quiz-loop") {
-        return restartFromCheckpoint(current.value);
+        return continueFromCheckpoint(current.value);
       }
       if (isWorkflowRetryStage(result.state)) {
         executed = await executeOrAwaitMaterial(`resume knowledge workflow ${current.value.revision}`);
@@ -265,7 +258,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
         const chunkRun = /** @type {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} */ (result.run);
         const continued = await step.do(`continue bounded extraction chunk ${chunkRun.revision}`, async () => service.advance({ ownerId, runId, expectedRevision: chunkRun.revision, nextState: "extraction-loop" }));
         if (!continued.ok) throw new Error(continued.error.kind);
-        return restartFromCheckpoint(continued.value);
+        return continueFromCheckpoint(continued.value);
       }
       await step.do(`notify workflow decision ${result.run?.revision}`, () => notifyOutcome(result.run));
       try {

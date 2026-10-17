@@ -256,7 +256,7 @@ function nextForControl(run, action, now, deadlineReached, envelopeMs) {
 
 /** @param {WorkflowState} current @param {WorkflowState} next @returns {boolean} */
 function isAllowedTransition(current, next) {
-  if (current === next) return current === "per-point-quiz-loop";
+  if (current === next) return current === "extraction-loop" || current === "per-point-quiz-loop";
   if (next === "retryable-failure") return isWorkflowRetryStage(current);
   const allowed = {
     "source-added": new Set(["rights-assessment", "awaiting-rights-review", "abandoned"]),

@@ -341,17 +341,17 @@ test("actual workflow entry sends before retention/waits and preserves extractio
     };
     const execute=async()=>{
       let result=await entry.run({instanceId:'instance',payload:{ownerId:'owner',runId:'run'}},step);
-      if(restarts>0&&result.state!=='completed')result=await entry.run({instanceId:'instance',payload:{ownerId:'owner',runId:'run'}},step);
+      if(result.continuation===true){restarts++;actions.push('checkpoint');result=await entry.run({instanceId:'instance',payload:{ownerId:'owner',runId:'run'}},step);}
       return result;
     };
     if(state==='checkpoint-extraction'){
       const result=await entry.run({instanceId:'instance',payload:{ownerId:'owner',runId:'run'}},step);
-      assert.equal(result.state,'extraction-loop');assert.equal(current.revision,3);assert.equal(restarts,1);assert.equal(modelCalls,0);assert.deepEqual(actions,['restart']);
+      assert.equal(result.state,'extraction-loop');assert.equal(current.revision,3);assert.equal(result.continuation,true);assert.equal(restarts,0);assert.equal(modelCalls,0);assert.deepEqual(actions,[]);
     }else if(state==="stale-time-window" || state==="stale-completed") {
       assert.equal((await execute()).state,"completed");
       assert.equal(modelCalls,1);
       assert.equal(current.counts.acceptedQuizzes,6);
-      assert.deepEqual(actions,["restart","source-ready"]);
+      assert.deepEqual(actions,["checkpoint","source-ready"]);
     }else if(state==="cached-quiz-cpu") {
       await assert.rejects(execute(),/WorkflowControlTimeout/);
       assert.equal(modelCalls,0);
@@ -360,7 +360,7 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       assert.equal(current.failureKind,"WorkflowCpuTimeLimitExceeded");
       assert.equal(current.counts.knowledgePoints,37);
       assert.equal(current.counts.acceptedQuizzes,5);
-      assert.deepEqual(actions,["restart","retention","retention","retention","source-attention","wait"]);
+      assert.deepEqual(actions,["checkpoint","retention","retention","retention","source-attention","wait"]);
     }else if(state==="empty-exhausted"){
       await assert.rejects(entry.run({payload:{ownerId:"owner",runId:"run"}},step), /WorkflowControlTimeout/);
       assert.equal(current.state,"retryable-failure");

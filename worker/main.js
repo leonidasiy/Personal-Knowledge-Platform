@@ -203,7 +203,7 @@ import { createReminderRuntime } from "./reminders/runtime.js";
  *   readonly resume: () => Promise<void>,
  *   readonly restart?: () => Promise<void>,
  *   readonly terminate: (options?: { readonly rollback?: boolean }) => Promise<void>,
- *   readonly status?: () => Promise<{ readonly status: string }>,
+ *   readonly status?: () => Promise<{ readonly status: string, readonly output?: unknown }>,
  *   readonly sendEvent: (event: { readonly type: string, readonly payload?: unknown }) => Promise<void>
  * }} KnowledgeWorkflowInstance
  */
@@ -2560,7 +2560,7 @@ async function deliverKnowledgeWorkflowControl(instance, action, restartComplete
     return;
   }
   if (action === "resume" || action === "retry-quizzes") {
-    if (restartCompleted || typeof instance.status === "function" && (await instance.status()).status === "errored") {
+    if (restartCompleted || typeof instance.status === "function" && ["errored","complete"].includes((await instance.status()).status)) {
       if (typeof instance.restart !== "function") throw new TypeError("Knowledge workflow restart is unavailable.");
       await instance.restart();
       return;

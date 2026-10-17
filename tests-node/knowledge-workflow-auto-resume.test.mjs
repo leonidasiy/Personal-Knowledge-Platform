@@ -11,16 +11,16 @@ async function fixture(phase='per-point-quiz-loop') {
   const migrations=new URL('../worker/migrations/',import.meta.url);
   for(const name of (await readdir(migrations)).filter(n=>n.endsWith('.sql')).sort())db.exec(await readFile(new URL(name,migrations),'utf8'));
   const database={prepare(sql){let values=[];return {bind(...v){values=v;return this;},async first(){return db.prepare(sql).get(...values)??null;},async all(){return {success:true,results:db.prepare(sql).all(...values)};},async run(){return {success:true,meta:{changes:Number(db.prepare(sql).run(...values).changes)}};}};},async batch(statements){return Promise.all(statements.map(s=>s.run()));}};
-  let time=Date.parse('2026-10-16T12:00:00.000Z'),status='errored',events=0,restarts=0,dispatchFails=false;
+  let time=Date.parse('2026-10-16T12:00:00.000Z'),status='errored',events=0,restarts=0,dispatchFails=false,output;
   const now=()=>new Date(time).toISOString(),logger=()=>{};
   const service=createKnowledgeWorkflowService(new D1KnowledgeWorkflowRepository({database,logger}),{now,logger,createId:()=> 'run-auto'});
   const unwrap=r=>{assert.equal(r.ok,true,JSON.stringify(r.error));return r.value;};
   let run=unwrap(await service.createRun({ownerId:'owner-a',sourceId:'source-a',sourceRevision:1,canonicalSourceIdentity:'https://example.test/',contentSignature:'source',configDigests:{},idempotencyKey:'create-auto'})).run;
   for(const state of ['rights-assessment','robots-check','extraction-loop',...(phase==='per-point-quiz-loop'?['extraction-finalized','per-point-quiz-loop']:[])])run=unwrap(await service.advance({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,nextState:state,counts:{pages:11,knowledgePoints:31,acceptedQuizzes:1,pendingQuizzes:0}}));
   db.prepare("INSERT INTO library_sources VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run('owner-a','source-a','https://example.test/','https://example.test/','Fixture','','{}','[]','active',now(),now(),1);
-  const instance={id:'instance',status:async()=>({status}),restart:async()=>{if(dispatchFails)throw new Error('Test dispatch unavailable');restarts++;status='running';},resume:async()=>{},sendEvent:async()=>{if(dispatchFails)throw new Error('Test dispatch unavailable');events++;status='running';},pause:async()=>{},terminate:async()=>{}};
+  const instance={id:'instance',status:async()=>({status,output}),restart:async()=>{if(dispatchFails)throw new Error('Test dispatch unavailable');restarts++;status='running';},resume:async()=>{},sendEvent:async()=>{if(dispatchFails)throw new Error('Test dispatch unavailable');events++;status='running';},pause:async()=>{},terminate:async()=>{}};
   const dependencies={database,binding:{create:async()=>instance,get:async()=>instance},ownerId:'owner-a',now,logger};
-  return {db,service,dependencies,run,unwrap,advanceTime:ms=>{time+=ms;},setStatus:s=>{status=s;},failDispatch:()=>{dispatchFails=true;},counts:()=>({events,restarts}),read:async()=>unwrap(await service.status({ownerId:'owner-a',runId:'run-auto'})),tick:async()=>resumeInterruptedKnowledgeWorkflows(dependencies)};
+  return {db,service,dependencies,run,unwrap,advanceTime:ms=>{time+=ms;},setStatus:s=>{status=s;},setOutput:v=>{output=v;},failDispatch:()=>{dispatchFails=true;},counts:()=>({events,restarts}),read:async()=>unwrap(await service.status({ownerId:'owner-a',runId:'run-auto'})),tick:async()=>resumeInterruptedKnowledgeWorkflows(dependencies)};
 }
 
 test('crashed quiz execution waits two minutes from detection and resumes exact saved phase once',async()=>{
@@ -108,4 +108,39 @@ test('one broken workflow instance cannot prevent later sources from recovering'
     assert(logs.some(e=>e.event==='knowledge-workflow-auto-resume-run-failure'&&e.runId==='run-auto'));
     assert(logs.some(e=>e.event==='knowledge-workflow-auto-resume-success'&&e.runId==='run-second'));
   }finally{f.db.close();}
+});
+
+
+test('finished bounded checkpoints continue through a fresh scheduler invocation exactly once',async()=>{
+ for(const phase of ['extraction-loop','per-point-quiz-loop']){
+  const f=await fixture(phase);try{
+   f.setStatus('complete');f.setOutput({runId:f.run.runId,revision:f.run.revision,state:phase,continuation:true});
+   const outcomes=await Promise.all([f.tick(),f.tick()]);assert(outcomes.every(r=>r.ok));assert.equal(f.counts().restarts,1);
+   const continued=await f.read();assert.equal(continued.state,phase);assert.equal(continued.revision,f.run.revision+1);assert.deepEqual(continued.counts,f.run.counts);
+   assert.equal(f.db.prepare('SELECT count(*) n FROM knowledge_workflow_controls').get().n,0,'A checkpoint cannot grant a paid model retry');
+  }finally{f.db.close();}
+ }
+});
+
+test('a completed instance needs an exact checkpoint identity before automatic continuation',async()=>{
+ for(const output of [null,{continuation:false},{continuation:true,runId:'wrong',revision:6,state:'per-point-quiz-loop'},{continuation:true,runId:'run-auto',revision:999,state:'per-point-quiz-loop'}]){
+  const f=await fixture();try{f.setStatus('complete');f.setOutput(output);assert.deepEqual(await f.tick(),{ok:true,value:0});assert.equal(f.counts().restarts,0);assert.deepEqual(await f.read(),f.run);}finally{f.db.close();}
+ }
+});
+
+test('failed checkpoint dispatch retains the phase and saved counts for bounded recovery',async()=>{
+ const f=await fixture();try{
+  f.setStatus('complete');f.setOutput({runId:f.run.runId,revision:f.run.revision,state:f.run.state,continuation:true});f.failDispatch();
+  assert.equal((await f.tick()).ok,false);const run=await f.read();assert.equal(run.state,'retryable-failure');assert.equal(run.retryState,'per-point-quiz-loop');assert.deepEqual(run.counts,f.run.counts);
+ }finally{f.db.close();}
+});
+
+
+test('a scheduler interrupted after claiming a checkpoint recovers without granting a model retry',async()=>{
+ const f=await fixture('extraction-loop');try{
+  f.setStatus('complete');f.setOutput({runId:f.run.runId,revision:f.run.revision,state:f.run.state,continuation:true});
+  f.unwrap(await f.service.advance({ownerId:'owner-a',runId:f.run.runId,expectedRevision:f.run.revision,nextState:f.run.state,counts:f.run.counts}));
+  assert.deepEqual(await f.tick(),{ok:true,value:0});f.advanceTime(120_000);assert.deepEqual(await f.tick(),{ok:true,value:1});assert.equal(f.counts().restarts,1);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM knowledge_workflow_controls').get().n,0);
+ }finally{f.db.close();}
 });

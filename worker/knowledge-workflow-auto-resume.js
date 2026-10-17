@@ -29,8 +29,19 @@ export async function resumeInterruptedKnowledgeWorkflows({database,binding,owne
         operation='instance-status';
         const instance=await binding.get(workflowInstanceId(run.runId));
         if(typeof instance.status!=='function')throw new TypeError('Workflow instance status is unavailable.');
-        const status=(await instance.status()).status;
+        const snapshot=await instance.status(),status=snapshot.status;
         if(isWorkflowRetryStage(run.state)) {
+          const output=snapshot.output;
+          if(status==='complete'&&output&&typeof output==='object'&&!Array.isArray(output)&&'continuation' in output&&output.continuation===true&&'runId' in output&&output.runId===run.runId&&'revision' in output&&(output.revision===run.revision||(output.revision===run.revision-1&&currentTime-Date.parse(run.updatedAt)>=120_000))&&'state' in output&&output.state===run.state) {
+            operation='claim-checkpoint';
+            const claimed=await service.advance({ownerId,runId:run.runId,expectedRevision:run.revision,nextState:run.state,counts:run.counts});
+            if(!claimed.ok){if(claimed.error.kind==='WorkflowControlStale')continue;throw new Error(claimed.error.kind);}
+            operation='dispatch-checkpoint';
+            try {if(typeof instance.restart!=='function')throw new Error('WorkflowInstanceControlFailed');await instance.restart();}
+            catch(error){const restored=await service.advance({ownerId,runId:run.runId,expectedRevision:claimed.value.revision,nextState:'retryable-failure',failureKind:'WorkflowInstanceControlFailed'});if(!restored.ok&&restored.error.kind!=='WorkflowControlStale')throw new Error(restored.error.kind);throw error;}
+            resumed++;logger({event:'knowledge-workflow-auto-continue-success',ownerId,runId:run.runId,count:resumed});
+            continue;
+          }
           if(status!=='errored')continue;
           // Persist discovery time: an old checkpoint is not the time the crash happened.
           operation='mark-interruption';
