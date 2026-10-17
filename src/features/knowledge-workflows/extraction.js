@@ -590,6 +590,7 @@ export function createExtractionRunner(dependencies) {
             point = reviewed.value;
             if (!validCandidate({summary:point.summary,normalizedHash:point.normalizedHash,evidenceAnchors:point.evidenceAnchors,coverageGoalIds:point.coverageGoalIds,mediaCandidates:point.mediaCandidates}) || point.sourceId !== command.sourceId || point.sourceRevision !== command.sourceRevision || point.evidenceAnchors.some(anchor=>!candidate.evidenceAnchors.some(original=>original.url===anchor.url&&original.selector===anchor.selector&&original.blockId===anchor.blockId&&original.quoteDigest===anchor.quoteDigest&&original.quote===anchor.quote)) || point.coverageGoalIds.some(id=>!candidate.coverageGoalIds.includes(id)) || point.attribution.sourceUrl !== (observation.responseUrl??observation.url)) return fail({kind:"KnowledgePersistenceFailed",causeKind:"KnowledgeReviewOutputInvalid"},dependencies,command.runId);
           }
+          if(scratchpad.acceptedHashes.includes(point.normalizedHash))continue;
           if(dependencies.policy.maximumKnowledgePointsPerExecution!==undefined&&committedThisExecution>=dependencies.policy.maximumKnowledgePointsPerExecution)return {ok:true,value:freeze({state:'awaiting-time-limit-decision',scratchpad,knowledgePointCount:scratchpad.acceptedHashes.length,pagesProcessed,stopReason:'paused'})};
           if(dependencies.reviewer!==undefined)scratchpad=cloneScratchpad({...scratchpad,reviewedCandidateCount:(scratchpad.reviewedCandidateCount??0)+1});
           let appended;

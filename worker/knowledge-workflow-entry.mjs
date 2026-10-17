@@ -12,7 +12,7 @@ import { createMediaPipeline, createMediaPublicEgress, createUserAttestedLocalMa
 import { resolvePublicAddresses } from "./knowledge-workflow-network.js";
 import { createCloudflareImageDerivative, createCloudflareImageDecoder, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
 import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
-import { executeRetryingWorkflowStep, executeIsolatedWorkflowChunk, requiresWorkflowUpload } from "./knowledge-workflow-step.js";
+import { executeRetryingWorkflowStep, requiresWorkflowUpload } from "./knowledge-workflow-step.js";
 import { createAcquisitionClient, createAcquisitionWorkflowBrowser } from "./acquisition-client.js";
 import { ACQUISITION_POLICY } from "./acquisition-policy.js";
 import { createFirecrawlWorkflowBrowser } from "./firecrawl-browser.js";
@@ -192,10 +192,14 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       resolveAddresses: (hostname) => resolvePublicAddresses(hostname, workerFetch),
       transition: (command) => service.advance({ ownerId: command.run.ownerId, runId: command.run.runId, expectedRevision: command.run.revision, nextState: command.nextState, ...(command.counts === undefined ? {} : { counts: command.counts }), ...(command.failureKind === undefined ? {} : { failureKind: command.failureKind }), ...(command.robotsEvidence === undefined ? {} : { robotsEvidence: command.robotsEvidence }) }),
     });
-    if(payload.chunk===true) {
-      return step.do('execute isolated knowledge chunk',{timeout:'30 minutes',retries:{limit:0,delay:0}},()=>createRuntime().execute(current.value));
-    }
     const workflowBinding=this.env.KNOWLEDGE_WORKFLOW;
+    const restartFromCheckpoint=async run=>{
+      await step.do(`restart from checkpoint ${run.revision}`,{timeout:'1 minute',retries:{limit:0,delay:0}},async()=>{
+        const instance=await workflowBinding.get(event.instanceId);
+        await instance.restart();
+      });
+      return {runId,state:run.state,revision:run.revision,configDigests:run.configDigests};
+    };
     if (current.value.state === "source-added") {
       const assessed = await step.do("begin rights assessment", async () => service.advance({ ownerId, runId, expectedRevision: current.value.revision, nextState: "rights-assessment" }));
       if (!assessed.ok) throw new Error(assessed.error.kind);
@@ -220,11 +224,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
         name: stepName,
         now: Date.now,
         load: () => service.status({ ownerId, runId }),
-        execute: async (authoritativeRun,attemptName) => executeIsolatedWorkflowChunk({
-          binding:workflowBinding,
-          id:`chunk-${(await sha256(`${runId}:${authoritativeRun.revision}:${attemptName}`)).slice(7)}`,
-          params:{ownerId,runId,chunk:true},
-        }),
+        execute: authoritativeRun=>createRuntime().execute(authoritativeRun),
       });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
@@ -253,10 +253,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       if (!current.ok) throw new Error(current.error.kind);
       if (result.state !== current.value.state || result.run?.revision !== current.value.revision) result = { ...result, state: current.value.state, run: current.value };
       if (result.state === "per-point-quiz-loop") {
-        await step.sleepUntil(`yield bounded quiz chunk ${result.run.revision}`, new Date(Date.now() + 1_000));
-        executed = await executeOrAwaitMaterial(`execute bounded quiz chunk ${result.run.revision}`);
-        result = executed.value;
-        continue;
+        return restartFromCheckpoint(current.value);
       }
       if (isWorkflowRetryStage(result.state)) {
         executed = await executeOrAwaitMaterial(`resume knowledge workflow ${current.value.revision}`);
@@ -268,12 +265,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
         const chunkRun = /** @type {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} */ (result.run);
         const continued = await step.do(`continue bounded extraction chunk ${chunkRun.revision}`, async () => service.advance({ ownerId, runId, expectedRevision: chunkRun.revision, nextState: "extraction-loop" }));
         if (!continued.ok) throw new Error(continued.error.kind);
-        await step.sleepUntil(`yield between bounded extraction chunks ${continued.value.revision}`, new Date(Date.now() + 1_000));
-        current = await step.do(`reload after bounded extraction chunk ${continued.value.revision}`, async () => service.status({ ownerId, runId }));
-        if (!current.ok) throw new Error(current.error.kind);
-        executed = await executeOrAwaitMaterial(`execute bounded extraction chunk ${continued.value.revision}`);
-        result = executed.value;
-        continue;
+        return restartFromCheckpoint(continued.value);
       }
       await step.do(`notify workflow decision ${result.run?.revision}`, () => notifyOutcome(result.run));
       try {

@@ -214,12 +214,13 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       "stale-time-window",
       "stale-completed",
       "cached-quiz-cpu",
-      "isolated-chunk",
+      "checkpoint-extraction",
     ]
   ) {
     const replayedController = state === "stale-time-window" || state === "stale-completed" || state === "cached-quiz-cpu";
     let current = { ...run, state:replayedController?"per-point-quiz-loop":state==="empty-exhausted"?"robots-check":state==="cpu-exceeded"?"extraction-loop":state, revision:replayedController?59:run.revision, updatedAt: new Date().toISOString(), ...(replayedController?{counts:{pages:23,knowledgePoints:37,acceptedQuizzes:5,pendingQuizzes:0}}:state==="empty-exhausted"?{counts:{pages:0,knowledgePoints:0,acceptedQuizzes:0,pendingQuizzes:0}}:{}) };
-    let modelCalls = 0;
+    if(state==='checkpoint-extraction')current={...current,state:'awaiting-time-limit-decision',extractionDeadlineAt:new Date(Date.now()+60000).toISOString()};
+    let modelCalls = 0,restarts=0;
     const actions = [];
     const noOp = () => ({});
     const bindings = {
@@ -240,7 +241,6 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       createFirecrawlWorkflowBrowser:noOp,
       createHybridBrowserBudget:noOp,
       requiresWorkflowUpload,
-      executeIsolatedWorkflowChunk: async () => bindings.createKnowledgeWorkflowRuntime().execute(current),
       createAcquisitionClient: () => ({mediaCapability:{}}),
       createAcquisitionWorkflowBrowser: noOp,
       ACQUISITION_POLICY: {},
@@ -266,9 +266,9 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       createKnowledgeWorkflowRuntime: () => ({
         purgeExpired: async () => ({ ok: true, value: null }),
         execute: async authoritative => {
-          assert.equal(state === "stale-time-window" || state === "stale-completed" || state === "isolated-chunk", true);
-          assert.equal(authoritative.state, state === "isolated-chunk"?"isolated-chunk":"per-point-quiz-loop");
-          assert.equal(authoritative.revision, state === "isolated-chunk"?run.revision:59);
+          assert.equal(state === "stale-time-window" || state === "stale-completed", true);
+          assert.equal(authoritative.state, "per-point-quiz-loop");
+          assert.equal(authoritative.revision, 59);
           modelCalls++;
           current = {...current,state:"completed",revision:60,counts:{...current.counts,acceptedQuizzes:6}};
           return {ok:true,value:{state:"completed",run:current}};
@@ -284,7 +284,7 @@ test("actual workflow entry sends before retention/waits and preserves extractio
         return {
           ok: true,
           value: {
-            state,
+            state:state==='checkpoint-extraction'?current.state:state,
             run: current,
             restrictedUntil: "2026-11-02T00:00:00.000Z",
             restrictedKnowledgeIds: ["k"],
@@ -316,17 +316,17 @@ test("actual workflow entry sends before retention/waits and preserves extractio
     entry.env = {
       SOURCE_LIBRARY_DB: { prepare: noOp, batch: noOp },
       SOURCE_CONTENT_BUCKET: { put: noOp, get: noOp, delete: noOp },
+      KNOWLEDGE_WORKFLOW:{get:async()=>({restart:async()=>{restarts++;actions.push("restart");}})},
       SOURCE_BROWSER: {},
       IMAGES: {},
     };
     const step = {
       do: async (name, configOrCallback, callback) => {
-        if(replayedController && (name === "load knowledge workflow run" || name === "execute knowledge extraction and quiz stages: attempt 1")) {
+        if(replayedController && restarts===0 && (name === "load knowledge workflow run" || name === "execute knowledge extraction and quiz stages: attempt 1")) {
           const oldRun = {...current,state:state === "stale-completed"?"completed":"awaiting-time-limit-decision",revision:45,extractionDeadlineAt:at};
           return {ok:true,value:name === "load knowledge workflow run"?oldRun:{state:oldRun.state,run:oldRun}};
         }
-        if(replayedController && name.startsWith("execute bounded quiz chunk") && /: attempt [1-4]$/.test(name)) {
-          assert.match(name,/^execute bounded quiz chunk 59: attempt [1-4]$/);
+        if(replayedController && restarts>0 && /: attempt [1-4]$/.test(name)) {
           if(state === "cached-quiz-cpu")throw new Error("Worker exceeded CPU time limit.");
         }
         return (callback ?? configOrCallback)();
@@ -339,23 +339,28 @@ test("actual workflow entry sends before retention/waits and preserves extractio
         actions.push("retention");
       },
     };
-    if(state==="isolated-chunk") {
-      const result=await entry.run({payload:{ownerId:"owner",runId:"run",chunk:true}},step);
-      assert.equal(result.ok,true);assert.equal(result.value.state,"completed");assert.equal(modelCalls,1);assert.deepEqual(actions,[]);
+    const execute=async()=>{
+      let result=await entry.run({instanceId:'instance',payload:{ownerId:'owner',runId:'run'}},step);
+      if(restarts>0&&result.state!=='completed')result=await entry.run({instanceId:'instance',payload:{ownerId:'owner',runId:'run'}},step);
+      return result;
+    };
+    if(state==='checkpoint-extraction'){
+      const result=await entry.run({instanceId:'instance',payload:{ownerId:'owner',runId:'run'}},step);
+      assert.equal(result.state,'extraction-loop');assert.equal(current.revision,3);assert.equal(restarts,1);assert.equal(modelCalls,0);assert.deepEqual(actions,['restart']);
     }else if(state==="stale-time-window" || state==="stale-completed") {
-      assert.equal((await entry.run({payload:{ownerId:"owner",runId:"run"}},step)).state,"completed");
+      assert.equal((await execute()).state,"completed");
       assert.equal(modelCalls,1);
       assert.equal(current.counts.acceptedQuizzes,6);
-      assert.deepEqual(actions,["retention","source-ready"]);
+      assert.deepEqual(actions,["restart","source-ready"]);
     }else if(state==="cached-quiz-cpu") {
-      await assert.rejects(entry.run({payload:{ownerId:"owner",runId:"run"}},step),/WorkflowControlTimeout/);
+      await assert.rejects(execute(),/WorkflowControlTimeout/);
       assert.equal(modelCalls,0);
       assert.equal(current.state,"retryable-failure");
       assert.equal(current.revision,60);
       assert.equal(current.failureKind,"WorkflowCpuTimeLimitExceeded");
       assert.equal(current.counts.knowledgePoints,37);
       assert.equal(current.counts.acceptedQuizzes,5);
-      assert.deepEqual(actions,["retention","retention","retention","retention","source-attention","wait"]);
+      assert.deepEqual(actions,["restart","retention","retention","retention","source-attention","wait"]);
     }else if(state==="empty-exhausted"){
       await assert.rejects(entry.run({payload:{ownerId:"owner",runId:"run"}},step), /WorkflowControlTimeout/);
       assert.equal(current.state,"retryable-failure");

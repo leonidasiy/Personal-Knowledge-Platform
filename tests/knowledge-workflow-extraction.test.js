@@ -58,6 +58,24 @@ function setup() {
   };
 }
 
+Deno.test("bounded commits resume past reviewed points whose repaired hashes differ from their original candidates",async()=>{
+  const fixture=setup(),url='https://example.test/a';
+  const candidates=Array.from({length:4},(_,index)=>({summary:`Concept ${index}`,normalizedHash:`original-${index}`,evidenceAnchors:[{url,selector:'#a',quoteDigest:'sha256:evidence-a'}],coverageGoalIds:['goal-a'],mediaCandidates:[]}));
+  const runner=createExtractionRunner({...fixture.dependencies,orderedUrls:[url],
+    policy:{...fixture.dependencies.policy,maximumKnowledgePointsPerExecution:1},
+    acquirer:{fetchPage:async()=>({ok:true,value:{url,title:'Fixture',byteCount:100,redirects:0,links:[],observedAt:'2026-08-13T00:00:00.000Z',candidates}})},
+    reviewer:{review:async point=>({ok:true,value:{...point,id:`repaired-id-${point.normalizedHash}`,normalizedHash:`repaired-${point.normalizedHash}`}})},
+  });
+  const command={ownerId:'owner-a',runId:'run-a',sourceId:'source-a',sourceRevision:1,rootUrl:url,startedAtMs:0,deadlineAtMs:1_800_000};
+  for(let chunk=0;chunk<4;chunk++){
+    const result=await runner.run(command);assertEquals(result.ok,true);if(!result.ok)return;
+    assertEquals(result.value.state,chunk===3?'completed':'awaiting-time-limit-decision');
+    assertEquals(result.value.knowledgePointCount,chunk+1);
+    assertEquals(fixture.points.length,chunk+1);
+  }
+  assertEquals(new Set(fixture.points.map(point=>point.normalizedHash)).size,4);
+});
+
 Deno.test("bounded extraction does not restore unavailable goals after the final replan", async () => {
   const fixture = setup();
   const runner = createExtractionRunner({
