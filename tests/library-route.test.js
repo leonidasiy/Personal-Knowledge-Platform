@@ -830,6 +830,7 @@ Deno.test("Library polls active workflow status and stops after completion", asy
   const scheduled = [];
   let statusCalls = 0;
   let knowledgeCalls = 0;
+  /** @type {string[]} */ const notices = [];
   const page = createLibraryPage({
     fetch: (input) => {
       const url = new URL(String(input));
@@ -837,7 +838,8 @@ Deno.test("Library polls active workflow status and stops after completion", asy
       if (url.pathname.endsWith("/library-knowledge")) {knowledgeCalls++;return Promise.resolve(Response.json({ result: { items: [] } }));}
       if (url.pathname.endsWith("/source-status")) {
         statusCalls += 1;
-        return Promise.resolve(Response.json({ result: workflowStatus(statusCalls === 1 ? "extraction-loop" : "completed") }));
+        const status=workflowStatus(statusCalls === 1 ? "extraction-loop" : "completed");
+        return Promise.resolve(Response.json({ result: statusCalls===1?status:{...status,run:{...status.run,counts:{pages:1,knowledgePoints:1,acceptedQuizzes:1,pendingQuizzes:0}}} }));
       }
       return Promise.resolve(Response.json({ error: "Not found" }, { status: 404 }));
     },
@@ -852,11 +854,12 @@ Deno.test("Library polls active workflow status and stops after completion", asy
       return scheduled.length;
     },
     cancel: () => {},
-    onNotice: () => {},
+    onNotice: message => notices.push(message),
     onError: () => {},
     rerender: () => {},
   });
   await page.load();
+  assert(notices.length === 0, "In-progress work must not announce completion.");
   assert(statusCalls === 1, "Library must load workflow status with the source list.");
   assert(scheduled.length === 1 && scheduled[0].delayMs === 60_000, "Active work must schedule one one-minute refresh.");
   assert(page.renderProcessingStatus().includes("Processing 1 source"), "The active source must be visible before the poll completes.");
@@ -864,8 +867,11 @@ Deno.test("Library polls active workflow status and stops after completion", asy
   scheduled[0].callback();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert(statusCalls === 2, "The scheduled refresh must fetch the latest workflow status.");
-  assert(knowledgeCalls === 2, "Completion must reload classified knowledge and quizzes without a manual refresh.");
+  assert(notices.length === 1 && notices[0] === "Processing complete. Your knowledge and quizzes are ready in Library.", "A confirmed transition to published knowledge announces readiness.");
+  await page.load();
+  assert(notices.length === 1, "Reloading a completed source cannot repeat the notification.");
+  assert(statusCalls === 3, "The scheduled refresh must fetch the latest workflow status.");
+  assert(knowledgeCalls === 3, "Completion must reload classified knowledge and quizzes without a manual refresh.");
   assert(!page.renderProcessingStatus().includes('data-library-processing-status'), "The chip must disappear after the source completes.");
   assert(scheduled.length === 1, "Polling must stop after a terminal workflow state.");
 });
@@ -1309,4 +1315,19 @@ Deno.test("Library keeps automatic extraction chunks active and polling instead 
  const html=renderLibraryRoute({...baseModel(),workflowStatuses:[status]});
  assert(html.includes('library-processing-spinner'),"The automatic continuation remains active.");
  assert(!html.includes('Processing is paused. Action is required to continue.'),"A bounded chunk needs no learner action.");
+});
+
+Deno.test("Library completion notices exclude cold history, partial failures and unpublished quizzes",async()=>{
+ for(const outcome of ['history','partial','pending']){
+  let done=outcome==='history';/** @type {string[]} */ const notices=[];
+  const page=createLibraryPage({fetch:async input=>{
+   const url=new URL(String(input));
+   if(url.pathname.endsWith('/source-library'))return Response.json({result:{items:[source],interestAreas:[],nextCursor:null}});
+   if(url.pathname.endsWith('/library-knowledge'))return Response.json({result:{items:[]}});
+   const status=workflowStatus(done?'completed':'extraction-loop');
+   return Response.json({result:done?{...status,reasonCode:outcome==='partial'?'partial-failure':null,run:{...status.run,failureKind:outcome==='partial'?'WorkflowQuizItemsFailed':null,counts:{pages:1,knowledgePoints:1,acceptedQuizzes:1,pendingQuizzes:outcome==='pending'?1:0}}}:status});
+  },gatewayBaseUrl:'https://app.example/',escapeHtml:value=>value,formatDate:value=>value,createId:()=> 'id',confirmDisable:()=>true,createObserver:()=>null,schedule:()=>1,cancel:()=>{},onNotice:message=>notices.push(message),onError:()=>{},rerender:()=>{}});
+  await page.load();done=true;await page.load();
+  assert(notices.length===0,'Never announce a ready source for '+outcome);page.dispose();
+ }
 });

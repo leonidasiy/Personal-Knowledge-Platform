@@ -310,7 +310,10 @@ export function createLibraryPage(dependencies) {
               if(dependencies.confirmUpload(message,items.find(source=>source.id===status.sourceId)?.canonicalUrl))dependencies.navigateToUpload?.(`#upload?${new URLSearchParams({sourceId:status.sourceId,runId:status.run.runId})}`);
             }else onError(message);
           }
-          if(status.reasonCode==="partial-failure"&&known.has(status.sourceId)&&known.get(status.sourceId)?.run?.state!=="completed")failedCompletions.push(status);
+          if(known.get(status.sourceId)&&known.get(status.sourceId)?.run?.state!=="completed"){
+            if(status.reasonCode==="partial-failure")failedCompletions.push(status);
+            else if(status.run?.state==="completed"&&status.run.failureKind===null&&status.run.counts.acceptedQuizzes>status.run.counts.pendingQuizzes)onNotice(libraryCopy(26));
+          }
           known.set(status.sourceId,status);
         }
         else { recordStatusFailure(result.error); failed = true; }

@@ -1672,7 +1672,8 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         let failed=false,firstUsable=current.counts.acceptedQuizzes>0;
         // Stop admitting at the existing model request envelope; finish admitted jobs durably.
         const admissionDeadline=started+Math.max(dependencies.configSnapshots['question-generator'].limits.timeoutMs,dependencies.configSnapshots['question-evaluator'].limits.timeoutMs);
-        const results=await runQuizPipeline(pending,async(point,awaitReview)=>{
+        // Bound CPU work per durable step as well as simultaneous model requests.
+        const results=await runQuizPipeline(pending.slice(0,QUIZ_PIPELINE_WIDTH),async(point,awaitReview)=>{
           /** @type {{phase:"generation"|"review"}} */ const phase={phase:"generation"};
           const prior=failures.get(point.id);
           const processed = await successfulCheckpoint(`quiz-point-completed:${point.id}`, () => quizzes(current,prior,phase,awaitReview).run({...command,points:[point]}));

@@ -14,8 +14,8 @@ import { readFailedQuizItems,exhaustedQuizTechnicalFailure } from '../worker/kno
 import {AgentExecutionBoundaryFailure} from '../src/features/knowledge-workflows/harness.js';
 import { WEBPAGE_IMAGE_POLICY } from '../worker/webpage-image-budget.js';
 
-for (const failureMode of ['material-coverage', 'review-output', 'model503', 'model200', 'model401', 'stopped-before-acquisition','expired-quiz-clock','quiz-review503','quiz-generator503','quiz-review-malformed','quiz-review401','classifier503-success','classifier-malformed-success','classifier503-exhausted','classifier-malformed-exhausted','classifier401','classifier-bounded','classifier-critical','classifier-mixed-success','quiz-review-resume-success']) {
- test(failureMode==='material-coverage'?'runtime bounds supplied material coverage without inventing support':failureMode==='expired-quiz-clock'?'runtime continues normal quizzes after the extraction window expires without renewing it':failureMode.startsWith('classifier')?`runtime classification honors one four-attempt combined technical budget: ${failureMode}`:failureMode.startsWith('quiz-') ? `runtime isolates ${failureMode} and approved retry preserves source pages, drafts and healthy quizzes` : failureMode === 'stopped-before-acquisition' ? 'runtime fences provider calls after an authoritative run stop' : failureMode === 'model401' ? 'runtime stops on credential rejection without local page skipping or retry' : `runtime isolates ${failureMode} and approved retry processes only the failed page with fresh durable model identities`, async () => {
+for (const failureMode of ['chunk-bound', 'material-coverage', 'review-output', 'model503', 'model200', 'model401', 'stopped-before-acquisition','expired-quiz-clock','quiz-review503','quiz-generator503','quiz-review-malformed','quiz-review401','classifier503-success','classifier-malformed-success','classifier503-exhausted','classifier-malformed-exhausted','classifier401','classifier-bounded','classifier-critical','classifier-mixed-success','quiz-review-resume-success']) {
+ test(failureMode==='chunk-bound'?'runtime checkpoints after three quiz jobs without refilling a durable step':failureMode==='material-coverage'?'runtime bounds supplied material coverage without inventing support':failureMode==='expired-quiz-clock'?'runtime continues normal quizzes after the extraction window expires without renewing it':failureMode.startsWith('classifier')?`runtime classification honors one four-attempt combined technical budget: ${failureMode}`:failureMode.startsWith('quiz-') ? `runtime isolates ${failureMode} and approved retry preserves source pages, drafts and healthy quizzes` : failureMode === 'stopped-before-acquisition' ? 'runtime fences provider calls after an authoritative run stop' : failureMode === 'model401' ? 'runtime stops on credential rejection without local page skipping or retry' : `runtime isolates ${failureMode} and approved retry processes only the failed page with fresh durable model identities`, async () => {
   const db = new DatabaseSync(':memory:');
   try {
     const migrations = new URL('../worker/migrations/', import.meta.url);
@@ -49,7 +49,7 @@ for (const failureMode of ['material-coverage', 'review-output', 'model503', 'mo
     const loader = createAgentConfigurationLoader({ sha256: async value => `sha256:${createHash('sha256').update(value).digest('hex')}` });
     const configSnapshots = {};
     for (const role of ['rights-assessor', 'knowledge-scraper', 'question-generator', 'question-evaluator']) configSnapshots[role] = unwrap(await loader.load({ source: (await readFile(new URL(`../agent-config/${role}.yaml`, import.meta.url), 'utf8')).replace(/name: [^\n]+/, `name: synthetic/${role}`), expectedRole: role }));
-    const sections = (failureMode.startsWith('quiz-')?[1,2,3,4]:[1, 2, 3]).map(number => ({ id: `page-${number}`, title: `Page ${number}`, locator: `page:${number}`, text: `Synthetic distinct relationship ${number}.` }));
+    const sections = (failureMode==='chunk-bound'||failureMode.startsWith('quiz-')?[1,2,3,4]:[1, 2, 3]).map(number => ({ id: `page-${number}`, title: `Page ${number}`, locator: `page:${number}`, text: `Synthetic distinct relationship ${number}.` }));
     const material = { ownerId, runId, sourceId, sourceRevision: 1, sourceUrl, mediaType: 'application/pdf', fileName: 'offline-fixture.pdf', contentDigest: 'sha256:offline-fixture', sections, media: [], provenance: { kind: 'authorized-user-material', attestationReference: 'offline-fixture', basis: 'test-owned', processingAllowed: true } };
     let run = unwrap(await service.createRun({ ownerId, sourceId, sourceRevision: 1, canonicalSourceIdentity: sourceUrl, contentSignature: material.contentDigest, idempotencyKey: runId, sourceOrigin: 'private-document', configDigests: Object.fromEntries(Object.entries(configSnapshots).map(([role, config]) => [role, config.digest])) })).run;
     unwrap(await materials.persist({ ownerId, runId, materialId: 'failed-unit-fixture-material', idempotencyKey: runId, fingerprint: material.contentDigest, objectKey: 'offline-fixture-only', material, createdAt: clock() }));
@@ -335,6 +335,20 @@ for (const failureMode of ['material-coverage', 'review-output', 'model503', 'mo
       assert(retryStages.some(key=>key.startsWith(failureMode==='quiz-generator503'?'question-generator:':'question-evaluator:')));
       assert(retryStages.every(key=>!key.includes('page-1')&&!key.includes('page-3')));
       const finalProgress=unwrap(await new D1KnowledgeWorkflowProgressRepository({database,logger}).read(run));assert.equal(finalProgress.failedQuizItems,undefined);assert.equal(finalProgress.failedItems.length,1);
+      return;
+    }
+    if (failureMode === 'chunk-bound') {
+      let previous=0, chunks=0;
+      for(let step=0;step<10&&run.state!=='completed';step++){
+        if(run.state==='awaiting-time-limit-decision')run=unwrap(await service.control({ownerId,runId,expectedRevision:run.revision,action:'resume',idempotencyKey:'chunk-bound-'+step}));
+        unwrap(await runtime().execute(run));run=unwrap(await repository.findById(ownerId,runId));
+        const admitted=generatedQuizzes.length-previous;
+        assert(admitted<=3,'A durable step must not refill past its initial three quiz jobs even with immediate responses.');
+        if(admitted)chunks++;
+        previous=generatedQuizzes.length;
+      }
+      assert.equal(run.state,'completed');assert.equal(run.failureKind,null);assert.equal(run.counts.acceptedQuizzes,4);assert.equal(chunks,2);
+      assert.deepEqual(generatedQuizzes.toSorted(),['page-1','page-2','page-3','page-4']);
       return;
     }
     if (failureMode === 'material-coverage') {
