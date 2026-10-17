@@ -930,8 +930,8 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
       reviewBatch:async(points,observation)=>{
         if(!points.length)return [];
         const failed=()=>points.map(()=>({ok:/** @type {const} */(false),error:{kind:'WorkflowStagePersistenceFailed'}}));
-        const scratchpad=await content.loadScratchpad(run);if(!scratchpad.ok)return points.map(()=>scratchpad);
-        const signature=await imageHash(new TextEncoder().encode(JSON.stringify({observation,retryGeneration:scratchpad.value.retryGeneration??0,config:run.configDigests,protocol:{review:knowledgeReviewerPrompt,repair:knowledgeRepairPrompt,repairContext:knowledgeCriticRepairContextPrompt,imagePurpose:webpageImagePurposePrompt,selection:knowledgeBatchSelectionPrompt,maximumCriticOutputTokens:knowledgeCriticMaximumOutputTokens}})));
+        // Successful reviews survive failed-page retries of this captured revision.
+        const signature=await imageHash(new TextEncoder().encode(JSON.stringify({observation,retryGeneration:0,config:run.configDigests,protocol:{review:knowledgeReviewerPrompt,repair:knowledgeRepairPrompt,repairContext:knowledgeCriticRepairContextPrompt,imagePurpose:webpageImagePurposePrompt,selection:knowledgeBatchSelectionPrompt,maximumCriticOutputTokens:knowledgeCriticMaximumOutputTokens}})));
         const prefix=`page-reviews:${signature}:`;
         /** @type {{id:string,result:import('./knowledge-workflow-parallel-review.js').ReviewResult}[]} */ let previous=[];
         let complete=false;
@@ -959,8 +959,13 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         if(!context.ok)return context;
         const checkpoint=await content.loadScratchpad(run);
         if(!checkpoint.ok)return checkpoint;
-        const input={points:survivors.map(point=>({id:point.id,summary:point.summary})),...context.value,retryGeneration:checkpoint.value.retryGeneration??0};
-        return generate(run,'question-evaluator',`knowledge-batch-selection-${await imageHash(new TextEncoder().encode(JSON.stringify(input)))}`,knowledgeBatchSelectionPrompt,input,2048,undefined,{responseSchema:{name:'knowledge_batch_selection_v1',schema:{type:'object',additionalProperties:false,required:['keptKnowledgeIds'],properties:{keptKnowledgeIds:{type:'array',items:{type:'string',enum:survivors.map(point=>point.id)}}}}}});
+        const aliases=survivors.map((_,index)=>String(index));
+        const input={points:survivors.map((point,index)=>({id:aliases[index],summary:point.summary})),...context.value,retryGeneration:checkpoint.value.retryGeneration??0};
+        const selected=await generate(run,'question-evaluator',`knowledge-batch-selection-${await imageHash(new TextEncoder().encode(JSON.stringify(input)))}`,knowledgeBatchSelectionPrompt,input,Math.max(2048,JSON.stringify({keptKnowledgeIds:aliases}).length),undefined,{responseSchema:{name:'knowledge_batch_selection_v1',schema:{type:'object',additionalProperties:false,required:['keptKnowledgeIds'],properties:{keptKnowledgeIds:{type:'array',items:{type:'string',enum:aliases}}}}}});
+        if(!selected.ok)return selected;
+        const ids=selected.value.keptKnowledgeIds;
+        if(!Array.isArray(ids)||ids.some(id=>typeof id!=='string'||!aliases.includes(id)))return {ok:false,error:{kind:'KnowledgeReviewOutputInvalid'}};
+        return {ok:true,value:{...selected.value,keptKnowledgeIds:ids.map(id=>survivors[Number(id)].id)}};
       }});
         if(results.some(result=>!result.ok&&result.error.kind!=='KnowledgeReviewChunkPending'))return results;
         const entries=results.flatMap((result,index)=>result.ok?[{id:points[index].id,result}]:[]);
@@ -1270,8 +1275,8 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     };
     /** @type {import("../src/features/knowledge-workflows/extraction.js").PageAcquirer} */
     const acquirer={fetchPage:async command=>{
-      const saved=await content.loadScratchpad(run);if(!saved.ok)return saved;
-      const key=`webpage-observation:${saved.value.retryGeneration??0}:${command.url}`;
+      // Captured evidence belongs to this source revision, not a failed-review retry.
+      const key=`webpage-observation:0:${command.url}`;
       const checkpoint=await stages.run(run,key,key,async()=>{
         const acquired=await liveAcquirer.fetchPage(command);if(!acquired.ok)return acquired;
         const responseUrl=acquired.value.responseUrl??acquired.value.url;
