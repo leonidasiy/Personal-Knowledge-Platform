@@ -155,6 +155,7 @@ Deno.test("Taddy provider searches once and safety-checks the bounded batch once
             searchId: "search-1",
             podcastSeries: [{
               uuid: "6bdfd429-f58b-427d-8072-353d478aa15f",
+              websiteUrl: null,
             }],
             rankingDetails: [{ uuid: "6bdfd429-f58b-427d-8072-353d478aa15f", rankingScore: 0.875 }],
         } } });
@@ -240,6 +241,7 @@ Deno.test("Taddy provider searches once and safety-checks the bounded batch once
   equal(result.value[0].publisherLabel, "Song Exploder");
   equal(result.value[0].identityEvidence.some((entry) => entry.attribute === "taddy-series-uuid"), true);
   equal(result.value[0].identityEvidence.some((entry) => entry.attribute === "podcast-feed"), true);
+  equal(result.value[0].identityEvidence.find(entry=>entry.attribute==="taddy-publisher-website")?.value,"https://publisher.example/show");
 });
 
 Deno.test("Taddy provider maps transport and GraphQL failures distinctly", async () => {

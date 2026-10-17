@@ -58,7 +58,7 @@ export function createLibraryPage(dependencies) {
     typeof dependencies.onError !== "function" ||
     typeof dependencies.rerender !== "function"
   ) {
-    throw new TypeError("Library page dependencies are invalid.");
+    throw new TypeError("LibraryDependenciesInvalid");
   }
   const {
     cancel,
@@ -300,7 +300,7 @@ export function createLibraryPage(dependencies) {
       if (generation !== workflowStatusGeneration) return;
       const known = new Map(workflowStatuses.map(status => [status.sourceId,status]));
       /** @type {WorkflowSourceStatus[]} */ const failedCompletions=[];
-      const completed=results.some(result=>result.ok&&result.value.run?.state==="completed"&&known.get(result.value.sourceId)?.run?.state!=="completed"&&known.has(result.value.sourceId));
+      let completed=false;
       for (const result of results) {
         if (result.ok) {
           const status=result.value;
@@ -310,9 +310,11 @@ export function createLibraryPage(dependencies) {
               if(dependencies.confirmUpload(message,items.find(source=>source.id===status.sourceId)?.canonicalUrl))dependencies.navigateToUpload?.(`#upload?${new URLSearchParams({sourceId:status.sourceId,runId:status.run.runId})}`);
             }else onError(message);
           }
-          if(known.get(status.sourceId)&&known.get(status.sourceId)?.run?.state!=="completed"){
+          const previous=known.get(status.sourceId);
+          if(status.run?.state==="completed"&&previous&&previous.run?.state!=="completed"){
+            completed=true;
             if(status.reasonCode==="partial-failure")failedCompletions.push(status);
-            else if(status.run?.state==="completed"&&status.run.failureKind===null&&status.run.counts.acceptedQuizzes>status.run.counts.pendingQuizzes)onNotice(libraryCopy(26));
+            else if(!status.run.failureKind&&status.run.counts.acceptedQuizzes>status.run.counts.pendingQuizzes)onNotice(libraryCopy(26));
           }
           known.set(status.sourceId,status);
         }
@@ -321,7 +323,6 @@ export function createLibraryPage(dependencies) {
       workflowStatuses = statusRetryAllowed ? [...known.values()] : [];
       statusUnavailable = failed;
       if(completed)await loadKnowledge(true);
-      rerender();
       for(const status of failedCompletions){
         const run=status.run;if(run===null)continue;
         const key=`${run.runId}:${run.revision}`;

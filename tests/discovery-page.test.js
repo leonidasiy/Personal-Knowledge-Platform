@@ -178,7 +178,7 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
               attribute: "podcast-feed",
               value: "https://feeds.example/harmony.xml",
               provenanceUrl: "https://feeds.example/harmony.xml",
-            }],
+            }, {attribute:"taddy-publisher-website",value:"https://publisher.example/harmony",provenanceUrl:"https://api.taddy.org/"}],
           }],
           providerFailures: [],
           submittedQuery: "counterpoint",
@@ -439,6 +439,9 @@ Deno.test("Discovery controller writes only explicit Add or Reject decisions", a
       !selectedSearchHtml.includes("Ableton Learning Music"),
     "Selecting a live search result must preserve that search projection instead of restoring persisted rows.",
   );
+  const podcastDetail=page.render({selectedItemId:searchedIds[2],online:true});
+  assert(podcastDetail.includes('href="https://publisher.example/harmony"')&&!podcastDetail.includes('href="https://feeds.example/harmony.xml"'),"Podcast Explore and Open source use the publisher website while the RSS URL remains provenance.");
+  assert(podcastDetail.includes("https://feeds.example/harmony.xml"),"Keep the feed provenance visible without presenting it as a webpage.");
   const approvalsBeforeUnsupported = approvalCommands.length;
   await page.approve(searchedIds[1]);
   await page.approve(searchedIds[2]);

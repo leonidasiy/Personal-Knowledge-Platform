@@ -39,7 +39,7 @@ export function createDiscoveryPage(dependencies) {
     typeof dependencies.navigateToLibrary !== "function" ||
     typeof dependencies.navigateToUpload !== "function" ||
     typeof dependencies.rerender !== "function"
-  ) throw new TypeError("Discovery page dependencies are invalid.");
+  ) throw new TypeError("DiscoveryDependenciesInvalid");
   const {
     createId,
     fetch: requestFetch,
@@ -246,7 +246,7 @@ export function createDiscoveryPage(dependencies) {
       root.querySelectorAll("[data-discovery-open-upload]").forEach((element) =>
         element.addEventListener("click", () => {
           const result = openUpload(element.getAttribute("data-discovery-open-upload"));
-          if (!result.ok) { onError("This source is unavailable. Return to Discover and select the source again."); rerender(); }
+          if (!result.ok) { onError("Source unavailable. Select it again in Discover."); rerender(); }
         })
       );
     },
@@ -514,7 +514,7 @@ export function createDiscoveryPage(dependencies) {
       observedAtLabel: observedAt,
       rightsLabel: "Not assessed",
       provenanceLabel: canonicalUrl,
-      sourceUrl: canonicalUrl,
+      sourceUrl: (feed ? item.identityEvidence.find(evidence=>evidence.attribute==="taddy-publisher-website")?.value : canonicalUrl)??"",
       evidenceStatus: /** @type {const} */ ("link-only"),
       youtubeWatchUrl: youtube ? item.canonicalUrl : null,
       podcastReferenceLabel: null,

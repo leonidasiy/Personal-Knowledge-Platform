@@ -229,7 +229,7 @@ function parseDetailsDocument(value, descriptor, search) {
   for (const item of value.data.getMultiplePodcastSeries) {
     if (!record(item) || !uuid(item.uuid) || seen.has(item.uuid) || !rankings.has(item.uuid)) return invalid();
     seen.add(item.uuid);
-    const parsed = parseSeries({...item,...search.originals.get(item.uuid)}, descriptor, rankings);
+    const parsed = parseSeries({...item,...search.originals.get(item.uuid),websiteUrl:search.originals.get(item.uuid)?.websiteUrl??item.websiteUrl}, descriptor, rankings);
     if (!parsed.ok) return parsed;
     candidates.set(item.uuid, parsed.value);
   }

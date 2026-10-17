@@ -215,7 +215,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
       }
       run = unwrap(await repository.findById(ownerId, runId));
       const afterQuiz=db.prepare("SELECT COUNT(*) count FROM knowledge_workflow_stages WHERE run_id=? AND stage_key LIKE 'quiz-point-completed:%' AND status='completed'").get(runId).count;
-      assert(maximumDrafts<=3,"Continuously refilled work preserves the three-draft concurrency ceiling");
+      assert(maximumDrafts<=3,"Durable chunks preserve the three-draft concurrency ceiling");
       if(afterQuiz>beforeQuiz)quizChunkSizes.push(afterQuiz-beforeQuiz);
       assert.equal(run.extractionDeadlineAt,extractionClock);
     }
@@ -225,7 +225,7 @@ test("production upload runtime resumes text batches and processes selected PDF 
     assert.equal(run.counts.pages, 7);
     assert.equal(run.counts.knowledgePoints, 6);
     assert.equal(run.counts.acceptedQuizzes, 6);
-    assert.deepEqual(quizChunkSizes,[6],"Slots refill within the execution instead of waiting for a new batch");
+    assert.deepEqual(quizChunkSizes,[3,3],"Checkpoint each three-draft chunk before starting more work");
     assert.equal([...evidenceReads.entries()].filter(([key])=>key.startsWith(runId+':')).length,6);
     assert([...evidenceReads.entries()].filter(([key])=>key.startsWith(runId+':')).every(([,count])=>count===1),'Generation, schema repair and review reuse immutable evidence');
     assert(metricLogs.some(e=>e.event==='workflow-first-usable-quiz'&&e.runId===runId));
