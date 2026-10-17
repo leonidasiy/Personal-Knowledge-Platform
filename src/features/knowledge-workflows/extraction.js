@@ -211,7 +211,7 @@
  *   readonly nowMs: () => number,
  *   readonly logger: (entry: { readonly event: string, readonly runId?: string, readonly failureKind?: string, readonly diagnosticToken?: string }) => void,
  *   readonly stopRequested?: () => boolean,
- *   readonly policy: { readonly maximumFrontier: number, readonly maximumPageBytes: number, readonly maximumRedirects: number, readonly maximumPages: number, readonly maximumDurationMs: number, readonly maximumPagesPerExecution?: number }
+ *   readonly policy: { readonly maximumFrontier: number, readonly maximumPageBytes: number, readonly maximumRedirects: number, readonly maximumPages: number, readonly maximumDurationMs: number, readonly maximumPagesPerExecution?: number, readonly maximumKnowledgePointsPerExecution?:number }
  * }} ExtractionDependencies
  */
 
@@ -361,7 +361,8 @@ export function createExtractionRunner(dependencies) {
     (dependencies.batchAcquirer !== undefined && (!text(dependencies.batchAcquirer.key) || typeof dependencies.batchAcquirer.fetchBatch !== "function" || (dependencies.batchAcquirer.maximumBatchSize !== undefined && (!positiveInteger(dependencies.batchAcquirer.maximumBatchSize) || dependencies.batchAcquirer.maximumBatchSize > 5)))) ||
     (dependencies.orderedUrls !== undefined && (!Array.isArray(dependencies.orderedUrls) || !dependencies.orderedUrls.every(publicHttps) || new Set(dependencies.orderedUrls).size !== dependencies.orderedUrls.length)) ||
     !positiveInteger(dependencies.policy?.maximumFrontier) || !positiveInteger(dependencies.policy.maximumPageBytes) || !nonNegativeInteger(dependencies.policy.maximumRedirects) || !positiveInteger(dependencies.policy.maximumPages) || !positiveInteger(dependencies.policy.maximumDurationMs) ||
-    (dependencies.policy.maximumPagesPerExecution !== undefined && !positiveInteger(dependencies.policy.maximumPagesPerExecution))) throw new TypeError("Extraction-runner dependencies are invalid.");
+    (dependencies.policy.maximumPagesPerExecution !== undefined && !positiveInteger(dependencies.policy.maximumPagesPerExecution)) ||
+    (dependencies.policy.maximumKnowledgePointsPerExecution !== undefined && !positiveInteger(dependencies.policy.maximumKnowledgePointsPerExecution))) throw new TypeError("Extraction-runner dependencies are invalid.");
   return Object.freeze({
     /** @param {unknown} input @returns {Promise<Result<ExtractionResult, ExtractionFailure>>} */
     async run(input) {
@@ -418,6 +419,7 @@ export function createExtractionRunner(dependencies) {
       let pagesProcessed = scratchpad.processedUrls.length;
       let attemptedPages = pagesProcessed + (scratchpad.failedPages?.length ?? 0);
       const previouslyAttemptedPages = attemptedPages;
+      let committedThisExecution=0;
       /** @type {Map<string, number>} */ const singleBatchRetries = new Map();
       /** @param {string} url @param {string} failureKind @param {number} attempts @param {PageObservation} [observation] @param {string} [causeKind] @returns {Promise<Result<null, ExtractionFailure>>} */
       async function recordFailedPage(url, failureKind, attempts, observation, causeKind) {
@@ -555,6 +557,7 @@ export function createExtractionRunner(dependencies) {
         if (!pageMemory.ok) return pageMemory;
         let novel = 0;
         let reviewFailure;
+        let droppedReviews=0;
         const candidates = scratchpad.processedContentDigests?.includes(observation.contentDigest??'') ? [] : observation.candidates.filter((candidate,index,all)=>!scratchpad.acceptedHashes.includes(candidate.normalizedHash)&&all.findIndex(other=>other.normalizedHash===candidate.normalizedHash)===index);
         /** @param {KnowledgeCandidate} candidate */
         const toPoint = candidate => /** @type {KnowledgePoint} */ (freeze({ id: `knowledge:${command.sourceId}:${command.sourceRevision}:${candidate.normalizedHash}`, sourceId: command.sourceId, sourceRevision: command.sourceRevision, summary: candidate.summary, normalizedHash: candidate.normalizedHash, evidenceAnchors: freeze(candidate.evidenceAnchors.map((anchor) => freeze({ ...anchor }))), coverageGoalIds: freeze([...candidate.coverageGoalIds]), mediaCandidates: freeze([...candidate.mediaCandidates]), attribution: freeze({ sourceUrl: observation.responseUrl??observation.url }), extractionVersion }));
@@ -563,6 +566,11 @@ export function createExtractionRunner(dependencies) {
           try {batchReviews = await dependencies.reviewer.reviewBatch(candidates.map(toPoint),observation);}
           catch {return fail({kind:"KnowledgePersistenceFailed",causeKind:"KnowledgeReviewFailed"},dependencies,command.runId);}
           if (!Array.isArray(batchReviews) || batchReviews.length !== candidates.length) return fail({kind:"KnowledgePersistenceFailed",causeKind:"KnowledgeReviewOutputInvalid"},dependencies,command.runId);
+          if(batchReviews.some(review=>!review.ok&&review.error.kind==='KnowledgeReviewChunkPending')) {
+            const failed=batchReviews.find(review=>!review.ok&&review.error.kind!=='KnowledgeReviewChunkPending');
+            if(failed&&!failed.ok)return fail({kind:'KnowledgePersistenceFailed',causeKind:failed.error.kind},dependencies,command.runId);
+            return {ok:true,value:freeze({state:'awaiting-time-limit-decision',scratchpad,knowledgePointCount:scratchpad.acceptedHashes.length,pagesProcessed,stopReason:'paused'})};
+          }
         }
         for (const [candidateIndex,candidate] of candidates.entries()) {
           if (scratchpad.acceptedHashes.includes(candidate.normalizedHash)) continue;
@@ -578,11 +586,12 @@ export function createExtractionRunner(dependencies) {
               reviewFailure = reviewed.error;
               break;
             }
-            scratchpad = cloneScratchpad({...scratchpad,reviewedCandidateCount:(scratchpad.reviewedCandidateCount??0)+1});
-            if (reviewed.value === null) continue;
+            if (reviewed.value === null){droppedReviews++;continue;}
             point = reviewed.value;
             if (!validCandidate({summary:point.summary,normalizedHash:point.normalizedHash,evidenceAnchors:point.evidenceAnchors,coverageGoalIds:point.coverageGoalIds,mediaCandidates:point.mediaCandidates}) || point.sourceId !== command.sourceId || point.sourceRevision !== command.sourceRevision || point.evidenceAnchors.some(anchor=>!candidate.evidenceAnchors.some(original=>original.url===anchor.url&&original.selector===anchor.selector&&original.blockId===anchor.blockId&&original.quoteDigest===anchor.quoteDigest&&original.quote===anchor.quote)) || point.coverageGoalIds.some(id=>!candidate.coverageGoalIds.includes(id)) || point.attribution.sourceUrl !== (observation.responseUrl??observation.url)) return fail({kind:"KnowledgePersistenceFailed",causeKind:"KnowledgeReviewOutputInvalid"},dependencies,command.runId);
           }
+          if(dependencies.policy.maximumKnowledgePointsPerExecution!==undefined&&committedThisExecution>=dependencies.policy.maximumKnowledgePointsPerExecution)return {ok:true,value:freeze({state:'awaiting-time-limit-decision',scratchpad,knowledgePointCount:scratchpad.acceptedHashes.length,pagesProcessed,stopReason:'paused'})};
+          if(dependencies.reviewer!==undefined)scratchpad=cloneScratchpad({...scratchpad,reviewedCandidateCount:(scratchpad.reviewedCandidateCount??0)+1});
           let appended;
           try { appended = await dependencies.knowledge.append(point); } catch (error) { const causeKind = isRecord(error) && text(error.kind) ? error.kind : "KnowledgeRepositoryRejected"; return fail({ kind: "KnowledgePersistenceFailed", causeKind }, dependencies, command.runId); }
           if (!appended.ok) { const causeKind = isRecord(appended.error) && text(appended.error.kind) ? appended.error.kind : undefined; return fail({ kind: "KnowledgePersistenceFailed", ...(causeKind === undefined || causeKind === "KnowledgePersistenceFailed" ? {} : { causeKind }) }, dependencies, command.runId); }
@@ -592,7 +601,9 @@ export function createExtractionRunner(dependencies) {
           try { const saved = await dependencies.scratchpad.save(scratchpad); if (!saved.ok) return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
           catch (error) { return fail({ kind: "ScratchpadPersistenceFailed" }, dependencies, command.runId); }
           novel += 1;
+          committedThisExecution++;
         }
+        scratchpad=cloneScratchpad({...scratchpad,reviewedCandidateCount:(scratchpad.reviewedCandidateCount??0)+droppedReviews});
         if (reviewFailure !== undefined) {
           const interruption = interruptedUnitCause(reviewFailure);
           const recorded = await recordFailedPage(observation.url, interruption === undefined ? reviewFailure.kind : "WorkflowProcessingInterrupted", positiveInteger(reviewFailure.technicalAttempts) ? reviewFailure.technicalAttempts : positiveInteger(reviewFailure.attempts) ? reviewFailure.attempts : reviewFailure.kind === "KnowledgeReviewOutputInvalid" ? 2 : 1, observation, interruption);

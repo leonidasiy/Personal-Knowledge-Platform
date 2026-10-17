@@ -196,8 +196,13 @@ export function createKnowledgeWorkflowExecutor(dependencies) {
       const result = await execute(input);
       if (!validCommand(input) || dependencies.cleanup === undefined) return result;
       let cleaned;
-      try { cleaned = await dependencies.cleanup.close(); } catch (error) { return fail(operationFailure("cleanup", "WorkflowCleanupFailed", error, undefined, "CleanupDependencyRejected"), dependencies, input.run.runId); }
-      return cleaned.ok ? result : fail(operationFailure("cleanup", "WorkflowCleanupFailed", cleaned.error), dependencies, input.run.runId);
+      try { cleaned = await dependencies.cleanup.close(); } catch (error) {
+        const failure=fail(operationFailure("cleanup", "WorkflowCleanupFailed", error, undefined, "CleanupDependencyRejected"), dependencies, input.run.runId);
+        return result.ok?failure:result;
+      }
+      if(cleaned.ok)return result;
+      const failure=fail(operationFailure("cleanup", "WorkflowCleanupFailed", cleaned.error), dependencies, input.run.runId);
+      return result.ok?failure:result;
     },
   });
 }

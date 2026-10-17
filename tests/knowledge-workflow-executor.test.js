@@ -182,6 +182,14 @@ Deno.test("5 executor converts every injected operation rejection into its typed
     cleanup: { close: async () => Promise.reject({ kind: "CleanupDependencyRejected" }) },
     logger: () => {},
   };
+  for(const close of [async()=>({ok:/** @type {const} */(false),error:{kind:'KnowledgeBrowserSessionCloseFailed'}}),async()=>{throw new Error('Synthetic cleanup failure');}]) {
+    /** @type {Parameters<import("../src/features/knowledge-workflows/executor.js").WorkflowExecutorDependencies["logger"]>[0][]} */ const events=[];
+    const failed=createKnowledgeWorkflowExecutor({...cleanupDependencies,quiz:{run:async()=>({ok:false,error:{kind:'OriginalQuizFailure'}})},cleanup:{close},logger:entry=>events.push(entry)});
+    const result=await failed.run({run:run('per-point-quiz-loop'),rootUrl:'https://example.test/learn',rightsAssessment:rights()});
+    assertEquals(result.ok,false);
+    if(!result.ok)assertEquals(result.error.detailKind,'OriginalQuizFailure');
+    assert(events.some(entry=>entry.stage==='cleanup'&&entry.event.endsWith('failure')),'Cleanup failure remains logged');
+  }
   const cleanup = createKnowledgeWorkflowExecutor(cleanupDependencies);
   const cleanupResult = await cleanup.run({ run: run("per-point-quiz-loop"), rootUrl: "https://example.test/learn", rightsAssessment: rights() });
   assertEquals(cleanupResult.ok, false);

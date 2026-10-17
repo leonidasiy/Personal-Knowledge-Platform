@@ -19,3 +19,8 @@ test('batch selection rejects invented and repeated IDs, and rechecks a cached s
  let calls=0;const single=await reviewKnowledgeBatch({points:points.slice(0,1),review:async p=>({ok:true,value:p}),select:async()=>{calls++;return {ok:true,value:{keptKnowledgeIds:[]}};}});
  assert.equal(calls,1);assert.equal(single[0].value,null);
 });
+
+test('a partial review chunk defers whole-page selection and preserves pending dispositions',async()=>{
+ const result=await reviewKnowledgeBatch({points,review:async point=>point.id==='point-3'?{ok:false,error:{kind:'KnowledgeReviewChunkPending'}}:{ok:true,value:point},select:async()=>assert.fail('Selection requires all individual reviews')});
+ assert.equal(result[3].error.kind,'KnowledgeReviewChunkPending');assert.equal(result[0].value,points[0]);
+});
