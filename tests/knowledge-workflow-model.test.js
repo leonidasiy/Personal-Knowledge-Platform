@@ -141,9 +141,12 @@ Deno.test("duplicate-key scanner ignores key-like text and preserves other role 
 });
 
 Deno.test("knowledge model rejects a JSON object truncated by the output-token limit", async () => {
-  const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async () => Response.json({ id: "request-length", choices: [{ finish_reason: "length", message: { content: JSON.stringify({ revision: 1, frontier: [] }) } }] }), now: () => 1_000, logger: () => {} });
+  /** @type {import("../worker/knowledge-workflow-model.js").KnowledgeModelDependencies["logger"] extends (entry:infer E)=>void ? E[] : never} */
+  const logs=[];
+  const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 1_000, maximumInputCharacters: 10_000, fetch: async () => Response.json({ id: "request-length", choices: [{ finish_reason: "length", message: { content: JSON.stringify({ revision: 1, frontier: [] }) } }] }), now: () => 1_000, logger: entry => logs.push(entry) });
   const result = await model.generate(command());
   assertEquals(result.ok, false);
+  assertEquals(logs.find(entry=>entry.event==="knowledge-model-failure")?.diagnosticToken,"finish-length");
   if (!result.ok) {
     assertEquals(result.error.kind, "KnowledgeModelResponseInvalid");
     if (result.error.kind === "KnowledgeModelResponseInvalid") assertEquals(result.error.field, "finish_reason");

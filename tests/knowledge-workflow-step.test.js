@@ -88,5 +88,5 @@ Deno.test("CPU interruptions retry three times from the durable state and remain
 
 Deno.test("internal and provider failures never force Upload while actual source denials still do",()=>{
   for(const kind of ['FirecrawlBrowserResponseInvalid','FirecrawlBrowserOutputTruncated','FirecrawlBrowserCredentialUnavailable','KnowledgeBrowserNavigationFailed','KnowledgeBrowserTimedOut','WorkflowProgressPersistenceFailed','WorkflowStageCallUncertain','WorkflowStagePersistenceFailed','KnowledgeModelCredentialMissing','RobotsFetchUnavailable','KnowledgePageRateLimited'])assertEquals(requiresWorkflowUpload({kind:'WorkflowRobotsFailed',detailKind:kind}),false);
-  for(const kind of ['RobotsDenied','KnowledgePageAuthenticationRequired','KnowledgePagePaywallDetected','KnowledgePageBotAccessDenied','KnowledgePageTypeUnsupported','WorkflowRightsNotAllowed','WorkflowUploadRequired'])assertEquals(requiresWorkflowUpload({kind:'WorkflowExtractionFailed',detailKind:kind}),true);
+  for(const kind of ['RobotsDenied','KnowledgePageAuthenticationRequired','KnowledgePagePaywallDetected','KnowledgePageBotAccessDenied','KnowledgePageTypeUnsupported','KnowledgePageContentTypeUnsupported','WorkflowRightsNotAllowed','WorkflowUploadRequired'])assertEquals(requiresWorkflowUpload({kind:'WorkflowExtractionFailed',detailKind:kind}),true);
 });

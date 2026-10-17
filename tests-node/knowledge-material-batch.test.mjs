@@ -122,7 +122,9 @@ test("production upload runtime resumes text batches and processes selected PDF 
         output={decision:'pass',reasons:['Synthetic source/pixel review fixture.'],feedback:'Accepted fixture.',matchedLessOftenIds:[],supportingImageEvidence:task.sourceMode==='image'?'Synthetic pixel cue for the fixture.':'',allowTextOnly:task.sourceMode==='text'};output=syntheticAssessment(task,output);
       } else if (task.source && task.points) output = { mainSubject: "music", topic: "Synthetic source relationships" };
       else if (task.operation === "plan-authorized-material" || task.operation === "replan-authorized-material") {
-        // Even a sparse planner cannot drop supplied file pages.
+        // The application restores the complete inventory instead of asking the model to copy it.
+        assert(body.messages[0].content.includes('return frontier:[]'));
+        assert.equal(body.max_tokens,2048);
         output = { revision: 1, frontier: [], coverageGoals: [], unresolvedGaps: [], stopDecision: { decision: "continue", rationale: "Observe supplied inventory.", evidenceUrls: [], unresolvedGapIds: [] } };
         assert.equal(task.scratchpad.pendingBatch, undefined);
       } else if (task.operation === "review-material-source") {

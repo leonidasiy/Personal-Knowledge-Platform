@@ -217,7 +217,7 @@ export function createOpenRouterKnowledgeModel(dependencies) {
       if (!record(document) || (!protocol?.receiptOptional&&!text(document.id)||document.id!==undefined&&!text(document.id)) || !Array.isArray(document.choices) || document.choices.length < 1 || !record(document.choices[0])) return fail({ kind: "KnowledgeModelResponseInvalid", field: "choices" }, dependencies, command.role, startedAt, "choices-shape",command.phase);
       const choice = document.choices[0];
       if (isProviderErrorTermination(document)) return fail({kind:"KnowledgeModelRejected",status:response.status,finishReason:"error"},dependencies,command.role,startedAt,"provider-error-termination",command.phase);
-      if (choice.finish_reason !== "stop") return fail({ kind: "KnowledgeModelResponseInvalid", field: "finish_reason" }, dependencies, command.role, startedAt, "finish-reason",command.phase);
+      if (choice.finish_reason !== "stop") return fail({ kind: "KnowledgeModelResponseInvalid", field: "finish_reason" }, dependencies, command.role, startedAt, choice.finish_reason === "length" ? "finish-length" : "finish-reason",command.phase);
       if (!record(choice.message) || !text(choice.message.content)) return fail({ kind: "KnowledgeModelResponseInvalid", field: "message.content" }, dependencies, command.role, startedAt, "message-content-empty",command.phase);
       let output;
       { // Every JSON model output rejects ambiguous duplicate keys, including semantic verdicts.

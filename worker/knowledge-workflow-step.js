@@ -35,7 +35,7 @@ export function isTransientBrowserFailure(error) {
 /** Only observed source access/format restrictions require learner-supplied material.
  * @param {{kind?:string,detailKind?:string}} error */
 export function requiresWorkflowUpload(error) {
-  return /^(WorkflowUploadRequired|WorkflowRightsNotAllowed|RobotsDenied|KnowledgePage(AuthenticationRequired|PaywallDetected|BotAccessDenied|TypeUnsupported))(?::|$)/u.test(error.detailKind??error.kind??'');
+  return /^(WorkflowUploadRequired|WorkflowRightsNotAllowed|RobotsDenied|KnowledgePage(AuthenticationRequired|PaywallDetected|BotAccessDenied|TypeUnsupported|ContentTypeUnsupported))(?::|$)/u.test(error.detailKind??error.kind??'');
 }
 
 /** @template Run, Value, LoadError, ExecuteError
