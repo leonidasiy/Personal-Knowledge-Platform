@@ -822,9 +822,9 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     const active = await checkProcessingState(run);
     if (!active.ok) return active;
     const stageKey=await modelStageKey(run,agentRole,taskId,systemPrompt,input,maxOutputTokens,attachments,options),signature=stageKey.slice(`${agentRole}:${taskId}:`.length);
-    return stages.run(run,stageKey,signature,async identity=>{
     const progressStage=taskId.startsWith("quiz-")?(agentRole==="question-evaluator"?"Reviewing quizzes":"Generating quizzes"):options.phase==="match"?"Associating images":agentRole==="rights-assessor"?"Checking source access":agentRole==="question-evaluator"?"Reviewing knowledge":"Extracting knowledge";
     const savedProgress=await progress.save({ownerId:run.ownerId,runId:run.runId,stage:progressStage,updatedAt:dependencies.now()});if(!savedProgress.ok)return savedProgress;
+    return stages.run(run,stageKey,signature,async identity=>{
     dependencies.preflightModelWork?.(agentRole,{ownerId:run.ownerId,runId:run.runId,stageKey:identity.key,inputDigest:identity.inputDigest,createdAt:identity.createdAt});
     const {budgetPageUrl,...modelOptions}=options;
     if(agentRole!=='knowledge-scraper')return agentRuntimeFor(run).run({ownerId:run.ownerId,runId:run.runId,role:agentRole,taskId,systemPrompt,input,maxOutputTokens,...(attachments===undefined?{}:{attachments}),...modelOptions});

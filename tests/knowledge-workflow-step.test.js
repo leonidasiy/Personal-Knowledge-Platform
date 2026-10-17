@@ -1,6 +1,6 @@
 // @ts-check
 
-import { executeAuthoritativeWorkflowStep, executeRetryingWorkflowStep } from "../worker/knowledge-workflow-step.js";
+import { executeAuthoritativeWorkflowStep, executeRetryingWorkflowStep, requiresWorkflowUpload } from "../worker/knowledge-workflow-step.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) { if (!Object.is(actual, expected)) throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`); }
@@ -84,4 +84,9 @@ Deno.test("CPU interruptions retry three times from the durable state and remain
     }catch(error){if(!(error instanceof Error)||error.message!=="Worker exceeded CPU time limit.")throw error;failed=true;}
     assertEquals(calls,4);assertEquals(loads,4);assertEquals(failed,succeedsAt===5);
   }
+});
+
+Deno.test("internal and provider failures never force Upload while actual source denials still do",()=>{
+  for(const kind of ['FirecrawlBrowserResponseInvalid','FirecrawlBrowserOutputTruncated','FirecrawlBrowserCredentialUnavailable','KnowledgeBrowserNavigationFailed','KnowledgeBrowserTimedOut','WorkflowProgressPersistenceFailed','WorkflowStageCallUncertain','WorkflowStagePersistenceFailed','KnowledgeModelCredentialMissing','RobotsFetchUnavailable','KnowledgePageRateLimited'])assertEquals(requiresWorkflowUpload({kind:'WorkflowRobotsFailed',detailKind:kind}),false);
+  for(const kind of ['RobotsDenied','KnowledgePageAuthenticationRequired','KnowledgePagePaywallDetected','KnowledgePageBotAccessDenied','KnowledgePageTypeUnsupported','WorkflowRightsNotAllowed','WorkflowUploadRequired'])assertEquals(requiresWorkflowUpload({kind:'WorkflowExtractionFailed',detailKind:kind}),true);
 });

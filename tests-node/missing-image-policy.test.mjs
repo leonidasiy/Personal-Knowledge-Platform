@@ -29,9 +29,10 @@ async function fixture(variant){
  const urls=[root,...Array.from({length:6},(_,i)=>root+'lesson-'+(i+1))],requests=[],reads=[],pages=[],media=[],logs=[];
  const makeRuntime=()=>createKnowledgeWorkflowRuntime({database,imagePolicy:WEBPAGE_IMAGE_POLICY,configSnapshots:configs,now,nowMs:Date.now,logger:entry=>logs.push(entry),apiKey:'synthetic-not-a-secret',endpoint:'https://unexecuted.invalid/',resolveAddresses:async()=>({ok:true,value:['93.184.216.34']}),
   fetch:async(_url,init)=>{
-   const message=JSON.parse(init.body).messages[1].content,body=Array.isArray(message)?message[0].text:message;
+   const request=JSON.parse(init.body),message=request.messages[1].content,body=Array.isArray(message)?message[0].text:message;
    const input=JSON.parse(body.slice(body.indexOf('\n')+1,body.lastIndexOf('\n'))),task=input.task?.task??input.task??input;requests.push({...input,task});let output;
-   if(['plan','replan'].includes(task.operation))output={revision:1,frontier:urls.filter(u=>!task.scratchpad.processedUrls.includes(u)),coverageGoals:[],unresolvedGaps:[],stopDecision:{decision:task.scratchpad.processedUrls.length===urls.length?'complete':'continue',rationale:'Observe remaining source text.',evidenceUrls:[],unresolvedGapIds:[]}};
+   if(request.response_format?.json_schema?.name==='knowledge_batch_selection_v1')output={keptKnowledgeIds:task.points.map(point=>point.id)};
+   else if(['plan','replan'].includes(task.operation))output={revision:1,frontier:urls.filter(u=>!task.scratchpad.processedUrls.includes(u)),coverageGoals:[],unresolvedGaps:[],stopDecision:{decision:task.scratchpad.processedUrls.length===urls.length?'complete':'continue',rationale:'Observe remaining source text.',evidenceUrls:[],unresolvedGapIds:[]}};
    else if(task.operation==='extract-webpage-facts')output={notes:'Independent source text retained.',candidates:task.sourceBlocks.map((b,i)=>({summary:b.text,normalizedHash:task.url+':'+i,evidenceAnchors:[{reference:task.citationSources.find(s=>s.sourceId===b.id).reference,clause:b.text}],coverageGoalIds:[],mediaCandidates:[]}))};
    else if(task.operation==='normalize-webpage-claim-boundaries')output={notes:task.notes,additionalCandidates:[],reviews:task.candidates.map(c=>({sourceNormalizedHash:c.normalizedHash,relationshipUnits:syntheticRelationshipUnits([c]),candidates:[c]}))};
   else if(task.operation==='verify-webpage-facts')output={verdicts:task.candidates.map(c=>({normalizedHash:c.normalizedHash,grounded:true,useful:true}))};

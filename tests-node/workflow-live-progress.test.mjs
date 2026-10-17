@@ -43,7 +43,8 @@ test('in-flight page/title/section and partial stages are durable and owner scop
   const result=unwrap(await f.progress.read(f.run));
   assert.equal(result.currentUrl,'https://example.test/source/lesson-1');assert.equal(result.pageTitle,'Lesson 1');assert.equal(result.sectionTitle,'Pitch');assert.equal(result.stage,'Reviewing knowledge');assert.equal(result.updatedAt,f.now());
   assert.equal((await f.progress.read({...f.run,ownerId:'other'})).error.kind,'WorkflowProgressNotFound');
-  assert.equal((await f.progress.save({...scope,updatedAt:'2026-10-12T00:00:00Z'})).ok,false);
+  unwrap(await f.progress.save({...scope,stage:'Stale concurrent review',updatedAt:'2026-10-12T00:00:00Z'}));
+  assert.equal(unwrap(await f.progress.read(f.run)).stage,'Reviewing knowledge','Out-of-order display updates preserve newer progress without failing extraction');
   assert.equal((await f.progress.save({...scope,currentUrl:'javascript:alert(1)',updatedAt:f.now()})).error.kind,'WorkflowProgressCommandInvalid');
   unwrap(await f.progress.save({...scope,pageTitle:null,updatedAt:f.now()}));assert.equal(unwrap(await f.progress.read(f.run)).pageTitle,null);
  }finally{f.close();}

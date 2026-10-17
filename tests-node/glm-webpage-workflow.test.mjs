@@ -56,7 +56,8 @@ for(const {partial,blockedImage,resumedPage,sessionImage,cacheResume,authoritati
    }
    if(task.operation==='extract-webpage-facts')assert.equal(body.model,configs['knowledge-scraper'].model.name);
    let output;
-   if(task.operation==='plan'||task.operation==='replan')output={revision:1,frontier:task.operation==='plan'?[url]:[],coverageGoals:[],unresolvedGaps:[],stopDecision:{decision:task.operation==='plan'?'continue':'complete',rationale:'Synthetic captured source.',evidenceUrls:[url],unresolvedGapIds:[]}};
+   if(body.response_format?.json_schema?.name==='knowledge_batch_selection_v1')output={keptKnowledgeIds:task.points.map(point=>point.id)};
+   else if(task.operation==='plan'||task.operation==='replan')output={revision:1,frontier:task.operation==='plan'?[url]:[],coverageGoals:[],unresolvedGaps:[],stopDecision:{decision:task.operation==='plan'?'continue':'complete',rationale:'Synthetic captured source.',evidenceUrls:[url],unresolvedGapIds:[]}};
    else if(task.operation==='extract-webpage-facts'){assert.equal(body.response_format.type,'json_schema');assert(!Array.isArray(message));output={notes:'',candidates:[...(partial?[null]:[]),{summary:block.text,normalizedHash:'ratio',coverageGoalIds:[],mediaCandidates:[],evidenceAnchors:[{reference:task.citationSources.find(s=>s.sourceId===block.id).reference,clause:block.text}]}]};}
    else if(task.operation==='normalize-webpage-claim-boundaries')output={notes:task.notes,additionalCandidates:[],reviews:task.candidates.map(c=>({sourceNormalizedHash:c.normalizedHash,relationshipUnits:syntheticRelationshipUnits([c]),candidates:[c]}))};
   else if(task.operation==='verify-webpage-facts'){assert.equal(body.response_format.type,'json_object');assert.equal(task.candidates[0].evidenceAnchors[0].url,url);assert.equal(task.candidates[0].evidenceAnchors[0].quoteDigest,await quoteHash(block.text));output={verdicts:[{normalizedHash:'ratio',grounded:true,useful:true}]};}

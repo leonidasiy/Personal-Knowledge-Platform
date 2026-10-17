@@ -45,7 +45,7 @@ export function renderProcessingStatus(model) {
   const count = countProcessingWorkflowStatuses(statuses);
   if (!model.uploading && !model.unavailable && count === 0) return "";
   const active = statuses.find(status => countProcessingWorkflowStatuses([status]) > 0);
-  const stage = count === 1 && active?.run ? workflowStageMessage(active.run.state).replace(/^Processing:\s*/u, "") : null;
+  const stage = count === 1 && active?.run ? (active.run.state === "awaiting-time-limit-decision" ? shellMarkup(44) : workflowStageMessage(active.run.state)).replace(/^Processing:\s*/u, "") : null;
   const processing = `Processing ${count} ${count === 1 ? "source" : "sources"}${stage === null ? "" : ` · ${stage}`}`;
   const label = model.uploading ? `Uploading…${count && !model.unavailable ? ` · ${processing}` : ""}`
     : model.unavailable ? `Status unavailable${count ? ` · Last confirmed: ${processing}` : ""}` : processing;
@@ -163,7 +163,7 @@ function renderSourceProgress(status,escapeHtml){
   const quizReport=completed&&quizFailures.length?shellMarkup(87,quizFailures.length,quizFailures.map(item=>shellMarkup(88,escapeHtml(item.summary),item.attempts)).join("")):"";
   if (completed) return report + quizReport;
   const questions=progress?shellMarkup(64,progress.generatedQuizQuestions):shellMarkup(57);
-  const stage=(active?progress?.stage:status.message)??workflowStageMessage(run.state);
+  const stage=(active?progress?.stage:status.message)??(active && run.state === "awaiting-time-limit-decision" ? shellMarkup(44) : workflowStageMessage(run.state));
   const pageCount=progress?.processedPageCount??run.counts.pages;
   const total=progress?.totalPages;
   const meter=shellMarkup(69,total??1,total==null?(active?"":'value="0"'):`value="${pageCount}"`,active?"library-processing-spinner":"",`${pageCount}${total==null?"":` of ${total}`}`,active&&progress?.sectionTitle?` · ${escapeHtml(progress.sectionTitle)}`:"");
@@ -177,6 +177,7 @@ function workflowStatusMessage(source, status) {
   if (status.reasonCode === "rights-not-verified" && sourceHasAudioVideo(source)) return shellMarkup(39);
   if (status.message !== null) return status.message;
   if (status.run?.state === "completed") return shellMarkup(40);
+  if (status.run?.state === "awaiting-time-limit-decision" && countProcessingWorkflowStatuses([status])>0) return shellMarkup(44);
   if (status.run !== null && status.run.state !== "awaiting-upload") return workflowStageMessage(status.run.state);
   return null;
 }

@@ -78,7 +78,9 @@ Deno.test("source gateway excludes expired extraction runs but keeps work before
     { sourceId: "source-expired", run: run(0), reasonCode: null, message: null },
     { sourceId: "source-boundary", run: run(1), reasonCode: null, message: null },
     { sourceId: "source-quizzes", run: { ...run(0), state: "per-point-quiz-loop" }, reasonCode: null, message: null },
-  ]), 2);
+    { sourceId: "source-chunk", run: { ...run(1), state: "awaiting-time-limit-decision" }, reasonCode: null, message: null },
+    { sourceId: "source-decision", run: { ...run(0), state: "awaiting-time-limit-decision", decisionRequired:"time-limit" }, reasonCode: null, message: null },
+  ]), 3);
 });
 
 /** @param {(request: Request) => Promise<Response>} respond */

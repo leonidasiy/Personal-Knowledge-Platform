@@ -14,6 +14,8 @@ import { isForbiddenAddress } from './knowledge-workflow-network.js';
 /** @typedef {{apiKey:string|null,sessionTtlSeconds?:number,fetch:typeof globalThis.fetch,policy:import('../acquisition/contracts.ts').Policy,resolveAddresses:(hostname:string)=>Promise<Result<readonly string[]>>,reserveSession:(command:{credits:number,ttlSeconds:number})=>Promise<Result<null>>,nowMs:()=>number,logger:(entry:BrowserLogEntry)=>void,readRobots:(command:{sourceUrl:string,robotsUrl:string})=>Promise<Result<{status:number,bytes:Uint8Array}>>,closeRobots:()=>Promise<Result<null>>}} Dependencies */
 const encoder = new TextEncoder();
 const defaultTtlSeconds = 120;
+// Live Interact output truncates near 1 MiB; leave room for JSON and provider framing.
+const outputChunkCharacters = 512 * 1024;
 /** @param {Uint8Array} bytes @returns {RasterType|null} */
 function rasterType(bytes){
   if(bytes.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v))return 'image/png';
@@ -79,6 +81,7 @@ function sameCapturedPanel(before,after){
 function browserProgram(input) {
   return `await (async () => {
 const input=${JSON.stringify(input)};
+const emit=value=>{const json=JSON.stringify(value);if(Buffer.byteLength(json,'utf8')<=${outputChunkCharacters}){console.log(json);return;}const data=require('node:zlib').gzipSync(Buffer.from(json)).toString('base64');if(data.length>${outputChunkCharacters})require('node:fs').writeFileSync(input.outputPath,data,{mode:0o600});console.log(JSON.stringify({transport:'gzip-base64',total:data.length,data:data.slice(0,${outputChunkCharacters})}));};
 const text=value=>typeof value==='string'&&value.trim()!=='';
 const isForbiddenAddress=${isForbiddenAddress.toString()};
 const publicUrl=raw=>{try{const u=new URL(raw),h=u.hostname.toLowerCase().replace(/^\\[|\\]$/g,'');return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&h!=='localhost'&&!h.endsWith('.localhost')&&!h.endsWith('.local')&&(!(/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(h)||h.includes(':'))||!isForbiddenAddress(h));}catch{return false;}};
@@ -95,7 +98,7 @@ page.on('response',onResponse);
 try{
  if(input.operation==='screenshot'){operationStage='screenshot';
   if(page.url()!==input.url)throw new Error('KnowledgeBrowserObservationStale');
-  console.log(JSON.stringify({screenshot:(await page.screenshot({type:'png'})).toString('base64'),url:page.url()}));
+  emit({screenshot:(await page.screenshot({type:'png'})).toString('base64'),url:page.url()});
  }else{
   if(input.operation==='click'){operationStage='target-validation';
    if(page.url()!==input.url)throw new Error('KnowledgeBrowserObservationStale');
@@ -138,7 +141,7 @@ try{
   const navigation=await page.evaluate(({limit,token})=>{document.documentElement.setAttribute('data-pkp-observation',token);document.querySelectorAll('[data-pkp-navigation-id]').forEach(element=>element.removeAttribute('data-pkp-navigation-id'));const nodes=[...document.querySelectorAll('a[href],button,[role="tab"]')].filter(e=>e.getClientRects().length&&!e.closest('[hidden],[aria-hidden="true"],form')&&getComputedStyle(e).visibility!=='hidden'&&!e.matches('[disabled],[aria-disabled="true"],[type="submit"],[type="reset"]'));const controls=[];for(let i=0;i<nodes.length;i++){const e=nodes[i],label=(e.getAttribute('aria-label')||e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,500);if(!label)continue;let url=null;if(e.matches('a[href]')){try{const u=new URL(e.getAttribute('href'),location.href);if(u.protocol!=='https:'||u.origin!==location.origin||u.username||u.password||u.port)continue;url=u.href;}catch{continue;}}const id=token+'-control-'+i;e.setAttribute('data-pkp-navigation-id',id);const region=e.closest('[role="dialog"],dialog,[aria-modal="true"]')??e.closest('nav,aside,main,article,header,footer,[role="navigation"],[role="tablist"]');controls.push({id,label,role:e.getAttribute('role')==='tab'?'tab':e.matches('a[href]')?'link':'button',url,region:region?.getAttribute('aria-label')||region?.getAttribute('role')||region?.tagName.toLowerCase()||'page',order:controls.length,selected:e.getAttribute('aria-selected')==='true'||e.getAttribute('aria-current')==='page'});}return {url:location.href,title:document.title,controls:controls.slice(0,limit),truncated:controls.length>limit};},{limit:input.links,token:input.token});
   operationStage='text-capture';
   const renderedText=await page.evaluate(()=>document.body.innerText);if(renderedText.length>input.textCharacters)throw new Error('WebpageTextLimitExceeded');
-  console.log(JSON.stringify({html,url:page.url(),status,contentType,redirects,renderedText,evidence:evidence.value,navigation,images}));
+  emit({html,url:page.url(),status,contentType,redirects,renderedText,evidence:evidence.value,navigation,images});
  }
 }catch(error){
  const message=typeof error?.message==='string'?error.message:'';
@@ -187,6 +190,7 @@ export function createFirecrawlWorkflowBrowser(dependencies) {
       const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
       const output=JSON.parse(new TextDecoder().decode(bytes));
       if(!response.ok||!record(output)||output.success!==true||output.error||output.killed||typeof output.exitCode==='number'&&output.exitCode!==0){dependencies.logger({event:'firecrawl-browser-api-failure',failureKind:'FirecrawlBrowserApiFailed',httpStatus,stage,method,...providerDiagnostic(output,dependencies.apiKey),...(record(output)&&typeof output.exitCode==='number'&&Number.isSafeInteger(output.exitCode)?{exitCode:output.exitCode}:{}),...(record(output)&&typeof output.killed==='boolean'?{killed:output.killed}:{})});return fail('FirecrawlBrowserApiFailed');}
+      if(output.truncated===true){dependencies.logger({event:'firecrawl-browser-api-failure',failureKind:'FirecrawlBrowserOutputTruncated',stage,httpStatus,diagnosticToken:'provider-output-truncated'});return fail('FirecrawlBrowserOutputTruncated');}
       return {ok:true,value:output};
     }catch(error){const failureKind=signal?.aborted?'Cancelled':timeoutController.signal.aborted?'FirecrawlBrowserTimedOut':'FirecrawlBrowserApiFailed';dependencies.logger({event:'firecrawl-browser-api-failure',failureKind,...(httpStatus===undefined?{}:{httpStatus}),stage,method,...providerDiagnostic(error,dependencies.apiKey)});return fail(failureKind);}finally{clearTimeout(timeout);}
   }
@@ -249,9 +253,33 @@ export function createFirecrawlWorkflowBrowser(dependencies) {
   /** @param {Record<string,unknown>} input @param {AbortSignal} signal @returns {Promise<Result<Record<string,unknown>>>} */
   async function execute(input,signal){
     if(!session)return fail('KnowledgeBrowserClosed');
-    const output=await api('/'+encodeURIComponent(session.id)+'/execute','POST',{code:browserProgram(input),language:'node',timeout:Math.max(1,Math.ceil(policy.operationMilliseconds/1000))},signal);if(!output.ok)return output;
-    const raw=output.value.stdout??output.value.result;if(typeof raw!=='string')return fail('FirecrawlBrowserResponseInvalid');
-    const lines=raw.trim().split('\n');try{const parsed=JSON.parse(lines[lines.length-1]);if(!record(parsed))return fail('FirecrawlBrowserResponseInvalid');if(typeof parsed.failure==='string'){const allowed=['KnowledgeBrowserClickObstructed','KnowledgeBrowserClickTargetUnavailable','KnowledgeBrowserClickTimedOut','KnowledgeBrowserLoadTimedOut','KnowledgeBrowserPageClosed','KnowledgeBrowserCaptureInterrupted','KnowledgeBrowserCaptureTimedOut','KnowledgeBrowserTimedOut','KnowledgeBrowserObservationStale','KnowledgeBrowserTargetRejected','KnowledgeBrowserNavigationRejected','RedirectLimitExceeded','KnowledgeBrowserResponseInvalid','KnowledgePageAuthenticationRequired','KnowledgePagePaywallDetected','KnowledgePageBotAccessDenied','KnowledgePageRateLimited','KnowledgePageFetchFailed','KnowledgePageTypeUnsupported','KnowledgePageTooLarge','WebpageTextLimitExceeded','KnowledgeBrowserNavigationFailed'];const kind=allowed.includes(parsed.failure)?parsed.failure:'KnowledgeBrowserNavigationFailed';
+    const outputPath='/tmp/pkp-browser-'+crypto.randomUUID()+'.b64';
+    const path='/'+encodeURIComponent(session.id)+'/execute';
+    const output=await api(path,'POST',{code:browserProgram({...input,outputPath}),language:'node',timeout:Math.max(1,Math.ceil(policy.operationMilliseconds/1000))},signal);if(!output.ok)return output;
+    const raw=typeof output.value.stdout==='string'&&output.value.stdout.trim()?output.value.stdout:output.value.result;if(typeof raw!=='string')return fail('FirecrawlBrowserResponseInvalid');
+    const lines=raw.trim().split('\n');try{let parsed=JSON.parse(lines[lines.length-1]);if(!record(parsed))return fail('FirecrawlBrowserResponseInvalid');
+    if(parsed.transport==='gzip-base64'){
+      const maximum=Math.max(policy.htmlBytes*4,Math.ceil(policy.screenshotBytes*4/3)+8192)+Math.ceil(policy.encodedOperationBytes*4/3)+policy.resources*(policy.urlCharacters*(policy.mediaRedirects+2)*4+512);
+      if(typeof parsed.total!=='number'||!Number.isSafeInteger(parsed.total)||parsed.total<=0||Number(parsed.total)>Math.ceil((maximum+1024)*4/3)||typeof parsed.data!=='string'||parsed.data.length!==Math.min(outputChunkCharacters,Number(parsed.total)))return fail('FirecrawlBrowserResponseInvalid');
+      let data=parsed.data;const total=Number(parsed.total);
+      while(data.length<total){
+        if(signal.aborted)return fail('Cancelled');
+        const offset=data.length,length=Math.min(outputChunkCharacters,total-offset);
+        const chunk=await api(path,'POST',{language:'node',code:`await (async()=>{const fs=require('node:fs'),data=fs.readFileSync(${JSON.stringify(outputPath)},'utf8');console.log(JSON.stringify({offset:${offset},total:data.length,data:data.slice(${offset},${offset+length})}));${offset+length===total?`fs.unlinkSync(${JSON.stringify(outputPath)});`:''}})();`},signal);
+        if(!chunk.ok)return chunk;
+        const text=chunk.value.stdout||chunk.value.result;
+        if(typeof text!=='string')return fail('FirecrawlBrowserResponseInvalid');
+        const part=JSON.parse(text.trim().split('\n').at(-1)??'');
+        if(!record(part)||part.offset!==offset||part.total!==total||typeof part.data!=='string'||part.data.length!==length)return fail('FirecrawlBrowserResponseInvalid');
+        data+=part.data;
+      }
+      if(!/^[A-Za-z0-9+/]*={0,2}$/.test(data)||data.length%4!==0)return fail('FirecrawlBrowserResponseInvalid');
+      const compressed=Uint8Array.from(atob(data),c=>c.charCodeAt(0)),reader=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+      const decoder=new TextDecoder('utf-8',{fatal:true});let json='',size=0;
+      try{while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.byteLength;if(size>maximum){await reader.cancel();return fail('FirecrawlBrowserResponseTooLarge');}json+=decoder.decode(chunk.value,{stream:true});}}finally{reader.releaseLock();}
+      parsed=JSON.parse(json+decoder.decode());if(!record(parsed))return fail('FirecrawlBrowserResponseInvalid');
+    }
+if(typeof parsed.failure==='string'){const allowed=['KnowledgeBrowserClickObstructed','KnowledgeBrowserClickTargetUnavailable','KnowledgeBrowserClickTimedOut','KnowledgeBrowserLoadTimedOut','KnowledgeBrowserPageClosed','KnowledgeBrowserCaptureInterrupted','KnowledgeBrowserCaptureTimedOut','KnowledgeBrowserTimedOut','KnowledgeBrowserObservationStale','KnowledgeBrowserTargetRejected','KnowledgeBrowserNavigationRejected','RedirectLimitExceeded','KnowledgeBrowserResponseInvalid','KnowledgePageAuthenticationRequired','KnowledgePagePaywallDetected','KnowledgePageBotAccessDenied','KnowledgePageRateLimited','KnowledgePageFetchFailed','KnowledgePageTypeUnsupported','KnowledgePageTooLarge','WebpageTextLimitExceeded','KnowledgeBrowserNavigationFailed'];const kind=allowed.includes(parsed.failure)?parsed.failure:'KnowledgeBrowserNavigationFailed';
  const stages=['route-setup','screenshot','target-validation','click','wait-load','read-navigation','navigation-verification','html-capture','evidence-capture','image-capture','controls-capture','text-capture'];
  const tokens=['browser-operation-failed','click-pointer-intercepted','click-target-not-visible-or-stable','click-target-outside-viewport','click-target-detached','browser-page-closed','capture-navigation-interrupted','click-timeout','load-timeout','browser-operation-timeout'];
  dependencies.logger({event:'firecrawl-browser-operation-failure',failureKind:kind,...(typeof parsed.operationStage==='string'&&stages.includes(parsed.operationStage)?{operationStage:parsed.operationStage}:{}),...(typeof parsed.diagnosticToken==='string'&&tokens.includes(parsed.diagnosticToken)?{diagnosticToken:parsed.diagnosticToken}:{}),...(typeof parsed.failureName==='string'&&['TimeoutError','TypeError','ReferenceError','SyntaxError','Error'].includes(parsed.failureName)?{failureName:parsed.failureName}:{})});return fail(kind);}return {ok:true,value:parsed};}catch{return fail('FirecrawlBrowserResponseInvalid');}

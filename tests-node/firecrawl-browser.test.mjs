@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { gzipSync } from 'node:zlib';
+import { randomBytes } from 'node:crypto';
 import { createContext, runInContext } from 'node:vm';
 import { createFirecrawlWorkflowBrowser } from '../worker/firecrawl-browser.js';
 const root='https://example.org/course',first=root+'/lesson-1',second=root+'/lesson-2';
@@ -7,7 +10,8 @@ const policy={htmlBytes:100_000,robotsBytes:262_144,screenshotBytes:100_000,imag
 const png=Buffer.from([137,80,78,71,13,10,26,10,1]);
 function fixture(options={}){
  let clock=1000,location='about:blank',token='',status=200,closedRobots=0,imagesVisible=true;
- const calls=[],reserves=[],logs=[],listeners=new Map();let guard;
+ const calls=[],reserves=[],logs=[],listeners=new Map(),files=new Map();let guard;
+ const nativeRequire=createRequire(import.meta.url),sandboxRequire=name=>name==='node:dns'?{promises:{lookup:async()=>[{address:'8.8.8.8'}]}}:name==='node:fs'?{writeFileSync:(path,data)=>files.set(path,data),readFileSync:path=>{assert(files.has(path),'Transfer file exists');return files.get(path);},unlinkSync:path=>files.delete(path)}:nativeRequire(name);
  const evidence=()=>({url:location,headings:[],blocks:[{id:'p1',locator:'p',sectionId:'root',kind:'text',text:options.changedEvidence&&reserves.length>1?'Changed source content.':'Fixture educational text.',figureId:null}],images:(imagesVisible?options.images??[]:[]).map((image,i)=>({id:'image:'+i,url:image.url,occurrences:[{id:'occurrence:'+i,locator:'main img',sectionId:'root',figureId:null,captionId:null,alt:'Fixture raster'}],occurrenceWindows:[['occurrence:'+i]]})),warnings:[]});
  let bodyReads=0,lazyLoads=0,loaded=false;
  function emitImages(lazy){for(const image of options.images??[]){if(!!image.lazy!==lazy)continue;let request=null;for(const url of image.chain??[image.url]){const previous=request;request={url:()=>url,isNavigationRequest:()=>false,resourceType:()=>image.resourceType??'image',redirectedFrom:()=>previous};}listeners.get('response')?.({request:()=>request,status:()=>image.status??200,headers:()=>({'content-type':image.mediaType??'image/png',...(image.declaredBytes===undefined?{}:{'content-length':String(image.declaredBytes)})}),body:async()=>{bodyReads++;if(image.bodyError)throw new Error('Fixture body unavailable');if(image.bodyWait)return image.bodyWait();return image.bytes??png;}});}}
@@ -16,7 +20,7 @@ function fixture(options={}){
   unroute:async()=>{guard=null;},route:async(_pattern,handler)=>{guard=handler;},
   on:(name,handler)=>listeners.set(name,handler),off:name=>listeners.delete(name),
   async goto(url,options){loaded=options?.waitUntil==='load';location=url;listeners.get('response')?.({request:()=>({isNavigationRequest:()=>true,frame:()=>page}),status:()=>status,headers:()=>({'content-type':'text/html'})});emitImages(false);},
-  waitForLoadState:async()=>{if(options.waitError)throw options.waitError;},content:async()=>'<main><p>Fixture educational text.</p></main>',screenshot:async()=>png,
+  waitForLoadState:async()=>{if(options.waitError)throw options.waitError;},content:async()=>options.html??'<main><p>Fixture educational text.</p></main>',screenshot:async()=>png,
   locator:()=>({click:async()=>{if(options.clickError)throw options.clickError;location=second;await page.goto(second);}}),
   async evaluate(fn,arg){
    if(fn.name==='collectWebpageEvidence')return {ok:true,value:{...evidence(),...(options.delayedContent&&!loaded?{blocks:[]}: {})}};
@@ -37,12 +41,14 @@ function fixture(options={}){
   if(options.execute)return options.execute({url,init,body,page});
   let stdout='';const console={log:line=>{stdout+=line+'\n';}};
   const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
-  if(options.persistentVm){vmContext??=createContext({page,URL,Buffer,setTimeout,clearTimeout,require:()=>({promises:{lookup:async()=>[{address:'8.8.8.8'}]}})});vmContext.console=console;await runInContext(body.code.replace(/^await /,''),vmContext);}else{await new AsyncFunction('page','console','dns',body.code.replace("require('node:dns').promises",'dns'))(page,console,{lookup:async()=>[{address:'8.8.8.8'}]});}
+  if(options.persistentVm){vmContext??=createContext({page,URL,Buffer,setTimeout,clearTimeout,require:sandboxRequire});vmContext.console=console;await runInContext(body.code.replace(/^await /,''),vmContext);}else{await new AsyncFunction('page','console','require',body.code)(page,console,sandboxRequire);}
   if(options.transformOutput)stdout=JSON.stringify(options.transformOutput(JSON.parse(stdout)));
-  return Response.json({success:true,stdout,stderr:'',exitCode:0});
+  const truncated=options.providerOutputLimit&&Buffer.byteLength(stdout)>options.providerOutputLimit;
+  if(truncated)stdout=Buffer.from(stdout).subarray(0,options.providerOutputLimit).toString()+'[output truncated]';
+  return Response.json({success:true,stdout,stderr:'',exitCode:0,truncated:!!truncated});
  };
  const browser=createFirecrawlWorkflowBrowser({sessionTtlSeconds:options.sessionTtlSeconds,apiKey:options.noKey?null:'fixture-credential',fetch:fetcher,policy:options.policy??policy,resolveAddresses:async()=>({ok:true,value:options.privateAddress?['127.0.0.1']:['8.8.8.8']}),reserveSession:async command=>{reserves.push(command);return options.denyReserve?{ok:false,error:{kind:'BudgetExceeded'}}:{ok:true,value:null};},nowMs:()=>clock,logger:entry=>logs.push(entry),readRobots:async()=>({ok:true,value:{status:404,headers:{},bytes:new Uint8Array()}}),closeRobots:async()=>{closedRobots++;return {ok:true,value:null};}});
- return {browser,calls,reserves,logs,page,get guard(){return guard;},advance:ms=>{clock+=ms;},setStatus:code=>{status=code;},setImagesVisible:value=>{imagesVisible=value;},get closedRobots(){return closedRobots;},get bodyReads(){return bodyReads;},get lazyLoads(){return lazyLoads;}};
+ return {browser,calls,reserves,logs,page,files,get guard(){return guard;},advance:ms=>{clock+=ms;},setStatus:code=>{status=code;},setImagesVisible:value=>{imagesVisible=value;},get closedRobots(){return closedRobots;},get bodyReads(){return bodyReads;},get lazyLoads(){return lazyLoads;}};
 }
 test('reserves session before launch, captures grounded DOM controls, clicks and screenshots same browser panel',async()=>{
  const f=fixture();const read=await f.browser.readPage({url:first,rootUrl:root});assert.equal(read.ok,true);assert.equal(read.value.responseUrl,first);assert.equal(read.value.evidence.blocks[0].text,'Fixture educational text.');assert.equal(read.value.navigation.controls[0].order,0);
@@ -308,4 +314,27 @@ test('same-page hidden panel retains bounded original archive but cannot expose 
 
 test('waits for page scripts to load before capturing educational evidence',async()=>{
  const f=fixture({delayedContent:true});try{const result=await f.browser.readPage({url:first,rootUrl:root});assert.equal(result.ok,true);assert.equal(result.value.evidence.blocks.length,1);}finally{await f.browser.close();}
+});
+
+for(const incompressible of [false,true])test('provider stdout ceiling preserves complete large HTML and original raster bytes; incompressible='+incompressible,async()=>{
+ const image=Buffer.concat([png,(incompressible?randomBytes(1_500_000):Buffer.alloc(1_000_000))]),html='<main>'+('漢字🎶 &quot; '.repeat(30000))+'</main>';
+ const f=fixture({providerOutputLimit:1_048_000,html,images:[{url:cover,bytes:image}],policy:{...policy,htmlBytes:1_000_000,imageBytes:2_000_000,encodedResourceBytes:2_000_000,encodedOperationBytes:3_000_000}});
+ try{const result=await f.browser.readPage({url:first,rootUrl:root});assert.equal(result.ok,true,JSON.stringify(result.error));assert.equal(new TextDecoder().decode(result.value.bytes),html);const read=await f.browser.readImage({...imageCommand(),maximumBytes:2_000_000});assert.equal(read.ok,true);assert.deepEqual(read.value.bytes,new Uint8Array(image));assert.equal(f.reserves.length,1);assert.equal(f.files.size,0,'Transfer files are removed after successful assembly');}finally{await f.browser.close();}
+});
+
+for(const corruption of ['length','offset','base64'])test('invalid segmented transfers fail closed and close the session: '+corruption,async()=>{
+ const f=fixture({images:[{url:cover,bytes:Buffer.concat([png,randomBytes(800000)])}],policy:{...policy,imageBytes:1_000_000,encodedResourceBytes:1_000_000,encodedOperationBytes:1_000_000},transformOutput:value=>{
+  if(corruption==='length'&&value.transport)value.total=Number.MAX_SAFE_INTEGER;
+  if(corruption==='offset'&&value.offset)value.offset++;
+  if(corruption==='base64'&&value.transport)value.data='!'.repeat(value.data.length);
+  return value;
+ }});
+ try{assert.equal((await f.browser.readPage({url:first,rootUrl:root})).error.kind,'FirecrawlBrowserResponseInvalid');assert.equal(f.calls.at(-1).method,'DELETE');assert.equal(f.reserves.length,1);}finally{await f.browser.close();}
+});
+test('decompression respects the existing payload budget and explicit provider truncation stays diagnostic',async()=>{
+ for(const truncated of [false,true]){
+  const data=gzipSync(Buffer.alloc(10_000_000,32)).toString('base64');
+  const f=fixture({execute:async()=>Response.json({success:true,truncated,stdout:JSON.stringify({transport:'gzip-base64',total:data.length,data})})});
+  try{assert.equal((await f.browser.readPage({url:first,rootUrl:root})).error.kind,truncated?'FirecrawlBrowserOutputTruncated':'FirecrawlBrowserResponseTooLarge');assert.equal(f.calls.at(-1).method,'DELETE');if(truncated)assert(f.logs.some(e=>e.diagnosticToken==='provider-output-truncated'));}finally{await f.browser.close();}
+ }
 });

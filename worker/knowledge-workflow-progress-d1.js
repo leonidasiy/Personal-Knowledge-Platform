@@ -1,6 +1,7 @@
 // @ts-check
 import { isKnowledgeWorkflowRun } from '../src/features/knowledge-workflows/workflow.js';
 import { readFailedQuizItems } from './knowledge-workflow-quiz-failures.js';
+import { workflowPersistenceDiagnostic } from './knowledge-workflow-logging.js';
 import { parseWorkflowProgress } from '../src/features/knowledge-workflows/progress.js';
 
 /** @typedef {import('./knowledge-workflow-d1.js').D1DatabasePort} D1DatabasePort */
@@ -15,8 +16,8 @@ function text(value) { return typeof value === 'string' && value.trim() !== ''; 
 
 export class D1KnowledgeWorkflowProgressRepository {
   /** @type {D1DatabasePort} */ #database;
-  /** @type {(entry:{event:string,ownerId?:string,runId?:string,failureKind?:string})=>void} */ #logger;
-  /** @param {{database:D1DatabasePort,logger:(entry:{event:string,ownerId?:string,runId?:string,failureKind?:string})=>void}} dependencies */
+  /** @type {(entry:{event:string,ownerId?:string,runId?:string,failureKind?:string,diagnosticToken?:string})=>void} */ #logger;
+  /** @param {{database:D1DatabasePort,logger:(entry:{event:string,ownerId?:string,runId?:string,failureKind?:string,diagnosticToken?:string})=>void}} dependencies */
   constructor(dependencies) {
     if (typeof dependencies?.database?.prepare !== 'function' || typeof dependencies.logger !== 'function') throw new TypeError('Workflow progress dependencies are invalid.');
     this.#database = dependencies.database; this.#logger = dependencies.logger;
@@ -33,9 +34,16 @@ export class D1KnowledgeWorkflowProgressRepository {
         section_title=CASE WHEN ? THEN excluded.section_title ELSE knowledge_workflow_progress.section_title END,
         stage=CASE WHEN ? THEN excluded.stage ELSE knowledge_workflow_progress.stage END,updated_at=excluded.updated_at
         WHERE knowledge_workflow_progress.updated_at<=excluded.updated_at`).bind(command.ownerId,command.runId,command.currentUrl ?? null,command.pageTitle ?? null,command.sectionTitle ?? null,command.stage ?? null,command.updatedAt,command.ownerId,command.runId,command.ownerId,command.runId,Number(command.currentUrl !== undefined),Number(command.pageTitle !== undefined),Number(command.sectionTitle !== undefined),Number(command.stage !== undefined)).run();
-      return saved.success && saved.meta?.changes === 1 ? {ok:true,value:null} : {ok:false,error:{kind:'WorkflowProgressPersistenceFailed'}};
+      if (saved.success && saved.meta?.changes === 1) return {ok:true,value:null};
+      // Concurrent reviewers can arrive out of order; retaining newer display progress is successful.
+      const newer = saved.success && saved.meta?.changes === 0 ? await this.#database.prepare(`SELECT p.updated_at FROM knowledge_workflow_progress p JOIN knowledge_workflow_runs r USING(owner_id,run_id)
+        WHERE p.owner_id=? AND p.run_id=? AND p.updated_at>? AND r.state NOT IN('abandoned','completed')
+        AND NOT EXISTS(SELECT 1 FROM knowledge_workflow_run_tombstones WHERE owner_id=p.owner_id AND run_id=p.run_id)`).bind(command.ownerId,command.runId,command.updatedAt).first() : null;
+      if (record(newer)) return {ok:true,value:null};
+      this.#logger({event:'workflow-progress-save-failure',ownerId:command.ownerId,runId:command.runId,failureKind:'WorkflowProgressPersistenceFailed',diagnosticToken:'write-not-applied'});
+      return {ok:false,error:{kind:'WorkflowProgressPersistenceFailed'}};
     } catch (error) {
-      this.#logger({event:'workflow-progress-save-failure',ownerId:command.ownerId,runId:command.runId,failureKind:'WorkflowProgressPersistenceFailed'});
+      this.#logger({event:'workflow-progress-save-failure',ownerId:command.ownerId,runId:command.runId,failureKind:'WorkflowProgressPersistenceFailed',diagnosticToken:workflowPersistenceDiagnostic(error)});
       return {ok:false,error:{kind:'WorkflowProgressPersistenceFailed'}};
     }
   }

@@ -485,3 +485,15 @@ test('normal technical identities replay known refusals without redispatch while
   }
  }finally{db.close();}
 });
+
+for(const legacy of [false,true])test('progress preflight failures never poison a paid model stage; legacy='+legacy,async()=>{
+ const {db,repository}=await stages(),scope={ownerId:'owner',runId:'run'},key='question-evaluator:progress-test',failure={ok:false,error:{kind:'WorkflowProgressPersistenceFailed'}};let calls=0;
+ try{
+ if(legacy)db.prepare("INSERT INTO knowledge_workflow_stages(owner_id,run_id,stage_key,input_digest,status,result_json,created_at,completed_at) VALUES(?,?,?,?,'completed',?,?,?)").run(scope.ownerId,scope.runId,key,'input',JSON.stringify(failure),'2026-10-09T00:00:00.000Z','2026-10-09T00:00:00.000Z');
+ else assert.deepEqual(await repository.run(scope,key,'input',async()=>failure,{modelCall:true}),failure);
+ const work=async()=>{calls++;return {ok:true,value:{review:'saved'}};};
+ const recovered=await repository.run(scope,key,'input',work,{modelCall:true});assert.equal(recovered.ok,true,JSON.stringify(recovered));
+ assert.deepEqual(await repository.run(scope,key,'input',work,{modelCall:true}),recovered);assert.equal(calls,1);
+ assert.equal(db.prepare('SELECT provider_failures FROM knowledge_workflow_stages WHERE stage_key=?').get(key).provider_failures,0);
+ }finally{db.close();}
+});

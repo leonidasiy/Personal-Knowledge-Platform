@@ -32,6 +32,12 @@ export function isTransientBrowserFailure(error) {
   return /^(KnowledgeBrowser(NavigationFailed|TimedOut|LoadTimedOut|CaptureTimedOut|CaptureInterrupted|PageClosed)|KnowledgePageFetchFailed|FirecrawlBrowser(ApiFailed|TimedOut|OperationFailed))(?::|$)/u.test(value.detailKind??value.kind??"");
 }
 
+/** Only observed source access/format restrictions require learner-supplied material.
+ * @param {{kind?:string,detailKind?:string}} error */
+export function requiresWorkflowUpload(error) {
+  return /^(WorkflowUploadRequired|WorkflowRightsNotAllowed|RobotsDenied|KnowledgePage(AuthenticationRequired|PaywallDetected|BotAccessDenied|TypeUnsupported))(?::|$)/u.test(error.detailKind??error.kind??'');
+}
+
 /** @template Run, Value, LoadError, ExecuteError
  * @param {Parameters<typeof executeAuthoritativeWorkflowStep<Run,Value,LoadError,ExecuteError>>[0] & {step: {sleepUntil:(name:string,date:Date)=>Promise<unknown>},now:()=>number}} dependencies */
 export async function executeRetryingWorkflowStep(dependencies) {

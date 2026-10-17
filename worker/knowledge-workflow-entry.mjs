@@ -12,7 +12,7 @@ import { createMediaPipeline, createMediaPublicEgress, createUserAttestedLocalMa
 import { resolvePublicAddresses } from "./knowledge-workflow-network.js";
 import { createCloudflareImageDerivative, createCloudflareImageDecoder, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
 import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
-import { executeRetryingWorkflowStep, isTransientBrowserFailure } from "./knowledge-workflow-step.js";
+import { executeRetryingWorkflowStep, requiresWorkflowUpload } from "./knowledge-workflow-step.js";
 import { createAcquisitionClient, createAcquisitionWorkflowBrowser } from "./acquisition-client.js";
 import { ACQUISITION_POLICY } from "./acquisition-policy.js";
 import { createFirecrawlWorkflowBrowser } from "./firecrawl-browser.js";
@@ -231,9 +231,9 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       const diagnosticToken = typeof executed.error.detailDiagnosticToken === "string" && /^[a-z0-9-]+$/u.test(executed.error.detailDiagnosticToken) ? executed.error.detailDiagnosticToken : undefined;
       logger({ event: "knowledge-workflow-execution-failure", ownerId, runId, stage: "executor", failureKind, ...(diagnosticToken === undefined ? {} : { diagnosticToken }) });
       const persistedFailureKind = diagnosticToken === undefined ? failureKind : `${failureKind}:${diagnosticToken}`;
-      const retryable = isTransientBrowserFailure(executed.error) || executed.error.kind !== "WorkflowRobotsFailed" && executed.error.kind !== "WorkflowUploadRequired" || latest.value.userAuthorization != null && latest.value.materialId == null && latest.value.counts.knowledgePoints === 0;
+      const offerUpload = latest.value.materialId == null && latest.value.counts.knowledgePoints === 0 && requiresWorkflowUpload(executed.error);
+      const retryable = !offerUpload;
       if (retryable && !isWorkflowRetryStage(latest.value.state)) throw new Error(executed.error.kind);
-      const offerUpload = retryable && latest.value.materialId == null && latest.value.counts.knowledgePoints === 0;
       const changed = await step.do(`persist workflow failure ${latest.value.revision}`, () => service.advance({ ownerId, runId, expectedRevision: latest.value.revision, nextState: retryable && !offerUpload ? "retryable-failure" : "awaiting-upload", failureKind: offerUpload ? `WorkflowExtractionFailed:${persistedFailureKind}` : persistedFailureKind }));
       if (!changed.ok) throw new Error(changed.error.kind);
       return { ok: true, value: { state: changed.value.state, run: changed.value } };

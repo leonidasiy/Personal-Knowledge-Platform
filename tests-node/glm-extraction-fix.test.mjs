@@ -56,11 +56,11 @@ async function productionLogger(records) {
   const { readFileSync } = await import('node:fs');
   const { createKnowledgeWorkflowLogger } = await import('../worker/knowledge-workflow-logging.js');
   const source = readFileSync('worker/knowledge-workflow-entry.mjs', 'utf8');
-  const line = source.split('\n').find(l => l.includes('logger: (entry) => logger({ event: entry.event') && l.includes('diagnosticToken: entry.diagnosticToken'));
+  const line = source.split('\n').find(l => l.includes('logger: (entry) => logger({...entry,ownerId,runId})'));
   assert(line, 'Production runtime logger forwarder must exist');
   const expression = line.trim().slice('logger: '.length, -1);
   const sink = createKnowledgeWorkflowLogger({ sink: r => records.push(r), now: () => '2026-10-07T00:00:00.000Z' });
-  return Function('logger', 'ownerId', 'return (' + expression + ')')(sink, 'synthetic-owner');
+  return Function('logger', 'ownerId', 'runId', 'return (' + expression + ')')(sink, 'synthetic-owner', 'synthetic-run');
 }
 
 test('review R1: actual production forwarder preserves bounded phase, elapsed and usage diagnostics', async () => {
@@ -146,11 +146,11 @@ test('real runtime model forwarder retains failure field through production sink
   const { readFileSync } = await import('node:fs');
   const records = [], logger = await productionLogger(records);
   const source = readFileSync('worker/knowledge-workflow-runtime.js', 'utf8');
-  const line = source.split('\n').find(l => l.includes('const model = createRoleConfiguredKnowledgeModel('));
+  const line = source.split('\n').find(l => l.includes('return createRoleConfiguredKnowledgeModel('));
   assert(line, 'Runtime model composition must exist');
   const match = line.match(/logger: (\(entry\) => dependencies\.logger\(\{.*\}\)) \}\);$/);
   assert(match, 'Actual runtime model logger expression must exist');
-  const forwarder = Function('dependencies', 'return (' + match[1] + ')')({ logger });
+  const forwarder = Function('dependencies', 'run', 'return (' + match[1] + ')')({ logger }, null);
   const adapter = createOpenRouterKnowledgeModel({ apiKey: 'synthetic', endpoint: 'https://synthetic.test/model', model: 'synthetic', timeoutMs: 1000, maximumInputCharacters: 1000, fetch: async () => Response.json(response({ prompt_tokens: -1 })), now: Date.now, logger: forwarder });
   assert.equal((await adapter.generate(command)).error.kind, 'KnowledgeModelUsageInvalid');
   assert.equal(records.at(-1).field, 'usage.prompt_tokens');

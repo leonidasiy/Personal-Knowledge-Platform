@@ -44,6 +44,8 @@ export class D1WorkflowStageRepository {
         // Authenticated failed model calls get a separate attempt; the
         // original claim/result remains immutable evidence of what happened.
         const oldResult=row.status==='completed'&&text(row.result_json)?JSON.parse(row.result_json):null;
+        // This legacy result was saved before model dispatch; preserve it and recover once under a new identity.
+        if(options.modelCall===true&&row.status==='completed'&&record(oldResult)&&oldResult.ok===false&&record(oldResult.error)&&oldResult.error.kind==='WorkflowProgressPersistenceFailed'&&row.provider_failures===0&&!key.endsWith(':progress-recovery'))return this.run(scope,`${key}:progress-recovery`,inputDigest,work,options,recoveryDepth);
         const recoverable=row.status==='claimed'||row.status==='completed'&&record(oldResult)&&oldResult.ok===false&&record(oldResult.error)&&oldResult.error.kind==='WorkflowAgentAgentOutputInvalid';
         if(options.modelCall===true&&!options.resumeSafe&&(key.startsWith('question-evaluator:')||row.status==='claimed')&&recoverable&&text(row.created_at)&&options.recoverFailedModel){
           const authorized=await options.recoverFailedModel({scope,key,inputDigest,createdAt:row.created_at,status:/** @type {'claimed'|'completed'} */(row.status),result:record(oldResult)?oldResult:null,completedAt:text(row.completed_at)?row.completed_at:null});
@@ -100,7 +102,7 @@ export class D1WorkflowStageRepository {
         if(options.resumeSafe)return result;
         if(['KnowledgeModelTimeout','KnowledgeModelCancelled','KnowledgeModelUnavailable','KnowledgeModelResponseReadFailed','AgentLedgerPersistenceFailed'].includes(result.error.kind))return {ok:false,error:{kind:'WorkflowStageCallUncertain',causeKind:result.error.kind}};
         const knownRefusal=result.error.kind==='KnowledgeModelRejected'&&[401,403,429,503].includes(result.error.status??0);
-        if(knownRefusal||['KnowledgeModelCredentialMissing','KnowledgeModelCommandInvalid','WorkflowExtractionClockInvalid','WebpageImageBudgetNotEvaluated','WebpageImageAttemptDeadlineExceeded'].includes(result.error.kind)) {
+        if(knownRefusal||['WorkflowProgressPersistenceFailed','KnowledgeModelCredentialMissing','KnowledgeModelCommandInvalid','WorkflowExtractionClockInvalid','WebpageImageBudgetNotEvaluated','WebpageImageAttemptDeadlineExceeded'].includes(result.error.kind)) {
           const saved=await this.#database.prepare("UPDATE knowledge_workflow_stages SET status='not-started',result_json=?,completed_at=?,failures_json=json_insert(failures_json,'$[#]',json(?)),provider_failures=provider_failures+? WHERE owner_id=? AND run_id=? AND stage_key=? AND input_digest=? AND status='claimed'").bind(JSON.stringify(result),this.#now(),JSON.stringify({occurredAt:this.#now(),failure:result.error}),knownRefusal&&[429,503].includes(result.error.status??0)?1:0,scope.ownerId,scope.runId,key,inputDigest).run();
           return saved.success&&saved.meta?.changes===1?result:{ok:false,error:{kind:'WorkflowStagePersistenceFailed'}};
         }

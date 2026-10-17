@@ -4,7 +4,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { notifyKnowledgeWorkflowOutcome } from "../worker/knowledge-workflow-notifications.js";
 import { isWorkflowRetryStage } from "../src/features/knowledge-workflows/workflow.js";
-import { executeRetryingWorkflowStep } from "../worker/knowledge-workflow-step.js";
+import { executeRetryingWorkflowStep, requiresWorkflowUpload } from "../worker/knowledge-workflow-step.js";
 
 const at = "2026-10-02T12:00:00.000Z";
 const run = {
@@ -223,6 +223,7 @@ test("actual workflow entry sends before retention/waits and preserves extractio
     const noOp = () => ({});
     const bindings = {
       WEBPAGE_IMAGE_POLICY,
+      observeWorkflowDatabase:database=>database,
       WorkflowEntrypoint: class {},
       puppeteer: {},
       D1KnowledgeWorkflowRepository: class {},
@@ -237,7 +238,7 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       createKnowledgeWorkflowBrowser: noOp,
       createFirecrawlWorkflowBrowser:noOp,
       createHybridBrowserBudget:noOp,
-      isTransientBrowserFailure:error=>error.detailKind==="KnowledgeBrowserNavigationFailed",
+      requiresWorkflowUpload,
       createAcquisitionClient: () => ({mediaCapability:{}}),
       createAcquisitionWorkflowBrowser: noOp,
       ACQUISITION_POLICY: {},
@@ -351,10 +352,10 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       assert.equal(current.counts.acceptedQuizzes,5);
       assert.deepEqual(actions,["retention","retention","retention","retention","source-attention","wait"]);
     }else if(state==="empty-exhausted"){
-      await assert.rejects(entry.run({payload:{ownerId:"owner",runId:"run"}},step), /WorkflowMaterialTimeout/);
-      assert.equal(current.state,"awaiting-upload");
+      await assert.rejects(entry.run({payload:{ownerId:"owner",runId:"run"}},step), /WorkflowControlTimeout/);
+      assert.equal(current.state,"retryable-failure");
       assert.deepEqual(actions,["source-attention","wait"]);
-      assert.equal(current.failureKind,"WorkflowExtractionFailed:KnowledgeBrowserNavigationFailed");
+      assert.equal(current.failureKind,"KnowledgeBrowserNavigationFailed");
     }else if (state === "completed") {
       assert.equal(
         (await entry.run({ payload: { ownerId: "owner", runId: "run" } }, step))

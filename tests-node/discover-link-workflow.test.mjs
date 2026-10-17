@@ -43,7 +43,8 @@ async function fixture(options={}) {
     const body=JSON.parse(init.body),message=body.messages[1].content,text=Array.isArray(message)?message[0].text:message;
     const input=JSON.parse(text.slice(text.indexOf('\n')+1,text.lastIndexOf('\n')));const task=input.task?.task??input.task??input;tasks.push(task);
     let output;
-    if(task.operation==='plan'||task.operation==='replan')output={revision:1,frontier:[rootUrl,...(task.operation==='replan'?[rootUrl+'lesson']:[])],coverageGoals:[],unresolvedGaps:[],stopDecision:{decision:task.scratchpad.processedUrls.length===(options.platformSibling?3:2)?'complete':'continue',rationale:'Inspect subtree inventory.',evidenceUrls:[],unresolvedGapIds:[]}};
+    if(body.response_format?.json_schema?.name==='knowledge_batch_selection_v1')output={keptKnowledgeIds:task.points.map(point=>point.id)};
+   else if(task.operation==='plan'||task.operation==='replan')output={revision:1,frontier:[rootUrl,...(task.operation==='replan'?[rootUrl+'lesson']:[])],coverageGoals:[],unresolvedGaps:[],stopDecision:{decision:task.scratchpad.processedUrls.length===(options.platformSibling?3:2)?'complete':'continue',rationale:'Inspect subtree inventory.',evidenceUrls:[],unresolvedGapIds:[]}};
     else if(task.operation==='extract-webpage-facts'){
       if(interrupt){interrupt=false;await options.interrupt({service,run:unwrap(await service.status({ownerId,runId:run.runId}))});}
       assert(!Array.isArray(message),'Text extraction never sees pixels');
@@ -167,7 +168,7 @@ test('HTTP Link later retry preserves observation provenance; changed identity c
  const f=await httpFixture();try{
   const first=await f.post();assert.equal(first.status,200,JSON.stringify(first));const before=f.snapshot();
   const retry=await f.post();assert.equal(retry.status,200,JSON.stringify(retry));assert.equal(retry.body.workflow.runId,first.body.workflow.runId);
-  assert.deepEqual(retry.body.result.source,first.body.result.source);assert.deepEqual(f.snapshot(),before);
+  assert.deepEqual(retry.body.result.source,{primarySubject:null,...first.body.result.source});assert.deepEqual(f.snapshot(),before);
   const evidence=first.body.result.source.identityEvidence[0];assert.equal(evidence.attribute,'user-submitted-url');assert.equal(evidence.value,f.command.url);assert.equal(evidence.provenanceUrl,f.command.url);assert.equal(evidence.observedAt,'2026-10-06T00:00:05.000Z');
   for(const changed of [{title:'Changed title'},{url:'https://other-source.example/course/'},{interestAreaId:'other-area'}]){const conflict=await f.post({...f.command,...changed});assert.equal(conflict.status,409,JSON.stringify(conflict));assert.equal(conflict.body.error,'SourceIdempotencyConflict');assert.deepEqual(f.snapshot(),before);}
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM knowledge_workflow_runs WHERE source_id=?').get(first.body.result.source.id).n,1);
@@ -177,7 +178,7 @@ test('HTTP Link cancelled retry creates a new SQLite attempt preserving existing
  const f=await httpFixture();try{
   const first=await f.post();assert.equal(first.status,200,JSON.stringify(first));const run=unwrap(await f.service.status({ownerId:f.run.ownerId,runId:first.body.workflow.runId}));
   unwrap(await f.service.control({ownerId:run.ownerId,runId:run.runId,expectedRevision:run.revision,action:'abandon',idempotencyKey:'http-cancel'}));const before=f.snapshot();
-  const retry=await f.post();assert.equal(retry.status,200,JSON.stringify(retry));assert.notEqual(retry.body.workflow.runId,run.runId);assert.deepEqual(retry.body.result.source,first.body.result.source);assert.deepEqual(f.snapshot(),before);
+  const retry=await f.post();assert.equal(retry.status,200,JSON.stringify(retry));assert.notEqual(retry.body.workflow.runId,run.runId);assert.deepEqual(retry.body.result.source,{primarySubject:null,...first.body.result.source});assert.deepEqual(f.snapshot(),before);
   assert.equal(unwrap(await f.service.status({ownerId:run.ownerId,runId:run.runId})).state,'abandoned');assert.equal(unwrap(await f.service.status({ownerId:run.ownerId,runId:retry.body.workflow.runId})).state,'source-added');
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM knowledge_workflow_runs WHERE source_id=?').get(first.body.result.source.id).n,2);
  }finally{f.close();}

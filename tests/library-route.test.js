@@ -1302,3 +1302,11 @@ Deno.test('Cancellation keeps the source and a retry action until both run cance
     page.dispose();
   }
 });
+
+Deno.test("Library keeps automatic extraction chunks active and polling instead of showing an action-required pause",()=>{
+ const base=workflowStatus("extraction-loop");
+ const status={...base,run:{...base.run,state:"awaiting-time-limit-decision",remainingMs:1000,decisionRequired:null}};
+ const html=renderLibraryRoute({...baseModel(),workflowStatuses:[status]});
+ assert(html.includes('library-processing-spinner'),"The automatic continuation remains active.");
+ assert(!html.includes('Processing is paused. Action is required to continue.'),"A bounded chunk needs no learner action.");
+});
