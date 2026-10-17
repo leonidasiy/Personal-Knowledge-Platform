@@ -502,6 +502,7 @@ export function createExtractionRunner(dependencies) {
             attempt++;
           } while (true);
           if (!batch.ok) {
+            if (acquisitionFailureKind(batch.error) === "WebpageImageRunDeadlineExceeded" && dependencies.nowMs() >= command.deadlineAtMs) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad, knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "time-limit" }) };
             const failureKind = acquisitionFailureKind(batch.error);
             const interruption = urls.length === 1 ? interruptedUnitCause(batch.error) : undefined;
             if (interruption === undefined && !pageLocalFailure(failureKind, batch.error)) return fail(acquisitionFailure(batch.error), dependencies, command.runId);
@@ -531,6 +532,7 @@ export function createExtractionRunner(dependencies) {
           attempt++;
         } while (true);
         if (!acquired.ok) {
+          if (acquisitionFailureKind(acquired.error) === "WebpageImageRunDeadlineExceeded" && dependencies.nowMs() >= command.deadlineAtMs) return { ok: true, value: freeze({ state: "awaiting-time-limit-decision", scratchpad, knowledgePointCount: scratchpad.acceptedHashes.length, pagesProcessed, stopReason: "time-limit" }) };
           const failureKind = acquisitionFailureKind(acquired.error);
           const interruption = interruptedUnitCause(acquired.error);
           if (interruption === undefined && !pageLocalFailure(failureKind, acquired.error)) return fail(acquisitionFailure(acquired.error), dependencies, command.runId);

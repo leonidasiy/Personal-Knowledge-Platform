@@ -156,7 +156,7 @@ export async function requestWebpageFacts(dependencies) {
   const capture=await captureCitationSources({owner:evidence.url,sources:sourceBlocks.map(b=>({id:b.id,locator:b.locator,text:b.text}))});
   if(!capture.ok)return capture;
   // Models need source text once and opaque references; full provenance stays in the private capture.
-  const modelBlocks=sourceBlocks.map(({id,kind,text})=>({id,kind,text})),modelCitations=capture.value.sources.map(({reference,sourceId})=>({reference,sourceId}));
+  const modelBlocks=sourceBlocks.map(({id,kind,text,sectionId,figureId})=>({id,kind,text,sectionId,figureId})),modelCitations=capture.value.sources.map(({reference,sourceId})=>({reference,sourceId}));
   const generated=await policy.dispatch({phase:'extraction',taskId:dependencies.taskId,systemPrompt:webpageFactsPrompt,input:{operation:'extract-webpage-facts',sourceMode:'webpage-text',url:evidence.url,sourceBlocks:structuredClone(modelBlocks),citationSources:structuredClone(modelCitations),coverageGoals:goals.map(g=>({...g})),lessOften:structuredClone(input.lessOften??[]),previousKnowledge:structuredClone(input.previousKnowledge??[])},maxOutputTokens:dependencies.maxOutputTokens,...(dependencies.structuredOutput?{responseSchema:webpageFactsSchema(capture.value.sources,goals)}:{})},dependencies.generate);
   if(!generated.ok)return generated;
   let payload=generated.value;

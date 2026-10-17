@@ -22,7 +22,7 @@ test('compact unchanged normalization retains the exact captured parent without 
  const r={sourceNormalizedHash:parent.normalizedHash,relationshipUnits:[{condition:null,relationship:source,childNormalizedHash:parent.normalizedHash}],candidates:null};
  const original=JSON.stringify(r),{result,commands}=await run(r);assert(result.ok,JSON.stringify(result));
  assert.equal(result.value.candidates[0].summary,parent.summary);assert.equal(result.value.candidates[0].normalizedHash,parent.normalizedHash);assert.equal(result.value.candidates[0].evidenceAnchors[0].quote,source);assert.equal(JSON.stringify(r),original);
- for(const command of commands){assert(!('locator' in command.input.sourceBlocks[0]));assert(!('text' in command.input.citationSources[0]));assert.equal(command.input.sourceBlocks[0].text,source);assert.deepEqual(command.input.citationSources[0].reference,capture.value.sources[0].reference);}
+ for(const command of commands){assert(!('locator' in command.input.sourceBlocks[0]));assert(!('text' in command.input.citationSources[0]));assert.equal(command.input.sourceBlocks[0].text,source);assert.equal(command.input.sourceBlocks[0].sectionId,blocks[0].sectionId);assert.equal(command.input.sourceBlocks[0].figureId,blocks[0].figureId);assert.deepEqual(command.input.citationSources[0].reference,capture.value.sources[0].reference);}
 });
 for(const bad of ['foreign-parent','foreign-child','multiple-units'])test('compact normalization rejects '+bad,async()=>{
  const r={sourceNormalizedHash:bad==='foreign-parent'?'foreign':parent.normalizedHash,relationshipUnits:[{condition:null,relationship:source,childNormalizedHash:bad==='foreign-child'?'foreign':parent.normalizedHash}],candidates:null};

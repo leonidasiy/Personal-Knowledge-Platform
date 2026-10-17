@@ -968,3 +968,13 @@ Deno.test("batch-reviewed extraction commits in source order and resumes without
   assertEquals(second.ok,true);assertEquals(fixture.points.map(p=>p.normalizedHash).join(','),'hash-a,hash-b');
   assertEquals(batches.map(b=>b.join(',')).join('|'),'hash-a,hash-b|hash-b');
 });
+
+for(const mode of ['page','batch'])for(const expired of [false,true])Deno.test(`in-flight ${mode} deadline preserves completed pages and requires a time decision only after expiry=${expired}`,async()=>{
+ const fixture=setup(),urls=['https://example.test/a','https://example.test/b'];let calls=0;
+ /** @type {import('../src/features/knowledge-workflows/extraction.js').PageAcquirer['fetchPage']} */
+ const fetchPage=async(command)=>{calls++;if(command.url===urls[1]){if(expired)fixture.advance(1_800_000);return {ok:false,error:{kind:'WebpageImageRunDeadlineExceeded'}};}return fixture.dependencies.acquirer.fetchPage(command);};
+ const runner=createExtractionRunner({...fixture.dependencies,orderedUrls:urls,planner:inventoryPlanner(fixture,urls),...(mode==='batch'?{batchAcquirer:{key:'deadline-batch',maximumBatchSize:1,async fetchBatch(command){const r=await fetchPage({url:command.urls[0],rootUrl:command.rootUrl,plan:command.plan});return r.ok?{ok:true,value:[r.value]}:r;}}}:{acquirer:{fetchPage}})});
+ const result=await runner.run({ownerId:'owner-a',runId:'run-a',sourceId:'source-a',sourceRevision:1,rootUrl:'https://example.test/',startedAtMs:0,deadlineAtMs:1_800_000});
+ assertEquals(result.ok,expired);assertEquals(calls,2);assertEquals(fixture.points.length,1);
+ if(result.ok){assertEquals(result.value.state,'awaiting-time-limit-decision');assertEquals(result.value.stopReason,'time-limit');assertEquals(result.value.pagesProcessed,1);assertEquals(result.value.knowledgePointCount,1);assertEquals(result.value.scratchpad.processedUrls.join(','),urls[0]);assertEquals(result.value.scratchpad.failedPages?.length??0,0);}
+});
