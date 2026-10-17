@@ -12,7 +12,7 @@ import { createMediaPipeline, createMediaPublicEgress, createUserAttestedLocalMa
 import { resolvePublicAddresses } from "./knowledge-workflow-network.js";
 import { createCloudflareImageDerivative, createCloudflareImageDecoder, isCloudflareImageBinding } from "./knowledge-workflow-media-transform.js";
 import { createKnowledgeWorkflowLogger } from "./knowledge-workflow-logging.js";
-import { executeRetryingWorkflowStep, requiresWorkflowUpload } from "./knowledge-workflow-step.js";
+import { executeRetryingWorkflowStep, executeIsolatedWorkflowChunk, requiresWorkflowUpload } from "./knowledge-workflow-step.js";
 import { createAcquisitionClient, createAcquisitionWorkflowBrowser } from "./acquisition-client.js";
 import { ACQUISITION_POLICY } from "./acquisition-policy.js";
 import { createFirecrawlWorkflowBrowser } from "./firecrawl-browser.js";
@@ -192,8 +192,10 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       resolveAddresses: (hostname) => resolvePublicAddresses(hostname, workerFetch),
       transition: (command) => service.advance({ ownerId: command.run.ownerId, runId: command.run.runId, expectedRevision: command.run.revision, nextState: command.nextState, ...(command.counts === undefined ? {} : { counts: command.counts }), ...(command.failureKind === undefined ? {} : { failureKind: command.failureKind }), ...(command.robotsEvidence === undefined ? {} : { robotsEvidence: command.robotsEvidence }) }),
     });
-    /** @type {ReturnType<typeof createKnowledgeWorkflowRuntime> | null} */
-    let runtime = null;
+    if(payload.chunk===true) {
+      return step.do('execute isolated knowledge chunk',{timeout:'30 minutes',retries:{limit:0,delay:0}},()=>createRuntime().execute(current.value));
+    }
+    const workflowBinding=this.env.KNOWLEDGE_WORKFLOW;
     if (current.value.state === "source-added") {
       const assessed = await step.do("begin rights assessment", async () => service.advance({ ownerId, runId, expectedRevision: current.value.revision, nextState: "rights-assessment" }));
       if (!assessed.ok) throw new Error(assessed.error.kind);
@@ -218,7 +220,11 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
         name: stepName,
         now: Date.now,
         load: () => service.status({ ownerId, runId }),
-        execute: (authoritativeRun) => { runtime=createRuntime();return runtime.execute(authoritativeRun); },
+        execute: async (authoritativeRun,attemptName) => executeIsolatedWorkflowChunk({
+          binding:workflowBinding,
+          id:`chunk-${(await sha256(`${runId}:${authoritativeRun.revision}:${attemptName}`)).slice(7)}`,
+          params:{ownerId,runId,chunk:true},
+        }),
       });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
@@ -291,7 +297,7 @@ export class KnowledgeExtractionWorkflow extends WorkflowEntrypoint {
       if (!Number.isFinite(expiryMs)) throw new Error("WorkflowRuntimeOutputInvalid");
       await step.sleepUntil("wait for quiz-attempt retention expiry", new Date(expiryMs));
       for (const knowledgeId of restrictedKnowledgeIds) {
-        const purged = await step.do(`purge retained quiz attempt ${knowledgeId}`, async () => (runtime ?? createRuntime()).purgeExpired({ run: /** @type {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} */ (finalRun), knowledgeId, restrictedUntil, before: restrictedUntil }));
+        const purged = await step.do(`purge retained quiz attempt ${knowledgeId}`, async () => createRuntime().purgeExpired({ run: /** @type {import("../src/features/knowledge-workflows/workflow.js").KnowledgeWorkflowRun} */ (finalRun), knowledgeId, restrictedUntil, before: restrictedUntil }));
         if (!purged.ok) throw new Error(purged.error.kind);
       }
     }

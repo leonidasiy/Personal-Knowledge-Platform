@@ -98,7 +98,7 @@ for(const {partial,blockedImage,resumedPage,sessionImage,cacheResume,authoritati
    const failed=await runtime.execute(run);assert.equal(failed.ok,false);assert.equal(failed.error.detailKind,'WorkflowAgentAgentOutputInvalid');assert.equal(textCritics,0);
    run=unwrap(await repository.findById(ownerId,runId));
    run=unwrap(await service.advance({ownerId,runId,expectedRevision:run.revision,nextState:'retryable-failure',failureKind:failed.error.detailKind}));
-   run=unwrap(await service.advance({ownerId,runId,expectedRevision:run.revision,nextState:'extraction-loop'}));
+   timeOffset+=1000;run=unwrap(await service.control({ownerId,runId,expectedRevision:run.revision,action:'resume',idempotencyKey:'auto-resume:fixture'}));
    assert.equal((await runtime.execute(run)).ok,false,'Automatic continuation cannot grant another paid call');assert.equal(textCritics,0);
    run=unwrap(await repository.findById(ownerId,runId));
    run=unwrap(await service.advance({ownerId,runId,expectedRevision:run.revision,nextState:'retryable-failure',failureKind:failed.error.detailKind}));

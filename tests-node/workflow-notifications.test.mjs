@@ -214,6 +214,7 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       "stale-time-window",
       "stale-completed",
       "cached-quiz-cpu",
+      "isolated-chunk",
     ]
   ) {
     const replayedController = state === "stale-time-window" || state === "stale-completed" || state === "cached-quiz-cpu";
@@ -239,6 +240,7 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       createFirecrawlWorkflowBrowser:noOp,
       createHybridBrowserBudget:noOp,
       requiresWorkflowUpload,
+      executeIsolatedWorkflowChunk: async () => bindings.createKnowledgeWorkflowRuntime().execute(current),
       createAcquisitionClient: () => ({mediaCapability:{}}),
       createAcquisitionWorkflowBrowser: noOp,
       ACQUISITION_POLICY: {},
@@ -264,9 +266,9 @@ test("actual workflow entry sends before retention/waits and preserves extractio
       createKnowledgeWorkflowRuntime: () => ({
         purgeExpired: async () => ({ ok: true, value: null }),
         execute: async authoritative => {
-          assert.equal(state === "stale-time-window" || state === "stale-completed", true);
-          assert.equal(authoritative.state, "per-point-quiz-loop");
-          assert.equal(authoritative.revision, 59);
+          assert.equal(state === "stale-time-window" || state === "stale-completed" || state === "isolated-chunk", true);
+          assert.equal(authoritative.state, state === "isolated-chunk"?"isolated-chunk":"per-point-quiz-loop");
+          assert.equal(authoritative.revision, state === "isolated-chunk"?run.revision:59);
           modelCalls++;
           current = {...current,state:"completed",revision:60,counts:{...current.counts,acceptedQuizzes:6}};
           return {ok:true,value:{state:"completed",run:current}};
@@ -337,7 +339,10 @@ test("actual workflow entry sends before retention/waits and preserves extractio
         actions.push("retention");
       },
     };
-    if(state==="stale-time-window" || state==="stale-completed") {
+    if(state==="isolated-chunk") {
+      const result=await entry.run({payload:{ownerId:"owner",runId:"run",chunk:true}},step);
+      assert.equal(result.ok,true);assert.equal(result.value.state,"completed");assert.equal(modelCalls,1);assert.deepEqual(actions,[]);
+    }else if(state==="stale-time-window" || state==="stale-completed") {
       assert.equal((await entry.run({payload:{ownerId:"owner",runId:"run"}},step)).state,"completed");
       assert.equal(modelCalls,1);
       assert.equal(current.counts.acceptedQuizzes,6);

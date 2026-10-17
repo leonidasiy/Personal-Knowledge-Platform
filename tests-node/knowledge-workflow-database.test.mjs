@@ -47,6 +47,7 @@ test('batch preserves native statements and false results report sanitized diagn
 test('schema and nested platform failures retain safe categories',()=>{
   assert.equal(workflowPersistenceDiagnostic(new Error('outer',{cause:new Error('no such column: private')})),'sqlite-schema');
   assert.equal(workflowPersistenceDiagnostic(new Error('Too many subrequests')),'subrequest-limit');
+  assert.equal(workflowPersistenceDiagnostic(new Error('outer',{cause:new Error('Too many API requests by single Worker invocation')})),'subrequest-limit');
 });
 
 test('repository contract failures identify their operation without leaking the stored payload',async()=>{

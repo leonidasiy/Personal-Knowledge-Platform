@@ -806,7 +806,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
   /** @param {import('./knowledge-workflow-stages-d1.js').FailedModelStage} identity */
   async function authorizeCompletedCallbackRetry(identity){
     if(identity.status!=='completed'||identity.result?.ok!==false||!record(identity.result.error)||identity.result.error.kind!=='WorkflowAgentAgentOutputInvalid'||!identity.completedAt)return null;
-    const control=await dependencies.database.prepare("SELECT control_id FROM knowledge_workflow_controls WHERE owner_id=? AND run_id=? AND json_valid(command_fingerprint) AND json_extract(command_fingerprint,'$.action')='resume' AND json_extract(result_json,'$.state')='extraction-loop' AND occurred_at>? ORDER BY occurred_at DESC LIMIT 1").bind(identity.scope.ownerId,identity.scope.runId,identity.completedAt).first();
+    const control=await dependencies.database.prepare("SELECT control_id FROM knowledge_workflow_controls WHERE owner_id=? AND run_id=? AND json_valid(command_fingerprint) AND substr(idempotency_key,1,12)<>'auto-resume:' AND json_extract(command_fingerprint,'$.action')='resume' AND json_extract(result_json,'$.state')='extraction-loop' AND occurred_at>? ORDER BY occurred_at DESC LIMIT 1").bind(identity.scope.ownerId,identity.scope.runId,identity.completedAt).first();
     if(!record(control)||!text(control.control_id))return null;
     const attemptKey=(await imageHash(new TextEncoder().encode(control.control_id))).replace(/^sha256:/,'');
     return {attemptKey};

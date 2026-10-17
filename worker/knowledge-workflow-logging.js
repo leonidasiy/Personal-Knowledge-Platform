@@ -93,7 +93,7 @@ export function workflowPersistenceDiagnostic(error) {
   const visited=new Set();
   while(error instanceof Error&&!visited.has(error)) {
     visited.add(error);
-    if(error.message.includes("Too many subrequests"))return "subrequest-limit";
+    if(/Too many subrequests|Too many API requests by single Worker invocation/i.test(error.message))return "subrequest-limit";
     if(error.message.includes("SQLITE_CONSTRAINT"))return "sqlite-constraint";
     if(error.message.includes("SQLITE_TOOBIG"))return "sqlite-too-big";
     if(error.message.includes("SQLITE_BUSY")||error.message.includes("SQLITE_LOCKED"))return "sqlite-busy";
