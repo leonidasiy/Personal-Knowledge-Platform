@@ -144,3 +144,11 @@ test('a scheduler interrupted after claiming a checkpoint recovers without grant
   assert.equal(f.db.prepare('SELECT count(*) n FROM knowledge_workflow_controls').get().n,0);
  }finally{f.db.close();}
 });
+
+
+test('provider payment rejection waits for owner recovery instead of automatic retry',async()=>{
+ const f=await fixture();try{
+  f.unwrap(await f.service.advance({ownerId:'owner-a',runId:f.run.runId,expectedRevision:f.run.revision,nextState:'retryable-failure',failureKind:'KnowledgeModelPaymentRequired'}));f.setStatus('waiting');f.advanceTime(3_600_000);
+  const before=await f.read();assert.deepEqual(await f.tick(),{ok:true,value:0});assert.deepEqual(await f.read(),before);assert.deepEqual(f.counts(),{events:0,restarts:0});
+ }finally{f.db.close();}
+});

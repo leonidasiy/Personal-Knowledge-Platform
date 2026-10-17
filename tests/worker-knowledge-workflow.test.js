@@ -342,3 +342,10 @@ Deno.test("URL material starts a separate upload workflow, retains the web ident
  const result=await gateway.extract({title:"Learning source",url:"https://example.test/learn",idempotencyKey:"capture-a"},true);
  assertEquals(result.ok,true);assertEquals(fixture.started[0].sourceOrigin,"url-material");assertEquals(fixture.started[0].canonicalSourceIdentity,"https://example.test/learn");assertEquals(fixture.legacyIngestion.length,0);
 });
+
+
+Deno.test("source workflow status identifies provider billing without blaming the source website",async()=>{
+ const fixture=makeFixture({sourceState:"retryable-failure",sourceFailureKind:"KnowledgeModelPaymentRequired"});
+ const response=await fixture.worker.fetch(new Request("https://worker.example/api/knowledge-workflows/source-status?sourceId=source-a",{headers:{origin:"https://app.example"}}));
+ const body=await response.json();assertEquals(response.status,200);assertEquals(body.result.reasonCode,"retryable-failure");assertEquals(body.result.message,"The model provider declined processing (HTTP 402). Check account credits and key spending limits, then continue processing. Your saved knowledge and quizzes have been retained.");
+});

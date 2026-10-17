@@ -49,6 +49,7 @@ export async function resumeInterruptedKnowledgeWorkflows({database,binding,owne
           if(!marked.ok&&marked.error.kind!=='WorkflowControlStale')throw new Error(marked.error.kind);
           continue;
         }
+        if(run.failureKind==='KnowledgeModelPaymentRequired')continue;
         if(currentTime-Date.parse(run.updatedAt)<120_000)continue;
         if(run.state==='awaiting-time-limit-decision'&&(run.extractionDeadlineAt===null||currentTime<Date.parse(run.extractionDeadlineAt)+120_000))continue;
         if(!['waiting','errored','complete'].includes(status))continue;

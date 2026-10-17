@@ -46,8 +46,9 @@ export class D1WorkflowStageRepository {
         const oldResult=row.status==='completed'&&text(row.result_json)?JSON.parse(row.result_json):null;
         // This legacy result was saved before model dispatch; preserve it and recover once under a new identity.
         if(options.modelCall===true&&row.status==='completed'&&record(oldResult)&&oldResult.ok===false&&record(oldResult.error)&&oldResult.error.kind==='WorkflowProgressPersistenceFailed'&&row.provider_failures===0&&!key.endsWith(':progress-recovery'))return this.run(scope,`${key}:progress-recovery`,inputDigest,work,options,recoveryDepth);
-        const recoverable=row.status==='claimed'||row.status==='completed'&&record(oldResult)&&oldResult.ok===false&&record(oldResult.error)&&oldResult.error.kind==='WorkflowAgentAgentOutputInvalid';
-        if(options.modelCall===true&&!options.resumeSafe&&(key.startsWith('question-evaluator:')||row.status==='claimed')&&recoverable&&text(row.created_at)&&options.recoverFailedModel){
+        const billingRefusal=row.status==='completed'&&record(oldResult)&&oldResult.ok===false&&record(oldResult.error)&&oldResult.error.kind==='KnowledgeModelRejected'&&oldResult.error.status===402;
+        const recoverable=row.status==='claimed'||billingRefusal||row.status==='completed'&&record(oldResult)&&oldResult.ok===false&&record(oldResult.error)&&oldResult.error.kind==='WorkflowAgentAgentOutputInvalid';
+        if(options.modelCall===true&&!options.resumeSafe&&(key.startsWith('question-evaluator:')||row.status==='claimed'||billingRefusal)&&recoverable&&text(row.created_at)&&options.recoverFailedModel){
           const authorized=await options.recoverFailedModel({scope,key,inputDigest,createdAt:row.created_at,status:/** @type {'claimed'|'completed'} */(row.status),result:record(oldResult)?oldResult:null,completedAt:text(row.completed_at)?row.completed_at:null});
           if(authorized!==null){
             if(!/^[a-f0-9]{64}$/.test(authorized.attemptKey))return {ok:false,error:{kind:'WorkflowStageRecoveryInvalid'}};

@@ -14,7 +14,7 @@ import { readFailedQuizItems,exhaustedQuizTechnicalFailure } from '../worker/kno
 import {AgentExecutionBoundaryFailure} from '../src/features/knowledge-workflows/harness.js';
 import { WEBPAGE_IMAGE_POLICY } from '../worker/webpage-image-budget.js';
 
-for (const failureMode of ['chunk-bound', 'material-coverage', 'review-output', 'model503', 'model200', 'model401', 'stopped-before-acquisition','expired-quiz-clock','quiz-review503','quiz-generator503','quiz-review-malformed','quiz-review401','classifier503-success','classifier-malformed-success','classifier503-exhausted','classifier-malformed-exhausted','classifier401','classifier-bounded','classifier-critical','classifier-mixed-success','quiz-review-resume-success']) {
+for (const failureMode of ['chunk-bound', 'material-coverage', 'review-output', 'model503', 'model200', 'model401', 'stopped-before-acquisition','expired-quiz-clock','quiz-review503','quiz-generator503','quiz-review-malformed','quiz-review401','quiz-review402','classifier503-success','classifier-malformed-success','classifier503-exhausted','classifier-malformed-exhausted','classifier401','classifier402','classifier-bounded','classifier-critical','classifier-mixed-success','quiz-review-resume-success']) {
  test(failureMode==='chunk-bound'?'runtime checkpoints after three quiz jobs without refilling a durable step':failureMode==='material-coverage'?'runtime bounds supplied material coverage without inventing support':failureMode==='expired-quiz-clock'?'runtime continues normal quizzes after the extraction window expires without renewing it':failureMode.startsWith('classifier')?`runtime classification honors one four-attempt combined technical budget: ${failureMode}`:failureMode.startsWith('quiz-') ? `runtime isolates ${failureMode} and approved retry preserves source pages, drafts and healthy quizzes` : failureMode === 'stopped-before-acquisition' ? 'runtime fences provider calls after an authoritative run stop' : failureMode === 'model401' ? 'runtime stops on credential rejection without local page skipping or retry' : `runtime isolates ${failureMode} and approved retry processes only the failed page with fresh durable model identities`, async () => {
   const db = new DatabaseSync(':memory:');
   try {
@@ -76,9 +76,9 @@ for (const failureMode of ['chunk-bound', 'material-coverage', 'review-output', 
         if (failureMode === 'review-output' && !approvedRetry && task.knowledge.normalizedHash === 'page-2') output.audit.version = 999;
       } else if (task.source && task.points) {
         classifierCalls++;classifierBodies.push(body);
-        const fail=failureMode.startsWith('classifier')&&(!failureMode.endsWith('success')||classifierCalls<4);
+        const fail=failureMode.startsWith('classifier')&&!approvedRetry&&(!failureMode.endsWith('success')||classifierCalls<4);
         if(fail&&(failureMode.includes('malformed')||failureMode==='classifier-mixed-success'&&classifierCalls===2))output={mainSubject:'invented',topic:' '};
-        else if(fail)return Response.json({error:{message:'Constructed classifier refusal.'}},{status:failureMode==='classifier401'?401:503});
+        else if(fail)return Response.json({error:{message:'Constructed classifier refusal.'}},{status:failureMode==='classifier401'?401:failureMode==='classifier402'?402:503});
         else output = { mainSubject: 'music', topic: 'Synthetic distinct relationships' };
       }
       else if (task.operation === 'plan-authorized-material' || task.operation === 'replan-authorized-material') {
@@ -100,7 +100,7 @@ for (const failureMode of ['chunk-bound', 'material-coverage', 'review-output', 
         if(failureMode==='quiz-review-resume-success'&&task.knowledge.summary==='Synthetic distinct relationship 2.'&&evaluatedQuizzes.filter(id=>id.includes('page-2')).length===4)output={score:9,reasons:['Constructed recovery.'],feedback:'Constructed acceptance.',groundingProblems:[],knowledgeGroundingProblems:[]};
         else if((!approvedRetry||quizStillInvalid)&&failureMode.startsWith('quiz-review')&&task.knowledge.summary==='Synthetic distinct relationship 2.') {
           if(failureMode==='quiz-review-malformed')output={score:0};
-          else return Response.json({error:{message:'Constructed quiz review refusal.'}},{status:failureMode==='quiz-review401'?401:503});
+          else return Response.json({error:{message:'Constructed quiz review refusal.'}},{status:failureMode==='quiz-review401'?401:failureMode==='quiz-review402'?402:503});
         }else output = { score: 9, reasons: ['Constructed fixture.'], feedback: 'Constructed acceptance.', groundingProblems: [], knowledgeGroundingProblems: [] };
       }
       else if (task.knowledge) {
@@ -239,7 +239,8 @@ for (const failureMode of ['chunk-bound', 'material-coverage', 'review-output', 
       }
       const success=failureMode.endsWith('success');
       assert.equal(executed.ok,success,JSON.stringify(executed));
-      const expected=failureMode==='classifier-critical'?0:failureMode==='classifier401'||failureMode==='classifier-bounded'?1:4;
+      const expected=failureMode==='classifier-critical'?0:failureMode==='classifier401'||failureMode==='classifier402'||failureMode==='classifier-bounded'?1:4;
+      if(failureMode==='classifier402')assert.equal(executed.error.detailKind,'KnowledgeModelPaymentRequired');
       assert.equal(classifierCalls,expected);assert.equal(classifierPreflights,failureMode==='classifier-critical'?1:expected);
       assert.equal(db.prepare('SELECT count(*) AS n FROM extraction_knowledge_points').get().n,3);
       assert.equal(db.prepare("SELECT count(*) AS n FROM library_sources WHERE state='active'").get().n,1);
@@ -254,8 +255,16 @@ for (const failureMode of ['chunk-bound', 'material-coverage', 'review-output', 
         for(const body of classifierBodies.slice(1))assert.deepEqual(body.messages[1],classifierBodies[0].messages[1],'Schema repair preserves the entire original point set.');
       }
       if(failureMode==='classifier-mixed-success'){assert.equal(classifierBodies[1].messages[0].content.includes('previous response failed output validation'),false);assert(classifierBodies[2].messages[0].content.includes('previous response failed output validation'));}
-      if(!success){if(failureMode!=='classifier401'){const before=modelCalls,repeated=await runtime().execute(run);assert.equal(repeated.ok,false);assert.equal(repeated.error.detailKind,executed.error.detailKind,'Cached refusals preserve the original typed classification failure.');assert.equal(modelCalls,before,'Replaying an exhausted or critical classification cannot multiply provider attempts.');}assert.equal(generatedQuizzes.length,0);assert.equal(executed.error.detailKind,failureMode==='classifier-critical'?'EvaluationBudgetExceeded':failureMode.includes('malformed')?'SourceClassificationOutputInvalid':'KnowledgeModelRejected');}
+      if(!success){if(failureMode!=='classifier401'){const before=modelCalls,repeated=await runtime().execute(run);assert.equal(repeated.ok,false);assert.equal(repeated.error.detailKind,executed.error.detailKind,'Cached refusals preserve the original typed classification failure.');assert.equal(modelCalls,before,'Replaying an exhausted or critical classification cannot multiply provider attempts.');}assert.equal(generatedQuizzes.length,0);assert.equal(executed.error.detailKind,failureMode==='classifier-critical'?'EvaluationBudgetExceeded':failureMode.includes('malformed')?'SourceClassificationOutputInvalid':failureMode==='classifier402'?'KnowledgeModelPaymentRequired':'KnowledgeModelRejected');}
       else {assert.equal(run.counts.acceptedQuizzes,3);const before=modelCalls;unwrap(await runtime().execute(run));assert.equal(modelCalls,before);}
+      if(failureMode==='classifier402'){
+        const original=db.prepare("SELECT * FROM knowledge_workflow_stages WHERE stage_key LIKE 'source-classifier:%'").get();
+        await new Promise(resolve=>setTimeout(resolve,5));
+        run=unwrap(await service.advance({ownerId,runId,expectedRevision:run.revision,nextState:'retryable-failure',failureKind:'KnowledgeModelPaymentRequired'}));
+        run=unwrap(await service.control({ownerId,runId,expectedRevision:run.revision,action:'resume',idempotencyKey:'classification-billing-repaired'}));approvedRetry=true;
+        await finish();assert.equal(run.state,'completed');assert.equal(run.counts.acceptedQuizzes,3);assert.equal(classifierCalls,2);
+        assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(original.stage_key),original);
+      }
       return;
     }
     if(failureMode==='quiz-review-resume-success'){
@@ -275,14 +284,24 @@ for (const failureMode of ['chunk-bound', 'material-coverage', 'review-output', 
       return;
     }
     if(failureMode.startsWith('quiz-')) {
-      if(failureMode==='quiz-review401') {
+      if(failureMode==='quiz-review401'||failureMode==='quiz-review402') {
         let result;
         for(let n=0;n<8;n++){if(run.state==='awaiting-time-limit-decision')run=unwrap(await service.control({ownerId,runId,expectedRevision:run.revision,action:'resume',idempotencyKey:`auth-${n}`}));result=await runtime().execute(run);run=unwrap(await repository.findById(ownerId,runId));if(!result.ok)break;}
-        assert.equal(result.ok,false);assert.equal(result.error.detailKind,'KnowledgeModelRejected');
+        assert.equal(result.ok,false);assert.equal(result.error.detailKind,failureMode==='quiz-review402'?'KnowledgeModelPaymentRequired':'KnowledgeModelRejected');
         assert.equal(evaluatedQuizzes.filter(id=>id.includes('page-2')).length,1);
         assert.deepEqual(unwrap(await readFailedQuizItems(database,run)),[]);
         assert.equal(run.state,'per-point-quiz-loop');
         assert.equal(db.prepare('SELECT count(*) AS n FROM extraction_knowledge_points').get().n,3);
+        if(failureMode==='quiz-review402'){
+          const row=db.prepare("SELECT * FROM knowledge_workflow_stages WHERE json_extract(result_json,'$.error.status')=402").get();assert.equal(row.status,'completed');
+          const legacy=db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(row.stage_key),before=modelCalls;
+          result=await runtime().execute(run);assert.equal(result.error.detailKind,'KnowledgeModelPaymentRequired');assert.equal(modelCalls,before,'Cached billing refusal cannot dispatch before owner recovery');
+          await new Promise(resolve=>setTimeout(resolve,5));
+          run=unwrap(await service.advance({ownerId,runId,expectedRevision:run.revision,nextState:'retryable-failure',failureKind:'KnowledgeModelPaymentRequired'}));
+          run=unwrap(await service.control({ownerId,runId,expectedRevision:run.revision,action:'resume',idempotencyKey:'billing-repaired'}));approvedRetry=true;
+          await finish();assert.equal(run.state,'completed');assert.equal(run.counts.acceptedQuizzes,3);
+          assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(row.stage_key),legacy,'Legacy billing refusal history remains immutable');
+        }
         return;
       }
       await finish();

@@ -497,3 +497,18 @@ for(const legacy of [false,true])test('progress preflight failures never poison 
  assert.equal(db.prepare('SELECT provider_failures FROM knowledge_workflow_stages WHERE stage_key=?').get(key).provider_failures,0);
  }finally{db.close();}
 });
+
+
+test('legacy completed HTTP402 stages recover under an authorized isolated identity and retain history',async()=>{
+ const {db,repository}=await stages(),scope={ownerId:'owner',runId:'run'};let calls=0,authorized=false;
+ try{
+  const key='question-generator:billing',refusal={ok:false,error:{kind:'KnowledgeModelRejected',status:402}};
+  await repository.run(scope,key,'input',async()=>refusal,{modelCall:true});
+  const original=db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(key);
+  const work=async()=>{calls++;return {ok:true,value:{saved:true}};},options={modelCall:true,maximumProviderAttempts:4,recoverFailedModel:async()=>authorized?{attemptKey:'b'.repeat(64)}:null};
+  assert.deepEqual(await repository.run(scope,key,'input',work,options),refusal);assert.equal(calls,0);
+  authorized=true;assert.equal((await repository.run(scope,key,'input',work,options)).ok,true);assert.equal(calls,1);
+  assert.equal((await repository.run(scope,key,'input',work,options)).ok,true);assert.equal(calls,1);
+  assert.deepEqual(db.prepare('SELECT * FROM knowledge_workflow_stages WHERE stage_key=?').get(key),original);
+ }finally{db.close();}
+});
