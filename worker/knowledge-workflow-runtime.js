@@ -803,6 +803,15 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     return {ok:true,value:null};
   }
 
+  /** @param {import('./knowledge-workflow-stages-d1.js').FailedModelStage} identity */
+  async function authorizeCompletedCallbackRetry(identity){
+    if(identity.status!=='completed'||identity.result?.ok!==false||!record(identity.result.error)||identity.result.error.kind!=='WorkflowAgentAgentOutputInvalid'||!identity.completedAt)return null;
+    const control=await dependencies.database.prepare("SELECT control_id FROM knowledge_workflow_controls WHERE owner_id=? AND run_id=? AND json_valid(command_fingerprint) AND json_extract(command_fingerprint,'$.action')='resume' AND json_extract(result_json,'$.state')='extraction-loop' AND occurred_at>? ORDER BY occurred_at DESC LIMIT 1").bind(identity.scope.ownerId,identity.scope.runId,identity.completedAt).first();
+    if(!record(control)||!text(control.control_id))return null;
+    const attemptKey=(await imageHash(new TextEncoder().encode(control.control_id))).replace(/^sha256:/,'');
+    return {attemptKey};
+  }
+
   /** @param {KnowledgeWorkflowRun} run @param {import("./knowledge-workflow-model.js").KnowledgeModelCommand["role"]} agentRole @param {string} taskId @param {string} systemPrompt @param {unknown} input @param {number} maxOutputTokens @param {readonly import("./knowledge-workflow-model.js").KnowledgeModelAttachment[]} [attachments] @param {{ readonly technicalAttempt?: number, readonly timeoutMs?: number, readonly responseSchema?: import("./knowledge-workflow-model.js").KnowledgeResponseSchema, readonly reasoningEffort?: "low", readonly providerSort?: "throughput",readonly budgetPageUrl?:string,readonly phase?:import("./webpage-facts.js").WebpagePhase }} [options] @returns {Promise<Result<Record<string, unknown>, { readonly kind: string, readonly technicalRetriesExhausted?:boolean,readonly technicalAttempts?:number }>>} */
   async function generate(run, agentRole, taskId, systemPrompt, input, maxOutputTokens, attachments = undefined, options = {}) {
     const managed = options.technicalAttempt !== undefined;
@@ -851,7 +860,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     try {generated=await agentRuntimeFor(run).run({ownerId:run.ownerId,runId:run.runId,role:agentRole,taskId,systemPrompt,input,maxOutputTokens,...(attachments===undefined?{}:{attachments}),...modelOptions,timeoutMs:remaining,signal:AbortSignal.timeout(remaining)});}
     catch(error){if(error instanceof AgentExecutionBoundaryFailure)error.notStarted=false;throw error;}
     if(!generated.ok)return generated;const saved=await budget.complete(key,generated.value);return saved.ok?generated:saved;
-    },{modelCall:true,maximumProviderAttempts:4,cacheProviderRefusals:true,...(dependencies.authorizeFailedReviewCall===undefined?{}:{recoverFailedModel:dependencies.authorizeFailedReviewCall}),...(dependencies.authorizeClaimedModelCall===undefined?{}:{recoverClaimed:({scope,key,inputDigest,createdAt})=>dependencies.authorizeClaimedModelCall?.({ownerId:scope.ownerId,runId:scope.runId,stageKey:key,inputDigest,createdAt})??Promise.resolve(false)})});
+    },{modelCall:true,maximumProviderAttempts:4,cacheProviderRefusals:true,recoverFailedModel:dependencies.authorizeFailedReviewCall??authorizeCompletedCallbackRetry,...(dependencies.authorizeClaimedModelCall===undefined?{}:{recoverClaimed:({scope,key,inputDigest,createdAt})=>dependencies.authorizeClaimedModelCall?.({ownerId:scope.ownerId,runId:scope.runId,stageKey:key,inputDigest,createdAt})??Promise.resolve(false)})});
   }
 
   /**
