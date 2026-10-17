@@ -145,6 +145,15 @@ test('timed-out launch with no ID blocks new launches and close remains unconfir
  assert.equal((await f.browser.close()).error.kind,'KnowledgeBrowserSessionCloseFailed');
  f.advance(120_004);assert.equal((await f.browser.close()).error.kind,'KnowledgeBrowserSessionCloseFailed');f.advance(1);assert.equal((await f.browser.close()).ok,true);assert.equal(f.reserves.length,1);
 });
+test('an explicit launch rate-limit refusal retains its reservation without inventing an unknown session',async()=>{
+ const f=fixture({createSession:async()=>Response.json({success:false,error:'Rate limit exceeded'},{status:429})});
+ assert.equal((await f.browser.readPage({url:first,rootUrl:root})).error.kind,'FirecrawlBrowserApiFailed');
+ assert.equal(f.reserves.length,1);assert.equal((await f.browser.close()).ok,true);
+ assert.equal(f.calls.some(call=>call.method==='DELETE'),false);
+ const uncertain=fixture({createSession:async()=>Response.json({success:false,error:'Server error'},{status:500})});
+ assert.equal((await uncertain.browser.readPage({url:first,rootUrl:root})).error.kind,'FirecrawlBrowserApiFailed');
+ assert.equal((await uncertain.browser.close()).error.kind,'KnowledgeBrowserSessionCloseFailed');assert.equal(uncertain.reserves.length,1);
+});
 test('aborted launch and invalid ID preserve unknown launch guard without refunding reservation',async()=>{
  let creating;const started=new Promise(resolve=>{creating=resolve;});
  const f=fixture({createSession:async({init})=>{creating();return new Promise((_resolve,reject)=>init.signal.addEventListener('abort',()=>reject(new Error('fixture aborted creation')),{once:true}));}});

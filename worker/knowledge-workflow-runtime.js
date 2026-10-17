@@ -927,7 +927,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         /** @type {{id:string,result:import('./knowledge-workflow-parallel-review.js').ReviewResult}[]} */ let previous=[];
         let complete=false;
         try {
-          const rows=await dependencies.database.prepare("SELECT input_digest,result_json FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key LIKE ? AND status='completed' AND EXISTS(SELECT 1 FROM knowledge_workflow_runs r WHERE r.owner_id=? AND r.run_id=? AND r.state<>'abandoned') AND NOT EXISTS(SELECT 1 FROM knowledge_workflow_run_tombstones t WHERE t.owner_id=? AND t.run_id=?) ORDER BY CAST(substr(stage_key,?) AS INTEGER)").bind(run.ownerId,run.runId,prefix+'%',run.ownerId,run.runId,run.ownerId,run.runId,prefix.length+1).all();
+          const rows=await dependencies.database.prepare("SELECT input_digest,result_json FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND substr(stage_key,1,?)=? AND status='completed' AND EXISTS(SELECT 1 FROM knowledge_workflow_runs r WHERE r.owner_id=? AND r.run_id=? AND r.state<>'abandoned') AND NOT EXISTS(SELECT 1 FROM knowledge_workflow_run_tombstones t WHERE t.owner_id=? AND t.run_id=?) ORDER BY CAST(substr(stage_key,?) AS INTEGER)").bind(run.ownerId,run.runId,prefix.length,prefix,run.ownerId,run.runId,run.ownerId,run.runId,prefix.length+1).all();
           if(!rows.success)return failed();
           for(const row of rows.results){
             if(!record(row)||row.input_digest!==signature||!text(row.result_json))return failed();
@@ -1657,6 +1657,9 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         cachedEvidence: current.robotsEvidence ?? null,
         robotsUnavailablePolicy: "allow-unverified-if-public",
         verifyTargetReachable: async ({ sourceUrl, targetUrl }) => {
+          // The run's exact target already passed this check; chunk replay reuses its captured evidence.
+          if(current.robotsEvidence?.availability==='unavailable'&&current.robotsEvidence.targetUrl===targetUrl&&current.robotsEvidence.matchedRule===null)return {ok:true,value:null};
+          return successfulCheckpoint(`public-target:${current.sourceRevision}:${targetUrl}`,async()=>{
           dependencies.logger({ event: "robots-target-reachability-entry", runId: run.runId });
           /** @type {Awaited<ReturnType<typeof navigationHandoff.captureTarget>>} */ let page;
           try {
@@ -1672,6 +1675,7 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
           const accessible = await verifyPublicWebpage({evidence:page.value.evidence,generate:(command)=>generate(current,'rights-assessor',command.taskId,command.systemPrompt,command.input,command.maxOutputTokens,undefined,{responseSchema:command.responseSchema})});
           dependencies.logger({ event: accessible.ok ? "robots-target-reachability-success" : "robots-target-reachability-failure", runId: run.runId, ...(accessible.ok ? {} : {failureKind:accessible.error.kind}) });
           return accessible;
+          });
         },
         resolveAddresses: resolve,
         now: dependencies.now,

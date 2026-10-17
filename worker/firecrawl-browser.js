@@ -194,6 +194,7 @@ export function createFirecrawlWorkflowBrowser(dependencies) {
       if(reader){while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.byteLength;if(size>maximum){await reader.cancel();return fail('FirecrawlBrowserResponseTooLarge');}chunks.push(chunk.value);}}
       const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
       const output=JSON.parse(new TextDecoder().decode(bytes));
+      if(stage==='launch'&&httpStatus===429&&record(output)&&output.success===false&&(output.id===undefined||output.id===null))unknownLaunchUntil=null;
       if(!response.ok||!record(output)||output.success!==true||output.error||output.killed||typeof output.exitCode==='number'&&output.exitCode!==0){dependencies.logger({event:'firecrawl-browser-api-failure',failureKind:'FirecrawlBrowserApiFailed',httpStatus,stage,method,...providerDiagnostic(output,dependencies.apiKey),...(record(output)&&typeof output.exitCode==='number'&&Number.isSafeInteger(output.exitCode)?{exitCode:output.exitCode}:{}),...(record(output)&&typeof output.killed==='boolean'?{killed:output.killed}:{})});return fail('FirecrawlBrowserApiFailed');}
       if(output.truncated===true){dependencies.logger({event:'firecrawl-browser-api-failure',failureKind:'FirecrawlBrowserOutputTruncated',stage,httpStatus,diagnosticToken:'provider-output-truncated'});return fail('FirecrawlBrowserOutputTruncated');}
       return {ok:true,value:output};
