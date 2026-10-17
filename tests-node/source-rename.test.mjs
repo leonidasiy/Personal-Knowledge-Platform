@@ -28,7 +28,8 @@ test('rename migration preserves audit history, indexes, foreign keys and existi
 
 function migrated() {
   const db = fixture();
-  db.exec(readFileSync(new URL('../worker/migrations/0018_source_rename.sql', import.meta.url), 'utf8'));
+  const dir = new URL('../worker/migrations/', import.meta.url);
+  for (const name of readdirSync(dir).filter(n => n.endsWith('.sql') && n >= '0018').sort()) db.exec(readFileSync(new URL(name, dir), 'utf8'));
   const database = {
     prepare(query) {
       let values = [];

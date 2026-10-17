@@ -21,7 +21,7 @@ async function factsRun({badReference=false,reject=false,duplicate=false}={}){
  const url=sourceCommand.owner,evidence={url,blocks:[{id:'b',sectionId:'s',kind:'text',figureId:null,locator:'main > p',text:source}],headings:[],images:[],warnings:[]};let calls=0;const log=[];
  const result=await requestWebpageFacts({taskId:'canonical',input:{url,evidence,coverageGoals:[]},maxOutputTokens:4096,structuredOutput:true,logger:e=>log.push(e),generate:async c=>{
   calls++;if(c.phase==='grounding'){assert.equal(c.input.candidates.length,1);assert.equal(c.input.candidates[0].evidenceAnchors[0].quote,source);return {ok:true,value:{verdicts:[{normalizedHash:'valid',grounded:!reject}]}};}
-  assert.equal(c.input.citationSources[0].text,source);const ref=c.input.citationSources[0].reference;
+  assert.equal(c.input.sourceBlocks[0].text,source);const ref=c.input.citationSources[0].reference;
   const candidate={summary:'A ratio compares quantities.',normalizedHash:'valid',coverageGoalIds:[],mediaCandidates:[],evidenceAnchors:[{reference:ref,clause:'A ratio compares quantities.'}]};
   const bad={...structuredClone(candidate),normalizedHash:'bad',evidenceAnchors:[{reference:{kind:'text',id:'foreign'},clause:'Unproven.'}]};
   if(duplicate)candidate.evidenceAnchors.push(structuredClone(candidate.evidenceAnchors[0]));

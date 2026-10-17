@@ -16,6 +16,11 @@ const encoder = new TextEncoder();
 const defaultTtlSeconds = 120;
 // Live Interact output truncates near 1 MiB; leave room for JSON and provider framing.
 const outputChunkCharacters = 512 * 1024;
+/** @param {string} value */
+function decodeBase64(value){
+  const native=/** @type {typeof Uint8Array & {fromBase64?:(value:string)=>Uint8Array}} */(Uint8Array);
+  return typeof native.fromBase64==='function'?native.fromBase64(value):Uint8Array.from(atob(value),c=>c.charCodeAt(0));
+}
 /** @param {Uint8Array} bytes @returns {RasterType|null} */
 function rasterType(bytes){
   if(bytes.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v))return 'image/png';
@@ -274,7 +279,7 @@ export function createFirecrawlWorkflowBrowser(dependencies) {
         data+=part.data;
       }
       if(!/^[A-Za-z0-9+/]*={0,2}$/.test(data)||data.length%4!==0)return fail('FirecrawlBrowserResponseInvalid');
-      const compressed=Uint8Array.from(atob(data),c=>c.charCodeAt(0)),reader=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+      const compressed=decodeBase64(data),reader=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
       const decoder=new TextDecoder('utf-8',{fatal:true});let json='',size=0;
       try{while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.byteLength;if(size>maximum){await reader.cancel();return fail('FirecrawlBrowserResponseTooLarge');}json+=decoder.decode(chunk.value,{stream:true});}}finally{reader.releaseLock();}
       parsed=JSON.parse(json+decoder.decode());if(!record(parsed))return fail('FirecrawlBrowserResponseInvalid');
@@ -304,7 +309,7 @@ if(typeof parsed.failure==='string'){const allowed=['KnowledgeBrowserClickObstru
       if(!imageArchive.has(image.url)&&imageArchive.size>=policy.resources){const older=[...imageArchive.keys()].find(url=>!observedUrls.has(url));if(older!==undefined)imageArchive.delete(older);else return fail('FirecrawlBrowserResponseInvalid');}
       if(typeof image.failure==='string'){if(!['MediaPayloadTooLarge','MediaUnsupportedType','MediaPublicEgressTimeout','MediaFetchFailed'].includes(image.failure))return fail('FirecrawlBrowserResponseInvalid');imageArchive.set(image.url,fail(image.failure));continue;}
       if(!Number.isInteger(image.status)||Number(image.status)<200||Number(image.status)>299||typeof image.base64!=='string'||image.base64.length>Math.ceil(Math.min(policy.imageBytes,policy.encodedResourceBytes)*4/3)+4||! /^[A-Za-z0-9+/]*={0,2}$/.test(image.base64)||!['image/png','image/jpeg','image/webp','image/gif'].includes(String(image.mediaType)))return fail('FirecrawlBrowserResponseInvalid');
-      let bytes;try{bytes=Uint8Array.from(atob(image.base64),c=>c.charCodeAt(0));}catch{return fail('FirecrawlBrowserResponseInvalid');}
+      let bytes;try{bytes=decodeBase64(image.base64);}catch{return fail('FirecrawlBrowserResponseInvalid');}
       total+=bytes.byteLength;if(bytes.byteLength>Math.min(policy.imageBytes,policy.encodedResourceBytes)||total>policy.encodedOperationBytes)return fail('FirecrawlBrowserResponseInvalid');
       const detected=rasterType(bytes);
       const retainedBytes=[...imageArchive.entries()].reduce((sum,[url,value])=>sum+(url!==image.url&&value.ok?value.value.bytes.byteLength:0),0);
@@ -353,6 +358,6 @@ if(typeof parsed.failure==='string'){const allowed=['KnowledgeBrowserClickObstru
     });
   }
   /** @param {PageCommand} command @returns {Promise<Result<{url:string,bytes:Uint8Array,mediaType:'image/png'}>>} */
-  async function screenshot(command){if(session&&dependencies.nowMs()>=session.expires){const deleted=await deleteSession();return deleted.ok?fail('KnowledgeBrowserObservationStale'):deleted;}if(!current||current.navigation.url!==command.url)return fail('KnowledgeBrowserObservationStale');return exclusive(command,async signal=>{if(!current)return fail('KnowledgeBrowserObservationStale');const output=await execute({operation:'screenshot',url:command.url,rootUrl:command.rootUrl},signal);if(!output.ok)return output;const v=output.value;if(v.url!==command.url||typeof v.screenshot!=='string'||v.screenshot.length>Math.ceil(policy.screenshotBytes*4/3)+4||! /^[A-Za-z0-9+/]*={0,2}$/.test(v.screenshot))return fail('KnowledgeScreenshotFailed');try{const bytes=Uint8Array.from(atob(v.screenshot),c=>c.charCodeAt(0));if(bytes.byteLength>policy.screenshotBytes)return fail('KnowledgeScreenshotTooLarge');if(bytes.length<8||[137,80,78,71,13,10,26,10].some((b,i)=>bytes[i]!==b))return fail('KnowledgeScreenshotFailed');return {ok:true,value:{url:command.url,bytes,mediaType:'image/png'}};}catch{return fail('KnowledgeScreenshotFailed');}});}
+  async function screenshot(command){if(session&&dependencies.nowMs()>=session.expires){const deleted=await deleteSession();return deleted.ok?fail('KnowledgeBrowserObservationStale'):deleted;}if(!current||current.navigation.url!==command.url)return fail('KnowledgeBrowserObservationStale');return exclusive(command,async signal=>{if(!current)return fail('KnowledgeBrowserObservationStale');const output=await execute({operation:'screenshot',url:command.url,rootUrl:command.rootUrl},signal);if(!output.ok)return output;const v=output.value;if(v.url!==command.url||typeof v.screenshot!=='string'||v.screenshot.length>Math.ceil(policy.screenshotBytes*4/3)+4||! /^[A-Za-z0-9+/]*={0,2}$/.test(v.screenshot))return fail('KnowledgeScreenshotFailed');try{const bytes=decodeBase64(v.screenshot);if(bytes.byteLength>policy.screenshotBytes)return fail('KnowledgeScreenshotTooLarge');if(bytes.length<8||[137,80,78,71,13,10,26,10].some((b,i)=>bytes[i]!==b))return fail('KnowledgeScreenshotFailed');return {ok:true,value:{url:command.url,bytes,mediaType:'image/png'}};}catch{return fail('KnowledgeScreenshotFailed');}});}
   return Object.freeze({readPage,inspect,click,screenshot,readImage,readRobots:dependencies.readRobots,async close(){closed=true;shutdown.abort();const deleted=await deleteSession();try{const robotsClosed=await dependencies.closeRobots();if(!robotsClosed.ok)return robotsClosed;}catch{return fail('KnowledgeBrowserSessionCloseFailed');}return deleted;}});
 }

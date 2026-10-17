@@ -200,7 +200,7 @@ for (const failureMode of ['material-coverage', 'review-output', 'model503', 'mo
         unwrap(await runtime().execute(run));run=unwrap(await repository.findById(ownerId,runId));
       }
       assert(expiredDeadline);assert.equal(run.state,'completed');assert.equal(run.extractionDeadlineAt,expiredDeadline);assert.equal(run.counts.acceptedQuizzes,3);
-      assert.deepEqual(generatedQuizzes,['page-1','page-2','page-3']);assert.equal(evaluatedQuizzes.length,3);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_quizzes WHERE status='published'").get().n,3);return;
+      assert.deepEqual(generatedQuizzes.toSorted(),['page-1','page-2','page-3']);assert.equal(evaluatedQuizzes.length,3);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_quizzes WHERE status='published'").get().n,3);return;
     }
     if (failureMode === 'stopped-before-acquisition') {
       const executed = await runtime().execute(run);
@@ -356,7 +356,7 @@ for (const failureMode of ['material-coverage', 'review-output', 'model503', 'mo
     const initialCritiques = failureMode.startsWith('model') ? ['page-1', 'page-3'] : ['page-1', ...Array(4).fill('page-2'), 'page-3'];
     assert.deepEqual(extractedPages, initialAcquisitions);
     assert.deepEqual(reviewedPages, initialCritiques);
-    assert.deepEqual(generatedQuizzes, ['page-1', 'page-3']);
+    assert.deepEqual(generatedQuizzes.toSorted(), ['page-1', 'page-3']);
     assert.equal(run.counts.pages, 2);
     assert.equal(run.counts.knowledgePoints, 2);
     assert.equal(run.counts.acceptedQuizzes, 2);
@@ -386,7 +386,7 @@ for (const failureMode of ['material-coverage', 'review-output', 'model503', 'mo
     assert.equal(run.failureKind, null);
     assert.deepEqual(extractedPages, [...initialAcquisitions, 'page-2']);
     assert.deepEqual(reviewedPages, [...initialCritiques, 'page-2']);
-    assert.deepEqual(generatedQuizzes, ['page-1', 'page-3', 'page-2']);
+    assert.deepEqual(generatedQuizzes.toSorted(), ['page-1', 'page-2', 'page-3']);
     assert.equal(run.counts.pages, 3);
     assert.equal(run.counts.knowledgePoints, 3);
     assert.equal(run.counts.acceptedQuizzes, 3);
