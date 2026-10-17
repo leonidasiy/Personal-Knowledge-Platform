@@ -828,7 +828,14 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
     return stages.run(run,stageKey,signature,async identity=>{
     dependencies.preflightModelWork?.(agentRole,{ownerId:run.ownerId,runId:run.runId,stageKey:identity.key,inputDigest:identity.inputDigest,createdAt:identity.createdAt});
     const {budgetPageUrl,...modelOptions}=options;
-    if(agentRole!=='knowledge-scraper')return agentRuntimeFor(run).run({ownerId:run.ownerId,runId:run.runId,role:agentRole,taskId,systemPrompt,input,maxOutputTokens,...(attachments===undefined?{}:{attachments}),...modelOptions});
+    let phaseSignal;
+    if(modelOptions.phase!==undefined){
+      if(run.extractionDeadlineAt===null)return {ok:false,error:{kind:'WorkflowExtractionClockInvalid'}};
+      modelOptions.timeoutMs=Math.min(modelOptions.timeoutMs??dependencies.configSnapshots[agentRole].limits.timeoutMs,dependencies.configSnapshots[agentRole].limits.timeoutMs,Date.parse(run.extractionDeadlineAt)-dependencies.nowMs());
+      if(modelOptions.timeoutMs<=0)return {ok:false,error:{kind:'WebpageImageRunDeadlineExceeded'}};
+      phaseSignal=AbortSignal.timeout(modelOptions.timeoutMs);
+    }
+    if(agentRole!=='knowledge-scraper')return agentRuntimeFor(run).run({ownerId:run.ownerId,runId:run.runId,role:agentRole,taskId,systemPrompt,input,maxOutputTokens,...(attachments===undefined?{}:{attachments}),...modelOptions,signal:phaseSignal});
     let deadlineAt=run.extractionDeadlineAt;
     if(deadlineAt===null){
       try{const row=await dependencies.database.prepare('SELECT extraction_deadline_at FROM knowledge_workflow_runs WHERE owner_id=? AND run_id=?').bind(run.ownerId,run.runId).first();if(!record(row)||!timestamp(row.extraction_deadline_at))return {ok:false,error:{kind:'WorkflowExtractionClockInvalid'}};deadlineAt=row.extraction_deadline_at;}catch(error){if(!(error instanceof Error))throw error;return {ok:false,error:{kind:'WebpageImageBudgetPersistenceFailed'}};}
@@ -1174,26 +1181,10 @@ export function createKnowledgeWorkflowRuntime(dependencies) {
         async function imageModel(command){
           if (retrySuffix) command = {...command,input:{.../** @type {Record<string,unknown>} */(command.input),processingAttempt:attempt,...(retryGeneration?{retryGeneration}:{})}};
           const role=command.phase==='normalization'||command.phase==='grounding'?'question-evaluator':'knowledge-scraper';
-          let key=await webpageImageCommandKey(dependencies.configSnapshots[role].model.name,dependencies.configSnapshots[role].digest,command);
-          let cached=await budget.lookup(key);if(!cached.ok)return cached;if(cached.value!==null)return {ok:true,value:cached.value};
-          if(dependencies.authorizeFailedReviewCall!==undefined){
-            const stageKey=await modelStageKey(run,role,command.taskId,command.systemPrompt,{task:command.input},command.maxOutputTokens,command.attachments,{responseSchema:role==='question-evaluator'?undefined:command.responseSchema,phase:command.phase});
-            const row=await dependencies.database.prepare('SELECT status,result_json,created_at,completed_at FROM knowledge_workflow_stages WHERE owner_id=? AND run_id=? AND stage_key=?').bind(run.ownerId,run.runId,stageKey).first();
-            if(record(row)&&(row.status==='claimed'||role==='question-evaluator'&&row.status==='completed')&&text(row.created_at)){
-              const parsed=typeof row.result_json==='string'?JSON.parse(row.result_json):null;
-              const proof=await dependencies.authorizeFailedReviewCall({scope:run,key:stageKey,inputDigest:stageKey.slice(`${role}:${command.taskId}:`.length),createdAt:row.created_at,status:row.status,result:record(parsed)?parsed:null,completedAt:text(row.completed_at)?row.completed_at:null});
-              if(proof!==null){
-                if(!/^[a-f0-9]{64}$/.test(proof.attemptKey))return {ok:false,error:{kind:'WorkflowStageRecoveryInvalid'}};
-                key+=`:${role==='question-evaluator'?'owner-review-recovery':'owner-model-recovery'}:${proof.attemptKey}`;
-                cached=await budget.lookup(key);if(!cached.ok)return cached;if(cached.value!==null)return {ok:true,value:cached.value};
-              }
-            }
-          }
-          const reserved=await budget.reserve({key,evaluations:0,decodedBytes:0,timeoutMs:dependencies.configSnapshots[role].limits.timeoutMs});
-          if(!reserved.ok)return reserved;
-          const remaining=reserved.value.deadlineAtMs-dependencies.nowMs();if(remaining<=0)return {ok:false,error:{kind:'WebpageImageAttemptDeadlineExceeded'}};
-          const result=await generate(run,role,command.taskId,command.systemPrompt,{task:command.input},command.maxOutputTokens,command.attachments,{responseSchema:role==='question-evaluator'?undefined:command.responseSchema,timeoutMs:remaining,budgetPageUrl:url,phase:command.phase});
-          if(!result.ok)return result;const output=result.value;const saved=await budget.complete(key,output);return saved.ok?{ok:true,value:output}:saved;
+          const key=await webpageImageCommandKey(dependencies.configSnapshots[role].model.name,dependencies.configSnapshots[role].digest,command);
+          const cached=await budget.lookup(key);if(!cached.ok)return cached;if(cached.value!==null)return {ok:true,value:cached.value};
+          // Each technical attempt owns its deadline/cache in generateOnce; a phase spans retries.
+          return generate(run,role,command.taskId,command.systemPrompt,{task:command.input},command.maxOutputTokens,command.attachments,{responseSchema:role==='question-evaluator'?undefined:command.responseSchema,budgetPageUrl:url,phase:command.phase});
         }
         const cacheBucket=dependencies.mediaBucket;
         const originalCache=cacheBucket!==undefined&&cacheBucket!==null&&typeof cacheBucket.get==='function'&&typeof cacheBucket.put==='function'
