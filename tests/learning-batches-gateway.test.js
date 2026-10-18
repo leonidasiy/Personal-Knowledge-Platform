@@ -201,3 +201,23 @@ Deno.test("Feed and Review reject projections with more than five cards", async 
   assertEquals((await gateway.loadFeed("2026-08-19")).ok, false);
   assertEquals((await gateway.loadReview("2026-08-19")).ok, false);
 });
+
+
+Deno.test("learner gateway keeps Skip separate from answers and validates revealed feedback", async () => {
+  let path = "", body = {};
+  const skip = { questionId: "q1", completed: false, feedback: { correctAnswer: "Tritone", explanation: "Six semitones." } };
+  const gateway = new LearningBatchGatewayClient({ fetch: async (input, options) => { path = String(input); body = JSON.parse(String(options?.body)); return response({ result: skip }); }, baseUrl: "https://app.example.test/", timeoutMs: 1000 });
+  assertEquals((await gateway.skipReview("review:a", "q1", 1, "skip:q1")).ok, true);
+  assertEquals(path.endsWith("/review-batch/skip"), true);
+  assertEquals(JSON.stringify(body), JSON.stringify({ batchId: "review:a", questionId: "q1", questionRevision: 1, idempotencyKey: "skip:q1" }));
+  for (const result of [null, { ...skip, feedback: {} }, { ...skip, completed: "false" }, { ...skip, questionId: "" }]) {
+    const malformed = new LearningBatchGatewayClient({ fetch: async () => response({ result }), baseUrl: "https://app.example.test/", timeoutMs: 1000 });
+    assertEquals((await malformed.skipReview("review:a", "q1", 1, "skip:q1")).ok, false);
+  }
+  const hydrated = new LearningBatchGatewayClient({ fetch: async () => response({ result: { ...review, skipped: [skip] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000 });
+  const loaded = await hydrated.loadReview("2026-08-19");
+  assertEquals(loaded.ok, true);
+  if (loaded.ok) assertEquals(loaded.value.skipped[0].feedback.correctAnswer, "Tritone");
+  const foreign = new LearningBatchGatewayClient({ fetch: async () => response({ result: { ...review, skipped: [{ ...skip, questionId: "foreign" }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000 });
+  assertEquals((await foreign.loadReview("2026-08-19")).ok, false);
+});

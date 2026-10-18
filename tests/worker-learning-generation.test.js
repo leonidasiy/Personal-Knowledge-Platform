@@ -68,6 +68,28 @@ Deno.test("progress and classification routes enforce authentication, owner inje
   assertEquals(seen.length, 2);
 });
 
+Deno.test("Skip route authenticates, injects its owner and propagates rejected or unavailable commands", async () => {
+  /** @type {unknown[]} */ const seen = [];
+  /** @returns {Promise<{ok:false,error:{kind:string}}>} */
+  const unavailable = async () => ({ ok: false, error: { kind: "LearningBatchUnavailable" } });
+  /** @type {NonNullable<Parameters<typeof createDiscoveryWorker>[1]["learningBatches"]>} */
+  const batches = { loadFeed: unavailable, loadReview: unavailable, completeFeed: unavailable, answerReview: unavailable, setPreference: unavailable, removeKnowledge: unavailable,
+    skipReview: async (/** @type {unknown} */ command) => { seen.push(command); return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } }; },
+  };
+  const app = worker({ learningBatches: batches }), path = "/api/learning-generation/review-batch/skip";
+  const command = { batchId: "review:a", questionId: "q", questionRevision: 1, idempotencyKey: "skip" };
+  assertEquals((await app.fetch(request(path, { method: "GET" }))).status, 405);
+  assertEquals((await app.fetch(request(path, { body: { ...command, ownerId: "other" } }))).status, 400);
+  assertEquals(seen.length, 0);
+  assertEquals((await app.fetch(request(path, { body: command }))).status, 409);
+  assertEquals(JSON.stringify(seen[0]), JSON.stringify({ ...command, ownerId: "owner-a" }));
+  const denied = worker({ learningBatches: batches, authenticate: async () => ({ ok: false, error: { kind: "DiscoveryAccessTokenMissing" } }) });
+  assertEquals((await denied.fetch(request(path, { body: command }))).status, 401);
+  assertEquals(seen.length, 1);
+  const missing = { ...batches, skipReview: undefined };
+  assertEquals((await worker({ learningBatches: missing }).fetch(request(path, { body: command }))).status, 503);
+});
+
 /** @param {import("../src/features/source-library/contracts.js").LibrarySource} source @returns {Promise<import("../src/features/source-library/contracts.js").Result<{ readonly source: import("../src/features/source-library/contracts.js").LibrarySource, readonly job: import("../src/features/source-library/contracts.js").SourceIngestionJob, readonly reused: boolean }, import("../src/features/source-library/contracts.js").SourceLibraryFailure>>} */
 async function sourceApprovalResult(source) {
   return { ok: true, value: { source, job: { id: "job-a", ownerId: "owner-a", sourceId: source.id, sourceRevision: 1, policyVersion: "policy-v1", state: "pending", createdAt: "2026-08-12T12:00:00.000Z" }, reused: false } };

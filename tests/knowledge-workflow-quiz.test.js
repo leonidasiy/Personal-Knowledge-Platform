@@ -213,6 +213,29 @@ Deno.test("quiz actor-critic accepts ordered multi-blank drafts and rejects malf
   }
 });
 
+Deno.test("quiz actor enforces three answers and five MCQ options before model review", async () => {
+  for (const kind of ["single-choice", "multiple-choice", "fill-blank"]) {
+    for (const count of [3, 4, 6]) {
+      const fixture = setup();
+      let evaluations = 0;
+      const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
+      const answers = terms.slice(0, count);
+      const generated = { id: "bounded-draft", knowledgeId: "knowledge-a", knowledgeRevision: 1, kind, prompt: kind === "fill-blank" ? answers.map(() => "____").join(" then ") : "Which statements apply?", options: kind === "fill-blank" ? [] : terms.slice(0, kind === "single-choice" ? count : Math.max(5, count)), answer: kind === "single-choice" ? "alpha" : answers, ...(kind === "fill-blank" ? { blanks: answers.map((answer, index) => ({ id: `blank-${index + 1}`, acceptedAnswers: [answer] })) } : {}), citedEvidenceUrls: ["https://example.test/a"] };
+      const actor = createQuizActorCritic({ generator: { generate: async () => ({ ok: true, value: generated }) }, reviewer: { evaluate: async () => { evaluations++; return { ok: true, value: { score: 9, reasons: ["Supported"], feedback: "Ready", groundingProblems: [] } }; } }, repository: fixture.repository, now: () => "2026-10-18T00:00:00.000Z", logger: () => {}, maxAttempts: 3, technicalRetries: false });
+      await actor.run({ ownerId: "owner-a", runId: "run-bounds", points: [points()[0]] });
+      const valid = kind !== "multiple-choice" || count < 6;
+      assertEquals(fixture.published.length, valid ? 1 : 0);
+      assertEquals(evaluations, valid ? 1 : 0);
+      if (valid) {
+        const published = /** @type {{draft:import("../src/features/knowledge-workflows/quiz.js").QuestionDraft}} */ (fixture.published[0]);
+        assertEquals(published.draft.options.length <= 5, true);
+        assertEquals((published.draft.blanks?.length ?? 0) <= 3, true);
+        if (kind === "fill-blank" && count > 3) assertEquals(published.draft.prompt.includes("delta"), true);
+      }
+    }
+  }
+});
+
 Deno.test("accepted quiz kinds are published directly after actor-critic approval", async () => {
   const fixture = setup();
   const actor = createQuizActorCritic({

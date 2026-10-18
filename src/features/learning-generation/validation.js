@@ -5,6 +5,7 @@ import {
   isPositiveInteger,
   isRecord,
 } from "./contracts.js";
+import { limitChoiceOptions } from "../knowledge-workflows/quiz-pair.js";
 
 /** @import { LearningChoice, LearningDraft, LearningSymbolicStimulus, LearningTask, LearningTaskAssembly, LearningTaskKind, LearningValidationContext, LearningValidationFailure, Result } from "./contracts.js" */
 
@@ -197,8 +198,10 @@ function validateDraft(draft, context) {
         return ungrounded("correctChoiceIds");
       }
     }
-    base.choices = freeze(choices.value);
-    base.correctChoiceIds = /** @type {[string, ...string[]]} */ (freeze([...correct.value]));
+    const removed = correct.value.slice(3);
+    const kept = correct.value.slice(0, 3);
+    base.choices = freeze(limitChoiceOptions(choices.value.filter(choice => !removed.includes(choice.id)).map(choice => ({ ...choice, key: choice.id })), kept).map(({ id, label }) => freeze({ id, label })));
+    base.correctChoiceIds = /** @type {[string, ...string[]]} */ (freeze(kept));
   } else if (kind === "fill-blank") {
     if (!isNonEmptyText(draft.blankId)) return invalidDraft("blankId");
     const blankId = /** @type {string} */ (draft.blankId);

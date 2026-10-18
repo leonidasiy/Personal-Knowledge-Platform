@@ -4,6 +4,8 @@
 /** @typedef {{ readonly id: string, readonly canonicalAnswer: string, readonly acceptedAnswers: readonly string[] }} CanonicalBlank */
 /** @typedef {{ readonly multipleChoice: { readonly id: string, readonly kind: "single-choice" | "multiple-choice", readonly prompt: string, readonly options: readonly ChoiceOption[], readonly correctOptionKeys: readonly string[], readonly canonicalAnswers: readonly string[], readonly explanation: string }, readonly fillBlank: { readonly id: string, readonly kind: "fill-blank", readonly prompt: string, readonly blanks: readonly CanonicalBlank[], readonly canonicalAnswers: readonly string[], readonly explanation: string }, readonly canonicalAnswers: readonly string[], readonly citedEvidenceUrls: readonly string[] }} QuizPair */
 
+/** @typedef {{ readonly knowledgeId: string, readonly knowledgeRevision: number, readonly canonicalAnswers: readonly string[], readonly citedEvidenceUrls: readonly string[], readonly multipleChoice: { readonly prompt: string, readonly options: readonly ChoiceOption[], readonly correctOptionKeys: readonly string[], readonly correctOptionAnswers: readonly {readonly key:string,readonly canonicalAnswer:string}[], readonly explanation: string }, readonly fillBlank: { readonly prompt: string, readonly blanks: readonly CanonicalBlank[], readonly explanation: string } }} QuizPairDraft */
+
 const freeze = Object.freeze;
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
@@ -21,14 +23,19 @@ function normalize(value) { return value.normalize("NFKC").trim().toLocaleLowerC
  * Strict provider output contract. The provider cannot choose stable IDs;
  * callers derive them from the persisted source/knowledge revision.
  * @param {unknown} value
- * @returns {value is { readonly knowledgeId: string, readonly knowledgeRevision: number, readonly canonicalAnswers: readonly string[], readonly citedEvidenceUrls: readonly string[], readonly multipleChoice: { readonly prompt: string, readonly options: readonly ChoiceOption[], readonly correctOptionKeys: readonly string[], readonly correctOptionAnswers: readonly {readonly key:string,readonly canonicalAnswer:string}[], readonly explanation: string }, readonly fillBlank: { readonly prompt: string, readonly blanks: readonly CanonicalBlank[], readonly explanation: string } }}
+ * @returns {value is QuizPairDraft}
  */
 export function validateQuizPairDraft(value) {
-  if (!exactRecord(value, ["knowledgeId", "knowledgeRevision", "canonicalAnswers", "citedEvidenceUrls", "multipleChoice", "fillBlank"]) || !text(value.knowledgeId) || typeof value.knowledgeRevision !== "number" || !Number.isSafeInteger(value.knowledgeRevision) || value.knowledgeRevision < 1 || !textList(value.canonicalAnswers) || value.canonicalAnswers.length > 4 || !textList(value.citedEvidenceUrls)) return false;
+  return validQuizPairDraftStructure(value) && value.canonicalAnswers.length <= 3 && value.multipleChoice.options.length <= 5;
+}
+
+/** @param {unknown} value @returns {value is QuizPairDraft} */
+function validQuizPairDraftStructure(value) {
+  if (!exactRecord(value, ["knowledgeId", "knowledgeRevision", "canonicalAnswers", "citedEvidenceUrls", "multipleChoice", "fillBlank"]) || !text(value.knowledgeId) || typeof value.knowledgeRevision !== "number" || !Number.isSafeInteger(value.knowledgeRevision) || value.knowledgeRevision < 1 || !textList(value.canonicalAnswers) || !textList(value.citedEvidenceUrls)) return false;
   const canonicalAnswers = /** @type {readonly string[]} */ (value.canonicalAnswers);
   if (new Set(canonicalAnswers.map(normalize)).size !== canonicalAnswers.length) return false;
   if (canonicalAnswers.some((answer) => !text(answer) || answer.length > 300)) return false;
-  if (!exactRecord(value.multipleChoice, ["prompt", "options", "correctOptionKeys", "correctOptionAnswers", "explanation"]) || !text(value.multipleChoice.prompt) || value.multipleChoice.prompt.length > 1_000 || !text(value.multipleChoice.explanation) || value.multipleChoice.explanation.length > 4_000 || !Array.isArray(value.multipleChoice.options) || value.multipleChoice.options.length < 2 || value.multipleChoice.options.length > 8 || !Array.isArray(value.multipleChoice.correctOptionKeys) || value.multipleChoice.correctOptionKeys.length < 1 || !value.multipleChoice.correctOptionKeys.every(text) || !Array.isArray(value.multipleChoice.correctOptionAnswers) || value.multipleChoice.correctOptionAnswers.length !== canonicalAnswers.length || !value.multipleChoice.correctOptionAnswers.every((entry) => exactRecord(entry, ["key", "canonicalAnswer"]) && text(entry.key) && text(entry.canonicalAnswer))) return false;
+  if (!exactRecord(value.multipleChoice, ["prompt", "options", "correctOptionKeys", "correctOptionAnswers", "explanation"]) || !text(value.multipleChoice.prompt) || value.multipleChoice.prompt.length > 1_000 || !text(value.multipleChoice.explanation) || value.multipleChoice.explanation.length > 4_000 || !Array.isArray(value.multipleChoice.options) || value.multipleChoice.options.length < 2 || !Array.isArray(value.multipleChoice.correctOptionKeys) || value.multipleChoice.correctOptionKeys.length < 1 || !value.multipleChoice.correctOptionKeys.every(text) || !Array.isArray(value.multipleChoice.correctOptionAnswers) || value.multipleChoice.correctOptionAnswers.length !== canonicalAnswers.length || !value.multipleChoice.correctOptionAnswers.every((entry) => exactRecord(entry, ["key", "canonicalAnswer"]) && text(entry.key) && text(entry.canonicalAnswer))) return false;
   const options = value.multipleChoice.options;
   if (!options.every((option) => exactRecord(option, ["key", "text"]) && text(option.key) && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(option.key) && text(option.text) && option.text.length <= 500)) return false;
   const optionKeys = options.map((option) => /** @type {string} */ (option.key));
@@ -45,6 +52,57 @@ export function validateQuizPairDraft(value) {
 
 /** @param {unknown} value @returns {value is { readonly knowledgeId:string, readonly knowledgeRevision:number, readonly canonicalAnswers:readonly string[], readonly citedEvidenceUrls:readonly string[], readonly multipleChoice:{readonly prompt:string,readonly options:readonly ChoiceOption[],readonly correctOptionKeys:readonly string[],readonly correctOptionAnswers:readonly {readonly key:string,readonly canonicalAnswer:string}[],readonly explanation:string},readonly fillBlank:{readonly prompt:string,readonly blanks:readonly CanonicalBlank[],readonly explanation:string} }} */
 export function isQuizPairDraft(value) { return validateQuizPairDraft(value); }
+
+/** Remove randomly selected distractors, preserving every correct option and remaining order.
+ * @template {{readonly key:string}} T @param {readonly T[]} options @param {readonly string[]} correctKeys @param {()=>number} random @returns {readonly T[]}
+ */
+export function limitChoiceOptions(options, correctKeys, random = Math.random) {
+  const kept = [...options];
+  while (kept.length > 5) {
+    const incorrect = kept.flatMap((option, index) => correctKeys.includes(option.key) ? [] : [index]);
+    if (incorrect.length === 0) break;
+    const draw = random();
+    if (!Number.isFinite(draw) || draw < 0 || draw >= 1) throw new TypeError("Quiz option random draw is invalid.");
+    kept.splice(incorrect[Math.floor(draw * incorrect.length)], 1);
+  }
+  return freeze(kept);
+}
+
+/** Apply the owner's count fallback only to a structurally coherent pair. Raw provider evidence remains immutable.
+ * Excess recall entries become supplied context; their corresponding choice options are removed, never relabeled wrong.
+ * @param {unknown} value @param {()=>number} [random] @returns {unknown}
+ */
+export function normalizeQuizPairDraftLimits(value, random = Math.random) {
+  if (validateQuizPairDraft(value) || !validQuizPairDraftStructure(value)) return value;
+  const answers = value.canonicalAnswers.slice(0, 3);
+  const correctOptionAnswers = answers.map(answer => value.multipleChoice.correctOptionAnswers.find(entry => normalize(entry.canonicalAnswer) === normalize(answer)));
+  const correctOptionKeys = correctOptionAnswers.map(entry => /** @type {{key:string}} */ (entry).key);
+  const removedKeys = value.multipleChoice.correctOptionKeys.filter(key => !correctOptionKeys.includes(key));
+  let position = 0;
+  const prompt = value.fillBlank.prompt.replace(/(?<!_)____(?!_)/gu, () => {
+    const index = position++;
+    return index < 3 ? "____" : value.fillBlank.blanks[index].canonicalAnswer;
+  });
+  const candidate = { ...value, canonicalAnswers: answers,
+    multipleChoice: { ...value.multipleChoice, correctOptionKeys, correctOptionAnswers, options: limitChoiceOptions(value.multipleChoice.options.filter(option => !removedKeys.includes(option.key)), correctOptionKeys, random) },
+    fillBlank: { ...value.fillBlank, prompt, blanks: value.fillBlank.blanks.slice(0, 3) },
+  };
+  return validateQuizPairDraft(candidate) ? candidate : value;
+}
+
+/** Apply the same fallback to verified/persisted pairs before pool ingestion, preserving variant identities.
+ * @param {unknown} value @param {()=>number} [random] @returns {unknown}
+ */
+export function normalizeAssembledQuizPairLimits(value, random = Math.random) {
+  if (validateAssembledQuizPair(value) || !validAssembledQuizPairStructure(value)) return value;
+  const raw = normalizeQuizPairDraftLimits({ knowledgeId: "limit-normalization", knowledgeRevision: 1, canonicalAnswers: value.canonicalAnswers, citedEvidenceUrls: value.citedEvidenceUrls,
+    multipleChoice: { prompt: value.multipleChoice.prompt, options: value.multipleChoice.options, correctOptionKeys: value.multipleChoice.correctOptionKeys, correctOptionAnswers: value.multipleChoice.correctOptionKeys.map((key, index) => ({ key, canonicalAnswer: value.canonicalAnswers[index] })), explanation: value.multipleChoice.explanation },
+    fillBlank: { prompt: value.fillBlank.prompt, blanks: value.fillBlank.blanks, explanation: value.fillBlank.explanation },
+  }, random);
+  if (!validateQuizPairDraft(raw)) return value;
+  const pair = assembleQuizPair(raw, "limit-normalization");
+  return freeze({ ...pair, multipleChoice: freeze({ ...pair.multipleChoice, id: value.multipleChoice.id }), fillBlank: freeze({ ...pair.fillBlank, id: value.fillBlank.id }) });
+}
 
 /** Canonicalize redundant aliases only after the complete resulting draft passes the unchanged strict validator.
  * Keep the first spelling and order, including each blank's first canonical spelling, and distinct synonyms.
@@ -77,7 +135,7 @@ export function quizPairDraftValidationIssues(value) {
   const answers = textList(value.canonicalAnswers) ? value.canonicalAnswers : null;
   if (answers === null) issues.push("canonicalAnswers: include nonempty answer text.");
   else {
-    if (answers.length > 4 || answers.some(answer => answer.length > 300)) issues.push("canonicalAnswers: use one to four answers of at most 300 characters.");
+    if (answers.length > 3 || answers.some(answer => answer.length > 300)) issues.push("canonicalAnswers: use one to three answers of at most 300 characters.");
     if (new Set(answers.map(normalize)).size !== answers.length) issues.push("canonicalAnswers: all answers must be distinct after NFKC, whitespace and case normalization.");
   }
   const mc = value.multipleChoice;
@@ -88,7 +146,7 @@ export function quizPairDraftValidationIssues(value) {
     const options = Array.isArray(mc.options) && mc.options.every(option => exactRecord(option, ["key", "text"]) && text(option.key) && text(option.text)) ? mc.options : null;
     if (options === null) issues.push("multipleChoice.options: each option needs exactly a nonempty key and text.");
     else {
-      if (options.length < 2 || options.length > 8 || options.some(option => !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(option.key) || option.text.length > 500)) issues.push("multipleChoice.options: use two to eight valid option keys with text of at most 500 characters.");
+      if (options.length < 2 || options.length > 5 || options.some(option => !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(option.key) || option.text.length > 500)) issues.push("multipleChoice.options: use two to five valid option keys with text of at most 500 characters.");
       if (new Set(options.map(option => option.key)).size !== options.length) issues.push("multipleChoice.options: keys must be unique.");
       if (new Set(options.map(option => normalize(option.text))).size !== options.length) issues.push("multipleChoice.options: option texts must be unique after normalization.");
       if (answers?.some(answer => options.some(option => option.key === answer))) issues.push("canonicalAnswers: use answer text rather than option keys.");
@@ -139,11 +197,11 @@ export function quizPairSchema(value) {
   const string = { type: "string", minLength: 1 };
   const stringListSchema = { type: "array", minItems: 1, items: string };
   const draftSchema = { type: "object", additionalProperties: false, properties: {
-    knowledgeId: string, knowledgeRevision: { type: "integer", minimum: 1 }, canonicalAnswers: { type: "array", description: "Choose one to four distinct compact terms or short phrases, each the exact answer text for one fill-blank position. Use the same ordered answers in correctOptionAnswers and fillBlank.blanks; do not list a combined phrase here when a blank asks for only one part. A single-choice quiz has one answer, one correct key and one blank; a multi-select quiz has one unique correct key and one blank per answer.", minItems: 1, maxItems: 4, items: { type: "string", minLength: 1, maxLength: 300 } }, citedEvidenceUrls: stringListSchema,
-    multipleChoice: { type: "object", additionalProperties: false, properties: { prompt: string, options: { type: "array", minItems: 2, maxItems: 8, items: { type: "object", additionalProperties: false, properties: { key: string, text: string }, required: ["key", "text"] } }, correctOptionKeys: { ...stringListSchema, description: "Exactly one distinct existing option key per canonical answer and blank, in the same order as correctOptionAnswers and canonicalAnswers. The count must equal canonicalAnswers.length and fillBlank.blanks.length. Never repeat a key or map several canonical answers to one correct key." }, correctOptionAnswers: { type: "array", description: "One entry per canonical answer, in canonicalAnswers order. Each key must equal correctOptionKeys at the same index and uniquely identify a correct option; canonicalAnswer must be the exact same answer text as canonicalAnswers and fillBlank.blanks at that index, not the fuller option wording or a combined list.", minItems: 1, maxItems: 4, items: { type: "object", additionalProperties: false, properties: { key: string, canonicalAnswer: string }, required: ["key", "canonicalAnswer"] } }, explanation: string }, required: ["prompt", "options", "correctOptionKeys", "correctOptionAnswers", "explanation"] },
-    fillBlank: { type: "object", additionalProperties: false, properties: { prompt: string, blanks: { type: "array", description: "Exactly one blank per canonical answer and correct option key, in prompt order, with sequential ids blank-1 onward and one ____ in the prompt per entry. At each index canonicalAnswer and acceptedAnswers[0] must be exactly canonicalAnswers at that index and the corresponding correctOptionAnswers answer text. Each answer must fill its actual sentence grammatically; do not substitute a subset, combined answer or explanatory statement.", minItems: 1, maxItems: 4, items: { type: "object", additionalProperties: false, properties: { id: string, canonicalAnswer: string, acceptedAnswers: { type: "array", description: "The exact canonical answer alone is sufficient. Synonyms are optional; begin with the exact canonical answer and include only distinct legitimate synonyms, never cosmetic glyph or Unicode variants that normalize to an existing entry. All entries must be unique after Unicode NFKC normalization, trimming, case folding and collapsing whitespace: capitalization, compatibility-character and whitespace variants are duplicates, not extra aliases.", minItems: 1, maxItems: 12, items: string } }, required: ["id", "canonicalAnswer", "acceptedAnswers"] } }, explanation: string }, required: ["prompt", "blanks", "explanation"] },
+    knowledgeId: string, knowledgeRevision: { type: "integer", minimum: 1 }, canonicalAnswers: { type: "array", description: "Choose one to three distinct compact terms or short phrases, each the exact answer text for one fill-blank position. Use the same ordered answers in correctOptionAnswers and fillBlank.blanks; do not list a combined phrase here when a blank asks for only one part. A single-choice quiz has one answer, one correct key and one blank; a multi-select quiz has one unique correct key and one blank per answer.", minItems: 1, maxItems: 3, items: { type: "string", minLength: 1, maxLength: 300 } }, citedEvidenceUrls: stringListSchema,
+    multipleChoice: { type: "object", additionalProperties: false, properties: { prompt: string, options: { type: "array", minItems: 2, maxItems: 5, items: { type: "object", additionalProperties: false, properties: { key: string, text: string }, required: ["key", "text"] } }, correctOptionKeys: { ...stringListSchema, maxItems: 3, description: "Exactly one distinct existing option key per canonical answer and blank, in the same order as correctOptionAnswers and canonicalAnswers. The count must equal canonicalAnswers.length and fillBlank.blanks.length. Never repeat a key or map several canonical answers to one correct key." }, correctOptionAnswers: { type: "array", description: "One entry per canonical answer, in canonicalAnswers order. Each key must equal correctOptionKeys at the same index and uniquely identify a correct option; canonicalAnswer must be the exact same answer text as canonicalAnswers and fillBlank.blanks at that index, not the fuller option wording or a combined list.", minItems: 1, maxItems: 3, items: { type: "object", additionalProperties: false, properties: { key: string, canonicalAnswer: string }, required: ["key", "canonicalAnswer"] } }, explanation: string }, required: ["prompt", "options", "correctOptionKeys", "correctOptionAnswers", "explanation"] },
+    fillBlank: { type: "object", additionalProperties: false, properties: { prompt: string, blanks: { type: "array", description: "Exactly one blank per canonical answer and correct option key, in prompt order, with sequential ids blank-1 onward and one ____ in the prompt per entry. At each index canonicalAnswer and acceptedAnswers[0] must be exactly canonicalAnswers at that index and the corresponding correctOptionAnswers answer text. Each answer must fill its actual sentence grammatically; do not substitute a subset, combined answer or explanatory statement.", minItems: 1, maxItems: 3, items: { type: "object", additionalProperties: false, properties: { id: string, canonicalAnswer: string, acceptedAnswers: { type: "array", description: "The exact canonical answer alone is sufficient. Synonyms are optional; begin with the exact canonical answer and include only distinct legitimate synonyms, never cosmetic glyph or Unicode variants that normalize to an existing entry. All entries must be unique after Unicode NFKC normalization, trimming, case folding and collapsing whitespace: capitalization, compatibility-character and whitespace variants are duplicates, not extra aliases.", minItems: 1, maxItems: 12, items: string } }, required: ["id", "canonicalAnswer", "acceptedAnswers"] } }, explanation: string }, required: ["prompt", "blanks", "explanation"] },
   }, required: ["knowledgeId", "knowledgeRevision", "canonicalAnswers", "citedEvidenceUrls", "multipleChoice", "fillBlank"] };
-  return Object.freeze({ name: "paired_quiz_v3", schema: Object.freeze(draftSchema) });
+  return Object.freeze({ name: "paired_quiz_v4", schema: Object.freeze(draftSchema) });
 }
 
 /**
@@ -174,7 +232,12 @@ export function assembleQuizPair(value, stableId) {
 
 /** @param {unknown} value @returns {value is QuizPair} */
 export function validateAssembledQuizPair(value) {
-  if (!exactRecord(value, ["multipleChoice", "fillBlank", "canonicalAnswers", "citedEvidenceUrls"]) || !textList(value.canonicalAnswers) || !textList(value.citedEvidenceUrls) || value.canonicalAnswers.length > 4 || new Set(value.canonicalAnswers.map(normalize)).size !== value.canonicalAnswers.length) return false;
+  return validAssembledQuizPairStructure(value) && value.canonicalAnswers.length <= 3 && value.multipleChoice.options.length <= 5;
+}
+
+/** @param {unknown} value @returns {value is QuizPair} */
+function validAssembledQuizPairStructure(value) {
+  if (!exactRecord(value, ["multipleChoice", "fillBlank", "canonicalAnswers", "citedEvidenceUrls"]) || !textList(value.canonicalAnswers) || !textList(value.citedEvidenceUrls) || new Set(value.canonicalAnswers.map(normalize)).size !== value.canonicalAnswers.length) return false;
   const answers = /** @type {readonly string[]} */ (value.canonicalAnswers);
   const mcq = value.multipleChoice;
   const fill = value.fillBlank;

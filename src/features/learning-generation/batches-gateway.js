@@ -13,7 +13,8 @@ import { isSubjectId } from "../knowledge-subjects/public.js";
 /** @typedef {LearningReviewChoiceVariant | LearningReviewFillBlankVariant} LearningReviewVariant */
 /** @typedef {{ readonly questionId: string, readonly knowledgeId: string, readonly title: string, readonly prompt: string, readonly kind: string, readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly blanks: readonly { readonly id: string }[] | null, readonly pairedVariants: readonly [LearningReviewChoiceVariant, LearningReviewFillBlankVariant] | readonly [LearningReviewFillBlankVariant, LearningReviewChoiceVariant] | null, readonly sourceAnchorIds: readonly string[], readonly revision: number }} LearningReviewQuestion */
 /** @typedef {{ readonly correct: boolean, readonly score: number, readonly completed: boolean, readonly nextDueAt: string, readonly feedback: { readonly explanation: string, readonly correctAnswer: string, readonly components: readonly { readonly id: string, readonly correct: boolean, readonly correctAnswer: string }[] } }} LearningReviewAnswer */
-/** @typedef {{ readonly batch: LearningBatchProjection | null, readonly questions: readonly LearningReviewQuestion[], readonly dueCount: number }} ReviewBatchProjection */
+/** @typedef {{ readonly questionId: string, readonly completed: boolean, readonly feedback: { readonly explanation: string, readonly correctAnswer: string } }} LearningReviewSkip */
+/** @typedef {{ readonly batch: LearningBatchProjection | null, readonly questions: readonly LearningReviewQuestion[], readonly dueCount: number, readonly skipped: readonly LearningReviewSkip[] }} ReviewBatchProjection */
 /** @typedef {{ readonly kind: "LearningBatchGatewayCommandInvalid", readonly field: string } | { readonly kind: "LearningBatchGatewayUnauthenticated" } | { readonly kind: "LearningBatchGatewayUnauthorized" } | { readonly kind: "LearningBatchGatewayUnavailable" } | { readonly kind: "LearningBatchGatewayTimedOut" } | { readonly kind: "LearningBatchGatewayResponseInvalid" } | { readonly kind: "LearningBatchGatewayRejected", readonly failureKind: string }} LearningBatchGatewayFailure */
 
 const freeze = Object.freeze;
@@ -89,6 +90,11 @@ function parseReviewAnswer(value) {
   return freeze({ correct: value.correct, score: value.score, completed: value.completed, nextDueAt: value.nextDueAt, feedback: freeze({ explanation: value.feedback.explanation, correctAnswer: value.feedback.correctAnswer, components: freeze(value.feedback.components.map((component) => freeze({ id: /** @type {string} */ (component.id), correct: /** @type {boolean} */ (component.correct), correctAnswer: /** @type {string} */ (component.correctAnswer) }))) }) });
 }
 
+/** @param {unknown} value @returns {LearningReviewSkip | null} */
+function parseSkip(value) {
+  return record(value) && text(value.questionId) && typeof value.completed === "boolean" && record(value.feedback) && text(value.feedback.explanation) && text(value.feedback.correctAnswer) ? freeze({ questionId: value.questionId, completed: value.completed, feedback: freeze({ explanation: value.feedback.explanation, correctAnswer: value.feedback.correctAnswer }) }) : null;
+}
+
 /** @param {unknown} value @returns {Result<FeedBatchProjection, LearningBatchGatewayFailure>} */
 function parseFeed(value) {
   if (!record(value) || !Array.isArray(value.items) || value.items.length > 5) return bad();
@@ -105,7 +111,8 @@ function parseReview(value) {
   const batch = parseBatch(value.batch);
   if (value.batch !== null && batch === null) return bad();
   const questions = value.questions.map(parseQuestion);
-  return questions.some((question) => question === null) ? bad() : { ok: true, value: freeze({ batch, questions: freeze(/** @type {LearningReviewQuestion[]} */ (questions)), dueCount }) };
+  const skipped = value.skipped === undefined ? [] : Array.isArray(value.skipped) ? value.skipped.map(parseSkip) : [null];
+  return questions.some(question => question === null) || skipped.some(item => item === null || !questions.some(question => question?.questionId === item.questionId)) ? bad() : { ok: true, value: freeze({ batch, questions: freeze(/** @type {LearningReviewQuestion[]} */ (questions)), dueCount, skipped: freeze(/** @type {LearningReviewSkip[]} */ (skipped)) }) };
 }
 
 /** @param {unknown} value @returns {Result<{ readonly items: readonly LearningKnowledgeCard[] }, LearningBatchGatewayFailure>} */
@@ -180,11 +187,18 @@ export class LearningBatchGatewayClient {
     if (!response.ok) return response;
     return parseReview(resultValue(response.value));
   }
-  /** @param {string} batchId @param {string} questionId @param {readonly string[]} selectedChoiceIds @param {string} idempotencyKey @param {string | null} [answerText] @param {readonly { readonly id: string, readonly text: string }[] | null} [blankAnswers] @param {readonly {readonly id:string,readonly text:string}[]|null} [pairedBlankAnswers] @param {number} [questionRevision] @returns {Promise<Result<LearningReviewAnswer, LearningBatchGatewayFailure>>} */
-  async answerReview(batchId, questionId, selectedChoiceIds, idempotencyKey, answerText = null, blankAnswers = null, pairedBlankAnswers = null, questionRevision = 0) {
-    const result = await this.#command("api/learning-generation/review-batch/answer", { batchId, questionId, selectedChoiceIds, answerText, blankAnswers, pairedBlankAnswers, questionRevision, idempotencyKey });
+  /** @param {string} batchId @param {string} questionId @param {readonly string[]} selectedChoiceIds @param {string} idempotencyKey @param {string | null} [answerText] @param {readonly { readonly id: string, readonly text: string }[] | null} [blankAnswers] @param {number} [questionRevision] @returns {Promise<Result<LearningReviewAnswer, LearningBatchGatewayFailure>>} */
+  async answerReview(batchId, questionId, selectedChoiceIds, idempotencyKey, answerText = null, blankAnswers = null, questionRevision = 0) {
+    const result = await this.#command("api/learning-generation/review-batch/answer", { batchId, questionId, selectedChoiceIds, answerText, blankAnswers, questionRevision, idempotencyKey });
     if (!result.ok) return result;
     const parsed = parseReviewAnswer(result.value);
+    return parsed === null ? bad() : { ok: true, value: parsed };
+  }
+  /** @param {string} batchId @param {string} questionId @param {number} questionRevision @param {string} idempotencyKey @returns {Promise<Result<LearningReviewSkip, LearningBatchGatewayFailure>>} */
+  async skipReview(batchId, questionId, questionRevision, idempotencyKey) {
+    const result = await this.#command("api/learning-generation/review-batch/skip", { batchId, questionId, questionRevision, idempotencyKey });
+    if (!result.ok) return result;
+    const parsed = parseSkip(result.value);
     return parsed === null ? bad() : { ok: true, value: parsed };
   }
   /** @param {string} knowledgeId @param {"more" | "less"} choice @param {string} idempotencyKey @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */

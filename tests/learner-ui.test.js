@@ -143,7 +143,7 @@ Deno.test("Review renders the paired quiz prompt, not the knowledge-card summary
   const html = controller.renderReview();
   assert(html.includes("Which interval spans six semitones?"), "Review must render the quiz prompt.");
   assert(html.includes("Tritone") && html.includes("Octave"), "Review must render the quiz answer choices.");
-  assert(html.includes("Paired with Open Music Theory"), "Review must identify the quiz's source context.");
+  assert(html.includes("From Open Music Theory"), "Review must identify the quiz's source context.");
   assert(!html.includes(knowledgeSummary), "Review must not render the knowledge-card summary.");
   assert(!html.includes("The source defines the interval class"), "Review must not render an explanation before an answer.");
   assert(html.includes("data-review-question=\"question-1\""), "Review must render the paired question container.");
@@ -161,21 +161,18 @@ Deno.test("Review renders ordered blank inputs without revealing answers", async
   assert(!html.includes("dominant") && !html.includes("tonic"), "The pre-attempt view must not reveal answers.");
 });
 
-Deno.test("Review renders exactly one keyboard-operable choice and one fill-blank variant without answer keys", async () => {
-  const paired = { ...review, questions: [{ ...review.questions[0], pairedVariants: [
-    { id: "choice-v1", kind: "single-choice", prompt: "Which interval spans six semitones?", choices: [{ id: "tritone", label: "Tritone" }, { id: "octave", label: "Octave" }], blanks: null },
-    { id: "fill-v1", kind: "fill-blank", prompt: "A six-semitone interval is a ____.", choices: null, blanks: [{ id: "blank-1" }] },
-  ] }] };
-  const controller = createLearnerController({ fetch: async () => response({ result: paired }), baseUrl: "https://app.example.test/", timeoutMs: 1_000, escapeHtml: (value) => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "id-1", onChange: () => {} });
-  const loaded = await controller.loadReview();
-  assert(loaded.ok, "The answer-hidden server pair must load.");
+Deno.test("Review renders separate keyboard-operable choice and fill-blank cards with Skip on each", async () => {
+  const separate = { ...review, batch: { ...review.batch, itemIds: ["choice-v1", "fill-v1"] }, questions: [
+    { ...review.questions[0], questionId: "choice-v1", pairedVariants: null },
+    { ...review.questions[0], questionId: "fill-v1", kind: "fill-blank", prompt: "A six-semitone interval is a ____.", choices: null, blanks: [{ id: "blank-1" }], pairedVariants: null },
+  ] };
+  const controller = createLearnerController({ fetch: async () => response({ result: separate }), baseUrl: "https://app.example.test/", timeoutMs: 1_000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "id-1", onChange: () => {} });
+  assert((await controller.loadReview()).ok, "The independent answer-hidden questions must load.");
   const html = controller.renderReview();
-  assert((html.match(/<fieldset\b/gu) ?? []).length === 2, "The learner must see exactly two separately labelled variant groups.");
-  assert(html.includes("Which interval spans six semitones?"), "The MCQ prompt must be visible.");
-  assert(html.includes("A six-semitone interval is a ____.") && html.includes("Blank 1"), "The fill-blank prompt and distinct blank label must be visible.");
-  assert(html.includes('type="radio" name="selectedChoiceIds"') && html.includes('name="pairedBlank:blank-1" size="28"'), "Single-choice and comfortably sized typed responses must use native controls.");
-  assert(html.includes("Check both answers"), "The pair is submitted together.");
-  assert(!html.includes("correctChoiceIds") && !html.includes("acceptedAnswers") && !html.includes("A tritone spans six semitones."), "No grading key or explanation may appear before an attempt.");
+  assert((html.match(/data-learner-review-question=/gu) ?? []).length === 2, "Each question gets its own form.");
+  assert(html.includes('type="radio" name="selectedChoiceIds"') && html.includes('name="blank:blank-1"'), "Both input kinds use native controls.");
+  assert((html.match(/>Check answer</gu) ?? []).length === 2 && (html.match(/>Skip</gu) ?? []).length === 2, "Each question can be answered or skipped independently.");
+  assert(!html.includes("correctChoiceIds") && !html.includes("acceptedAnswers") && !html.includes("Source explanation"), "No feedback appears before an answer or Skip.");
 });
 
 Deno.test("Review empty state contains no knowledge-card content", async () => {
@@ -355,7 +352,7 @@ Deno.test("separate typed quiz cards show failed corrections outside Source expl
       const controller = createLearnerController({ fetch: async (input, options) => {
         if (String(input).endsWith("/answer")) {
           const command = JSON.parse(String(options?.body));
-          assert(command.blankAnswers[0].text === "home note" && command.pairedBlankAnswers === null, "Only this card's response is submitted.");
+          assert(command.blankAnswers[0].text === "home note" && !Object.hasOwn(command, "pairedBlankAnswers"), "Only this card's response is submitted.");
           return response({ result: { correct, score, completed: true, nextDueAt: "2026-09-02T12:00:00.000Z", feedback: { correctAnswer: "tonic", explanation: "Source explanation of the tonal center.", components: [{ id: "blank-1", correct, correctAnswer: "tonic" }] } } });
         }
         return response({ result: projection });
@@ -377,5 +374,51 @@ Deno.test("separate typed quiz cards show failed corrections outside Source expl
   } finally {
     if (originalForm) Object.defineProperty(globalThis, "HTMLFormElement", originalForm); else Reflect.deleteProperty(globalThis, "HTMLFormElement");
     if (originalData) Object.defineProperty(globalThis, "FormData", originalData);
+  }
+});
+
+
+Deno.test("Skip reveals feedback without an answer or progress request, handles retry and survives reload", async () => {
+  const originalElement = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement");
+  class Button {
+    dataset = { questionId: "question-1" };
+    /** @type {(() => void) | null} */ click = null;
+    /** @param {string} _name @param {() => void} callback */
+    addEventListener(_name, callback) { this.click = callback; }
+  }
+  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: Button });
+  try {
+    let calls = 0, failed = true, revealed = false;
+    /** @type {string[]} */ const paths = [];
+    /** @type {(value:Response) => void} */ let settle = () => {};
+    const skip = { questionId: "question-1", completed: true, feedback: { correctAnswer: "Tritone", explanation: "A tritone spans six semitones." } };
+    const controller = createLearnerController({ fetch: async input => {
+      const path = String(input); paths.push(path);
+      if (path.endsWith("/skip")) { calls++; return await new Promise(resolve => { settle = resolve; }); }
+      return response({ result: { ...review, batch: { ...review.batch, status: revealed ? "completed" : "open" }, skipped: revealed ? [skip] : [] } });
+    }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", onChange: () => {} });
+    await controller.loadReview();
+    const button = new Button();
+    controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-action='skip-review']" ? [button] : [] })));
+    for (const succeed of [false, true]) {
+      button.click?.(); button.click?.();
+      assert(calls === (failed ? 1 : 2), "Duplicate pending clicks send one Skip request.");
+      assert(controller.renderReview().includes('aria-busy="true"') && controller.renderReview().includes("Loading…"), "Pending Skip has visible feedback.");
+      settle(succeed ? response({ result: skip }) : new Response(JSON.stringify({ error: "LearningBatchPersistenceFailed" }), { status: 503 }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (!succeed) {
+        assert(controller.renderReview().includes('role="alert"') && controller.renderReview().includes(">Skip<") && !controller.renderReview().includes("Correct answer:"), "Failure retains an unanswered, retryable card.");
+        failed = false;
+      }
+    }
+    const html = controller.renderReview();
+    assert(html.includes("Skipped.") && html.includes("Correct answer:</strong> Tritone</p><details"), "Skip reveals the correction immediately without marking correct or incorrect.");
+    assert(html.includes('<summary>Source explanation</summary>') && html.includes("Refresh questions"), "The source drawer and next-batch action remain available.");
+    assert(paths.every(path => !path.includes("/answer") && !path.includes("/progress")), "Skip never submits an answer or refreshes answer-based progress.");
+    revealed = true;
+    await controller.loadReview();
+    assert(controller.renderReview().includes("Skipped.") && controller.renderReview().includes("Correct answer:</strong> Tritone"), "A reload restores skipped feedback.");
+  } finally {
+    if (originalElement) Object.defineProperty(globalThis, "HTMLElement", originalElement); else Reflect.deleteProperty(globalThis, "HTMLElement");
   }
 });

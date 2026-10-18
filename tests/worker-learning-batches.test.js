@@ -48,8 +48,8 @@ class Database {
   async first(query, bindings = []) {
     if (query.includes("FROM learner_feed_batches")) return null;
     if (query.includes("FROM learner_review_batches")) return this.reviewRow;
-    if (query.includes("FROM learner_batch_commands")) { const result = this.commandResults.get(String(bindings[1])); return result === undefined ? null : { result_json: result }; }
     if (query.includes("COUNT(*)") && this.answerCount !== null) return { count: this.answerCount };
+    if (query.includes("FROM learner_batch_commands")) { const result = this.commandResults.get(String(bindings[1])); return result === undefined ? null : { result_json: result }; }
     return null;
   }
   /** @param {readonly Statement[]} statements */
@@ -225,7 +225,7 @@ Deno.test("learner D1 answer returns the stored explanation and correct choice o
   const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: ["choice-1"], answerText: null, blankAnswers: null, confidence: 80, idempotencyKey: "answer-1" });
   const persisted = database.written.find(s => s.query.startsWith("INSERT INTO learner_review_answers"));
   assertEquals(persisted?.query.includes("confidence"), false);
-  assertEquals(JSON.stringify(persisted?.bindings.slice(7)), JSON.stringify(["knowledge-0", 1, null]));
+  assertEquals(JSON.stringify(persisted?.bindings.slice(7, 10)), JSON.stringify(["knowledge-0", 1, null]));
   assertEquals(result.ok, true);
   if (!result.ok) return;
   const answer = /** @type {{ readonly feedback: { readonly explanation: string, readonly correctAnswer: string } }} */ (result.value);

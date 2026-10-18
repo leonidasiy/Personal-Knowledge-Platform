@@ -2,7 +2,7 @@ import {waitForTransientRetry} from './retry.js';
 // @ts-check
 import {AgentExecutionBoundaryFailure} from './harness.js';
 
-import { validateAssembledQuizPair } from "./quiz-pair.js";
+import { limitChoiceOptions, normalizeAssembledQuizPairLimits, validateAssembledQuizPair } from "./quiz-pair.js";
 
 /** @template T, E @typedef {{ readonly ok: true, readonly value: T } | { readonly ok: false, readonly error: E }} Result */
 /** @typedef {import("./extraction.js").KnowledgePoint} KnowledgePoint */
@@ -119,8 +119,38 @@ function quizKind(value) { return typeof value === "string" && acceptedKinds.has
 /** @param {unknown} value @returns {value is QuestionDraft} */
 function validDraft(value) {
   if (record(value) && value.explanation !== undefined && (!text(value.explanation) || value.explanation.length > 4000)) return false;
-  if (record(value) && value.blanks !== undefined && (!Array.isArray(value.blanks) || value.blanks.length < 2 || value.blanks.length > 4 || value.blanks.some((blank, index) => !record(blank) || blank.id !== `blank-${index + 1}` || !Array.isArray(blank.acceptedAnswers) || blank.acceptedAnswers.length === 0 || !blank.acceptedAnswers.every(text)))) return false;
+  if (record(value) && value.blanks !== undefined && (!Array.isArray(value.blanks) || value.blanks.length < 2 || value.blanks.some((blank, index) => !record(blank) || blank.id !== `blank-${index + 1}` || !Array.isArray(blank.acceptedAnswers) || blank.acceptedAnswers.length === 0 || !blank.acceptedAnswers.every(text)))) return false;
   return record(value) && text(value.id) && text(value.knowledgeId) && positiveInteger(value.knowledgeRevision) && quizKind(value.kind) && text(value.prompt) && Array.isArray(value.options) && value.options.every(text) && Array.isArray(value.citedEvidenceUrls) && value.citedEvidenceUrls.length > 0 && value.citedEvidenceUrls.every(text) && ((typeof value.answer === "string" && text(value.answer)) || (Array.isArray(value.answer) && value.answer.length > 0 && value.answer.every(text)));
+}
+
+/** Enforce the response burden again on verified drafts before publication; never mutate stored raw evidence.
+ * @param {unknown} value @param {()=>number} [random] @returns {unknown}
+ */
+export function normalizeQuizDraftLimits(value, random = Math.random) {
+  if (!validDraft(value)) return value;
+  if (value.pairedQuiz !== undefined) {
+    const pair = normalizeAssembledQuizPairLimits(value.pairedQuiz, random);
+    if (!validateAssembledQuizPair(pair)) return value;
+    if (pair === value.pairedQuiz) return value;
+    const correct = pair.multipleChoice.correctOptionKeys.map(key => pair.multipleChoice.options.find(option => option.key === key)?.text);
+    return { ...value, kind: pair.multipleChoice.kind, prompt: pair.multipleChoice.prompt, options: pair.multipleChoice.options.map(option => option.text), answer: pair.multipleChoice.kind === "single-choice" ? correct[0] : correct, explanation: pair.multipleChoice.explanation, pairedQuiz: pair };
+  }
+  if (value.kind === "single-choice" || value.kind === "multiple-choice") {
+    if (value.kind === "single-choice" && typeof value.answer !== "string" || value.kind === "multiple-choice" && !Array.isArray(value.answer)) return value;
+    const answers = typeof value.answer === "string" ? [value.answer] : value.answer;
+    if (new Set(answers).size !== answers.length || answers.some(answer => !value.options.includes(answer))) return value;
+    const removed = answers.slice(3);
+    const kept = answers.slice(0, 3);
+    const options = limitChoiceOptions(value.options.filter(option => !removed.includes(option)).map(key => ({ key })), kept, random).map(option => option.key);
+    return { ...value, options, answer: value.kind === "single-choice" ? value.answer : kept };
+  }
+  if (value.kind === "fill-blank" && value.blanks !== undefined && value.blanks.length > 3 && Array.isArray(value.answer) && value.answer.length === value.blanks.length && value.blanks.every((blank, index) => blank.acceptedAnswers[0] === value.answer[index]) && (value.prompt.match(/_{2,}/gu) ?? []).length === value.blanks.length) {
+    let position = 0;
+    const blanks = value.blanks;
+    const prompt = value.prompt.replace(/_{2,}/gu, () => { const index = position++; return index < 3 ? "____" : blanks[index].acceptedAnswers[0]; });
+    return { ...value, prompt, answer: value.answer.slice(0, 3), blanks: blanks.slice(0, 3) };
+  }
+  return value;
 }
 
 /** @param {unknown} value @returns {value is { readonly score: number, readonly reasons: readonly string[], readonly feedback: string, readonly groundingProblems: readonly string[], readonly knowledgeGroundingProblems?: readonly string[] }} */
@@ -162,10 +192,10 @@ function validateGrounding(draft, knowledge) {
   if (draft.citedEvidenceUrls.some((url) => !evidence.has(url))) return { kind: "QuizDraftUngrounded" };
   if (draft.pairedQuiz !== undefined && (!validateAssembledQuizPair(draft.pairedQuiz) || draft.pairedQuiz.citedEvidenceUrls.length === 0 || draft.pairedQuiz.citedEvidenceUrls.some((url) => !evidence.has(url)) || draft.kind !== draft.pairedQuiz.multipleChoice.kind || draft.prompt !== draft.pairedQuiz.multipleChoice.prompt)) return { kind: "QuizDraftSchemaInvalid" };
   if (new Set(draft.options.map((option) => option.normalize("NFKC").trim().toLocaleLowerCase())).size !== draft.options.length) return { kind: "QuizDraftSchemaInvalid" };
-  if (draft.kind === "single-choice" && (draft.options.length < 2 || typeof draft.answer !== "string" || !draft.options.includes(draft.answer))) return { kind: "QuizDraftSchemaInvalid" };
-  if (draft.kind === "multiple-choice" && (draft.options.length < 2 || !Array.isArray(draft.answer) || draft.answer.length >= draft.options.length || new Set(draft.answer).size !== draft.answer.length || draft.answer.some((answer) => !draft.options.includes(answer)))) return { kind: "QuizDraftSchemaInvalid" };
+  if (draft.kind === "single-choice" && (draft.options.length < 2 || draft.options.length > 5 || typeof draft.answer !== "string" || !draft.options.includes(draft.answer))) return { kind: "QuizDraftSchemaInvalid" };
+  if (draft.kind === "multiple-choice" && (draft.options.length < 2 || draft.options.length > 5 || !Array.isArray(draft.answer) || draft.answer.length > 3 || draft.answer.length >= draft.options.length || new Set(draft.answer).size !== draft.answer.length || draft.answer.some((answer) => !draft.options.includes(answer)))) return { kind: "QuizDraftSchemaInvalid" };
   if (draft.kind === "fill-blank") {
-    if (draft.options.length !== 0 || (draft.blanks !== undefined && (!Array.isArray(draft.answer) || draft.answer.length !== draft.blanks.length || draft.blanks.some((blank, index) => blank.acceptedAnswers[0] !== draft.answer[index]) || (draft.prompt.match(/_{2,}/gu) ?? []).length !== draft.blanks.length))) return { kind: "QuizDraftSchemaInvalid" };
+    if (draft.options.length !== 0 || (draft.blanks !== undefined && (draft.blanks.length > 3 || !Array.isArray(draft.answer) || draft.answer.length !== draft.blanks.length || draft.blanks.some((blank, index) => blank.acceptedAnswers[0] !== draft.answer[index]) || (draft.prompt.match(/_{2,}/gu) ?? []).length !== draft.blanks.length))) return { kind: "QuizDraftSchemaInvalid" };
   } else if (draft.blanks !== undefined) return { kind: "QuizDraftSchemaInvalid" };
   return null;
 }
@@ -183,7 +213,7 @@ function publicationStatus(_ownerId, _knowledge, _draft, _policy) {
 /** @param {QuizFailure} failure @param {QuizDependencies} dependencies @param {string} runId @param {string | undefined} knowledgeId @returns {Result<never, QuizFailure>} */
 function fail(failure, dependencies, runId, knowledgeId) { dependencies.logger({ event: "quiz-actor-critic-failure", runId, knowledgeId, failureKind: failure.kind }); return { ok: false, error: failure }; }
 
-const draftRepairFeedback = "Regenerate a schema-valid draft using only the knowledge point's cited support. For a paired quiz, canonicalAnswers, correctOptionKeys, correctOptionAnswers and fillBlank.blanks must have equal counts and corresponding order: one unique correct key per answer and blank, with exactly the same answer text in canonicalAnswers, correctOptionAnswers.canonicalAnswer, fillBlank.blanks.canonicalAnswer and acceptedAnswers[0]. Each blank must ask for that actual answer, not a subset or combined phrase. Within each acceptedAnswers list, the exact canonical answer alone is sufficient. Synonyms are optional; include the exact canonical answer first and only distinct legitimate synonyms, never cosmetic glyph or Unicode variants that normalize to an existing entry. All entries must be unique after Unicode NFKC normalization, trimming, case folding and collapsing whitespace. Capitalization, compatibility-character and whitespace variants are duplicates, not extra aliases.";
+const draftRepairFeedback = "Regenerate a schema-valid draft with at most five options per MCQ, at most three correct multi-select options and at most three fill-blank entries, using only the knowledge point's cited support. For a paired quiz, canonicalAnswers, correctOptionKeys, correctOptionAnswers and fillBlank.blanks must have equal counts and corresponding order: one unique correct key per answer and blank, with exactly the same answer text in canonicalAnswers, correctOptionAnswers.canonicalAnswer, fillBlank.blanks.canonicalAnswer and acceptedAnswers[0]. Each blank must ask for that actual answer, not a subset or combined phrase. Within each acceptedAnswers list, the exact canonical answer alone is sufficient. Synonyms are optional; include the exact canonical answer first and only distinct legitimate synonyms, never cosmetic glyph or Unicode variants that normalize to an existing entry. All entries must be unique after Unicode NFKC normalization, trimming, case folding and collapsing whitespace. Capitalization, compatibility-character and whitespace variants are duplicates, not extra aliases.";
 
 /** @param {unknown} error @returns {error is QuizTechnicalFailure} */
 function retryableTechnicalFailure(error) {
@@ -264,6 +294,7 @@ export function createQuizActorCritic(dependencies) {
           attempts = attempt;
           /** @type {string|null} */ let technicalFeedback=feedback;
           /** @type {Result<QuestionDraft,QuizFailure>} */ const generated=await technicalCall(technicalAttempt=>dependencies.generator.generate({knowledge,attempt,technicalAttempt,feedback:technicalFeedback}),value=>{
+            value = normalizeQuizDraftLimits(value);
             if(!validDraft(value))return {ok:false,error:{kind:"QuizDraftSchemaInvalid"}};
             const invalid=validateGrounding(value,knowledge);
             return invalid?.kind==="QuizDraftSchemaInvalid"?{ok:false,error:invalid}:{ok:true,value};

@@ -287,6 +287,69 @@ export function createLearningBatchService(dependencies) {
     }
   }
 
+  /** @param {string} ownerId @param {string} batchId */
+  async function reviewSkips(ownerId, batchId) {
+    const rows = await database.prepare("SELECT result_json FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-skip' AND json_extract(result_json, '$.batchId') = ?").bind(ownerId, batchId).all();
+    if (!rows.success || !Array.isArray(rows.results)) throw new Error("Review skips unavailable");
+    /** @type {Map<string, {batchId:string,questionId:string,completed:boolean,feedback:{explanation:string,correctAnswer:string}}>} */
+    const skipped = new Map();
+    for (const row of rows.results) {
+      if (!record(row) || !text(row.result_json)) throw new Error("Review skip invalid");
+      const result = JSON.parse(row.result_json);
+      if (!record(result) || result.batchId !== batchId || !text(result.questionId) || typeof result.completed !== "boolean" || !record(result.feedback) || !text(result.feedback.explanation) || !text(result.feedback.correctAnswer)) throw new Error("Review skip invalid");
+      skipped.set(result.questionId, /** @type {{batchId:string,questionId:string,completed:boolean,feedback:{explanation:string,correctAnswer:string}}} */ (result));
+    }
+    return skipped;
+  }
+
+  /** @param {string} ownerId @param {BatchRow} batch @param {string} now */
+  async function completeReview(ownerId, batch, now) {
+    const count = await database.prepare("SELECT COUNT(*) AS count FROM (SELECT question_id FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? UNION SELECT json_extract(result_json, '$.questionId') AS question_id FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-skip' AND json_extract(result_json, '$.batchId') = ?) WHERE question_id IN (SELECT value FROM json_each(?))").bind(ownerId, batch.batchId, ownerId, batch.batchId, JSON.stringify(batch.itemIds)).first();
+    if (!record(count) || !nonNegativeInteger(count.count)) throw new Error("Review completion unavailable");
+    if (count.count !== batch.itemIds.length) return false;
+    const closed = await database.prepare("UPDATE learner_review_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open'").bind(now, ownerId, batch.batchId).run();
+    if (!closed.success) throw new Error("Review completion unavailable");
+    return true;
+  }
+
+  /** @param {unknown} command @returns {Promise<Result<unknown>>} */
+  async function skipReview(command) {
+    if (!record(command) || !text(command.ownerId) || !text(command.batchId) || !text(command.questionId) || !text(command.idempotencyKey) || !positiveInteger(command.questionRevision)) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+    try {
+      const skipped = await reviewSkips(command.ownerId, command.batchId);
+      const replay = skipped.get(command.questionId);
+      const batch = parseBatch(await database.prepare("SELECT batch_id, learning_day, status, question_ids_json AS item_ids_json, revision, created_at, completed_at FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? LIMIT 1").bind(command.ownerId, command.batchId).first(), true);
+      if (batch === null || !batch.itemIds.includes(command.questionId)) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      if (replay) return { ok: true, value: { ...replay, completed: await completeReview(command.ownerId, batch, dependencies.now()) } };
+      if (batch.status !== "open") return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      const answered = await database.prepare("SELECT question_id FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?").bind(command.ownerId, command.batchId, command.questionId).first();
+      if (answered !== null) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      const all = await candidates(command.ownerId, dependencies.now());
+      if (!all.ok) return all;
+      const candidate = separateQuestions(all.value).find(item => item.questionId === command.questionId);
+      if (!candidate || candidate.studiedAt === null) return { ok: false, error: { kind: "KnowledgePairNotFound" } };
+      if (candidate.question.revision !== command.questionRevision) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      const answer = correctAnswer(candidate.question);
+      if (answer === null) return { ok: false, error: { kind: "ReviewAnswerNotSupported" } };
+      const now = dependencies.now();
+      if (!iso(now)) return { ok: false, error: { kind: "LearningBatchClockInvalid" } };
+      const result = { batchId: command.batchId, questionId: command.questionId, completed: false, feedback: { correctAnswer: answer, explanation: candidate.question.explanation } };
+      const written = await database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) SELECT ?, ?, 'review-skip', ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? AND status = 'open') AND NOT EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?) AND NOT EXISTS (SELECT 1 FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-skip' AND json_extract(result_json, '$.batchId') = ? AND json_extract(result_json, '$.questionId') = ?)").bind(command.ownerId, command.idempotencyKey, JSON.stringify(result), now, command.ownerId, command.batchId, command.ownerId, command.batchId, command.questionId, command.ownerId, command.batchId, command.questionId).run();
+      if (!changed(written)) {
+        const replay = (await reviewSkips(command.ownerId, command.batchId)).get(command.questionId);
+        return replay ? { ok: true, value: { ...replay, completed: await completeReview(command.ownerId, batch, now) } } : { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      }
+      result.completed = await completeReview(command.ownerId, batch, now);
+      const saved = await database.prepare("UPDATE learner_batch_commands SET result_json = ? WHERE owner_id = ? AND idempotency_key = ?").bind(JSON.stringify(result), command.ownerId, command.idempotencyKey).run();
+      if (!changed(saved)) throw new Error("Review skip result unavailable");
+      dependencies.logger({ event: "learning-review-skipped", ownerId: command.ownerId, batchId: command.batchId });
+      return { ok: true, value: Object.freeze(result) };
+    } catch (error) {
+      dependencies.logger({ event: "learning-review-skip-failure", ownerId: command.ownerId, batchId: command.batchId, failureKind: "LearningBatchPersistenceFailed" });
+      return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+    }
+  }
+
   /** @param {readonly LearnerCandidate[]} all @returns {readonly LearnerCandidate[]} */
   function separateQuestions(all) {
     return all.flatMap(candidate => candidate.question.pairedVariants?.map(variant => ({
@@ -360,6 +423,8 @@ export function createLearningBatchService(dependencies) {
     const byQuestion = new Map(all.map((candidate) => [candidate.questionId, candidate]));
     const selected = batch.itemIds.map((id) => byQuestion.get(id)).filter((candidate) => candidate !== undefined);
     if (selected.length !== batch.itemIds.length) return { ok: false, error: { kind: "KnowledgePairNotFound" } };
+    let skipped;
+    try { skipped = await reviewSkips(ownerId, batch.batchId); } catch (error) { return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } }; }
     const answeredIds = new Set();
     if (batch.status === "open") {
       try {
@@ -371,7 +436,7 @@ export function createLearningBatchService(dependencies) {
         return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
       }
     }
-    return { ok: true, value: Object.freeze({ batch, questions: Object.freeze(selected.filter(candidate => !answeredIds.has(candidate.questionId)).map(publicQuestion)), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
+    return { ok: true, value: Object.freeze({ batch, skipped: Object.freeze([...skipped.values()]), questions: Object.freeze(selected.filter(candidate => !answeredIds.has(candidate.questionId)).map(publicQuestion)), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
@@ -391,6 +456,7 @@ export function createLearningBatchService(dependencies) {
     const batchRowValue = await database.prepare("SELECT batch_id, learning_day, status, question_ids_json AS item_ids_json, revision, created_at, completed_at FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? LIMIT 1").bind(command.ownerId, command.batchId).first();
     const batch = parseBatch(batchRowValue, true);
     if (batch === null || batch.status !== "open" || !batch.itemIds.includes(command.questionId)) return fail("ReviewAnswerNotAllowed");
+    if ((await reviewSkips(command.ownerId, command.batchId)).has(command.questionId)) return fail("ReviewAnswerNotAllowed");
     const knowledge = await candidates(command.ownerId, dependencies.now());
     if (!knowledge.ok) return fail(knowledge.error.kind);
     const all = await reviewCandidates(command.ownerId, knowledge.value);
@@ -430,14 +496,16 @@ export function createLearningBatchService(dependencies) {
       const feedback = { explanation: `${choiceVariant.explanation} ${blankVariant.explanation}`, correctAnswer: `${correctChoiceLabels.join(", ")}; ${fillBlanks.map((blank) => blank.acceptedAnswers[0]).join(", ")}`, components: [{ id: choiceVariant.id, correct: choiceCorrect, correctAnswer: correctChoiceLabels.join(", ") }, ...fillBlanks.map((blank, index) => ({ id: blank.id, correct: blankCorrect[index], correctAnswer: blank.acceptedAnswers[0] }))] };
       const answer = { ownerId: command.ownerId, batchId: command.batchId, questionId: command.questionId, correct, score: correct ? 1 : 0, nextDueAt: dueAt, feedback, completed: false };
       const statements = [
-        database.prepare("INSERT INTO learner_review_answers (owner_id, batch_id, question_id, selected_choice_ids_json, correct, score, answered_at, knowledge_id) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? AND status = 'open')").bind(command.ownerId, command.batchId, command.questionId, JSON.stringify(command.selectedChoiceIds), correct ? 1 : 0, correct ? 1 : 0, now, candidate.knowledgeId, command.ownerId, command.batchId),
+        database.prepare("INSERT INTO learner_review_answers (owner_id, batch_id, question_id, selected_choice_ids_json, correct, score, answered_at, knowledge_id) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? AND status = 'open') AND NOT EXISTS (SELECT 1 FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-skip' AND json_extract(result_json, '$.batchId') = ? AND json_extract(result_json, '$.questionId') = ?)").bind(command.ownerId, command.batchId, command.questionId, JSON.stringify(command.selectedChoiceIds), correct ? 1 : 0, correct ? 1 : 0, now, candidate.knowledgeId, command.ownerId, command.batchId, command.ownerId, command.batchId, command.questionId),
         database.prepare("UPDATE learner_knowledge_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ?, review_count = review_count + 1, updated_at = ? WHERE owner_id = ? AND knowledge_id = ? AND studied_at IS NOT NULL AND EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(correct ? 1 : 0, nextDays, dueAt, now, command.ownerId, candidate.knowledgeId, command.ownerId, command.batchId, command.questionId),
         database.prepare("UPDATE learner_review_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open' AND (SELECT COUNT(*) FROM learner_review_answers WHERE owner_id = ? AND batch_id = ?) = json_array_length(question_ids_json)").bind(now, command.ownerId, command.batchId, command.ownerId, command.batchId),
         database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) SELECT ?, ?, 'review-answer', json_set(?, '$.completed', CASE WHEN (SELECT status FROM learner_review_batches WHERE owner_id = ? AND batch_id = ?) = 'completed' THEN json('true') ELSE json('false') END), ? WHERE EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(command.ownerId, command.idempotencyKey, JSON.stringify(answer), command.ownerId, command.batchId, now, command.ownerId, command.batchId, command.questionId),
       ];
       const written = await database.batch(statements);
       if (written.length !== statements.length || written.some((entry) => !entry.success) || !changed(written[0]) || !changed(written[3])) return fail("LearningBatchPersistenceFailed");
-      const result = Object.freeze({ ...answer, completed: changed(written[2]) });
+      const result = Object.freeze({ ...answer, completed: await completeReview(command.ownerId, batch, now) });
+      const saved = await database.prepare("UPDATE learner_batch_commands SET result_json = ? WHERE owner_id = ? AND idempotency_key = ?").bind(JSON.stringify(result), command.ownerId, command.idempotencyKey).run();
+      if (!changed(saved)) return fail("LearningBatchPersistenceFailed");
       dependencies.logger({ event: "learning-review-answer-success", ownerId: command.ownerId, batchId: command.batchId });
       return { ok: true, value: result };
     }
@@ -479,26 +547,21 @@ export function createLearningBatchService(dependencies) {
     const elapsedDays = lastAttemptAt === null ? null : (Date.parse(now) - Date.parse(lastAttemptAt)) / 86_400_000;
     if (elapsedDays !== null && (!Number.isFinite(elapsedDays) || elapsedDays < 0)) return fail("ProgressDataInvalid");
     const statements = [
-      database.prepare("INSERT INTO learner_review_answers (owner_id, batch_id, question_id, selected_choice_ids_json, correct, score, answered_at, knowledge_id, elapsed_days, previous_correct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(command.ownerId, command.batchId, command.questionId, JSON.stringify(command.selectedChoiceIds), correct ? 1 : 0, score, now, candidate.knowledgeId, elapsedDays, candidate.lastAnswerCorrect === null ? null : candidate.lastAnswerCorrect ? 1 : 0),
-      database.prepare("UPDATE learner_knowledge_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ?, review_count = review_count + 1, updated_at = ? WHERE owner_id = ? AND knowledge_id = ? AND studied_at IS NOT NULL").bind(correct ? 1 : 0, nextDays, dueAt, now, command.ownerId, candidate.knowledgeId),
-      database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) VALUES (?, ?, 'review-answer', ?, ?)").bind(command.ownerId, command.idempotencyKey, JSON.stringify(answer), now),
+      database.prepare("INSERT INTO learner_review_answers (owner_id, batch_id, question_id, selected_choice_ids_json, correct, score, answered_at, knowledge_id, elapsed_days, previous_correct) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? AND status = 'open') AND NOT EXISTS (SELECT 1 FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-skip' AND json_extract(result_json, '$.batchId') = ? AND json_extract(result_json, '$.questionId') = ?)").bind(command.ownerId, command.batchId, command.questionId, JSON.stringify(command.selectedChoiceIds), correct ? 1 : 0, score, now, candidate.knowledgeId, elapsedDays, candidate.lastAnswerCorrect === null ? null : candidate.lastAnswerCorrect ? 1 : 0, command.ownerId, command.batchId, command.ownerId, command.batchId, command.questionId),
+      database.prepare("UPDATE learner_knowledge_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ?, review_count = review_count + 1, updated_at = ? WHERE owner_id = ? AND knowledge_id = ? AND studied_at IS NOT NULL AND EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(correct ? 1 : 0, nextDays, dueAt, now, command.ownerId, candidate.knowledgeId, command.ownerId, command.batchId, command.questionId),
+      database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) SELECT ?, ?, 'review-answer', ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(command.ownerId, command.idempotencyKey, JSON.stringify(answer), now, command.ownerId, command.batchId, command.questionId),
     ];
     if (candidate.pairedQuestionId !== undefined) {
       for (const sibling of separateQuestions(knowledge.value).filter(item => item.pairedQuestionId === candidate.pairedQuestionId)) {
         if (sibling.dueAt === null) return fail("ProgressDataInvalid");
-        statements.push(database.prepare("INSERT INTO learner_question_state (owner_id, question_id, knowledge_id, last_answer_correct, scheduled_days, due_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id, question_id) DO NOTHING").bind(command.ownerId, sibling.questionId, sibling.knowledgeId, sibling.lastAnswerCorrect === null ? null : sibling.lastAnswerCorrect ? 1 : 0, sibling.scheduledDays, sibling.dueAt));
+        statements.push(database.prepare("INSERT INTO learner_question_state (owner_id, question_id, knowledge_id, last_answer_correct, scheduled_days, due_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?) ON CONFLICT(owner_id, question_id) DO NOTHING").bind(command.ownerId, sibling.questionId, sibling.knowledgeId, sibling.lastAnswerCorrect === null ? null : sibling.lastAnswerCorrect ? 1 : 0, sibling.scheduledDays, sibling.dueAt, command.ownerId, command.batchId, command.questionId));
       }
-      statements.push(database.prepare("UPDATE learner_question_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ? WHERE owner_id = ? AND question_id = ?").bind(correct ? 1 : 0, nextDays, dueAt, command.ownerId, command.questionId));
+      statements.push(database.prepare("UPDATE learner_question_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ? WHERE owner_id = ? AND question_id = ? AND EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(correct ? 1 : 0, nextDays, dueAt, command.ownerId, command.questionId, command.ownerId, command.batchId, command.questionId));
     }
     const written = await database.batch(statements);
     if (written.length !== statements.length || written.some((entry) => !entry.success)) return fail("LearningBatchPersistenceFailed");
-    const count = await database.prepare("SELECT COUNT(*) AS count FROM learner_review_answers WHERE owner_id = ? AND batch_id = ?").bind(command.ownerId, command.batchId).first();
-    if (!record(count) || !nonNegativeInteger(count.count)) return fail("LearningBatchPersistenceFailed");
-    const completed = count.count === batch.itemIds.length;
-    if (completed) {
-      const closed = await database.prepare("UPDATE learner_review_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open'").bind(now, command.ownerId, command.batchId).run();
-      if (!changed(closed)) return fail("LearningBatchPersistenceFailed");
-    }
+    if (!changed(written[0])) return fail("ReviewAnswerNotAllowed");
+    const completed = await completeReview(command.ownerId, batch, now);
     const result = Object.freeze({ ...answer, completed });
     const savedReplay = await database.prepare("UPDATE learner_batch_commands SET result_json = ? WHERE owner_id = ? AND idempotency_key = ?").bind(JSON.stringify(result), command.ownerId, command.idempotencyKey).run();
     if (!changed(savedReplay)) return fail("LearningBatchPersistenceFailed");
@@ -665,6 +728,7 @@ export function createLearningBatchService(dependencies) {
     loadReview,
     listKnowledge,
     answerReview,
+    skipReview,
     setPreference,
     removeKnowledge,
     removeSource,

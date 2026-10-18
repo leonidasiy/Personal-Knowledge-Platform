@@ -76,6 +76,26 @@ Deno.test("D1 content repository writes scratchpads, knowledge, quiz attempts, r
   assertEquals(fixture.preparedQueries.some((query) => query.includes("DELETE FROM knowledge_workflow_restrictions WHERE owner_id = ? AND run_id = ? AND knowledge_id = ?")), true);
 });
 
+Deno.test("publication rechecks and applies quiz limits after verification before pool insertion", async () => {
+  const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
+  for (const kind of ["single-choice", "multiple-choice", "fill-blank"]) {
+    const fixture = database();
+    const repository = new D1QuizRepository({ database: fixture, logger: () => {}, now: () => "2026-10-18T00:00:00.000Z" });
+    const answers = terms.slice(0, 4);
+    const draft = { id: "draft-limit", knowledgeId: "knowledge-a", knowledgeRevision: 1, kind, prompt: kind === "fill-blank" ? "____ then ____ then ____ then ____." : "Which statements apply?", options: kind === "fill-blank" ? [] : terms, answer: kind === "single-choice" ? "alpha" : answers, ...(kind === "fill-blank" ? { blanks: answers.map((answer, index) => ({ id: `blank-${index + 1}`, acceptedAnswers: [answer] })) } : {}), citedEvidenceUrls: ["https://example.test/a"] };
+    const original = JSON.stringify(draft);
+    const result = await repository.publish({ ownerId: "owner-a", runId: "run-a", knowledge: { id: "knowledge-a", sourceId: "source-a", sourceRevision: 1, summary: "Supported terms.", normalizedHash: "hash-a", evidenceAnchors: [{ url: "https://example.test/a", selector: "#a" }], coverageGoalIds: [], mediaCandidates: [], attribution: { sourceUrl: "https://example.test/a" }, extractionVersion: "v1" }, draft: /** @type {import("../src/features/knowledge-workflows/quiz.js").QuestionDraft} */ (draft), score: 9, attempt: 1, status: "published" });
+    assertEquals(result.ok, true);
+    const bindings = /** @type {(readonly unknown[])[]} */ (fixture.queries);
+    const task = JSON.parse(String(bindings[3][8]));
+    assertEquals((task.choices?.length ?? 0) <= 5, true);
+    assertEquals((task.correctChoiceIds?.length ?? 0) <= 3, true);
+    assertEquals((task.blanks?.length ?? 0) <= 3, true);
+    if (kind === "fill-blank") assertEquals(task.prompt.endsWith("delta."), true);
+    assertEquals(JSON.stringify(draft), original);
+  }
+});
+
 Deno.test("D1 quiz repository detects a duplicate draft for the same source revision", async () => {
   /** @type {string[]} */
   const preparedQueries = [];

@@ -137,8 +137,11 @@ Deno.test("robots denial never invokes raw Worker fetch", async () => {
 
 Deno.test("live quiz prompts enumerate the exact generator and evaluator contracts", () => {
   if (!questionGeneratorPrompt.includes("meaningful complete mapping") || !questionEvaluatorPrompt.includes("arbitrary word-order permutations")) throw new Error("Quiz prompts did not require meaningful distinctions.");
-  if (!questionGeneratorPrompt.includes("two to four blanks") || !questionGeneratorPrompt.includes("acceptedAnswers")) throw new Error("Quiz prompt omitted the supported multi-blank contract.");
+  if (!questionGeneratorPrompt.includes("two or three blanks") || !questionGeneratorPrompt.includes("acceptedAnswers")) throw new Error("Quiz prompt omitted the supported multi-blank contract.");
   if (questionGeneratorPrompt.includes("visibleEvidence")) throw new Error("Quiz prompt requested extraction evidence cues.");
+  assertEquals(questionGeneratorPrompt.includes("at most five"), true);
+  assertEquals(questionEvaluatorPrompt.includes("more than five total options"), true);
+  assertEquals(questionEvaluatorPrompt.includes("more than three blanks"), true);
   for (const field of ["knowledgeId", "knowledgeRevision", "canonicalAnswers", "multipleChoice", "fillBlank", "citedEvidenceUrls"]) {
     if (!questionGeneratorPrompt.includes(field)) throw new Error(`Generator prompt omitted ${field}.`);
   }

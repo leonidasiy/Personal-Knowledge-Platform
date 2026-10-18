@@ -61,6 +61,9 @@ Deno.test("OpenRouter GLM adapter sends bounded JSON-mode requests and parses ty
   assertEquals(body.model, "z-ai/glm-5.3-flash");
   assertEquals((/** @type {{ readonly type: unknown }} */ (body.response_format)).type, "json_object");
   assertEquals(body.stream, false);
+  assertEquals(JSON.stringify(body).includes("at most five choices"), true);
+  assertEquals(JSON.stringify(body).includes("at most three correct choices"), true);
+  assertEquals(JSON.stringify(body).includes("at most three fill-in-the-blank entries"), true);
   assertEquals(JSON.stringify(body).includes("secret-value-must-not-leak"), false);
   assertEquals(JSON.stringify(logs).includes("secret-value-must-not-leak"), false);
 });

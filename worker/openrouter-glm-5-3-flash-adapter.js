@@ -82,7 +82,7 @@ export function createOpenRouterGlm53FlashAdapter(dependencies) {
             messages: [
               {
                 role: "system",
-                content: `${command.value.instruction}\nReturn a JSON object with a tasks array. Do not return prose outside JSON.`,
+                content: `${command.value.instruction}\nEach MCQ must have at most five choices and at most three correct choices. Use at most three fill-in-the-blank entries per question.\nReturn a JSON object with a tasks array. Do not return prose outside JSON.`,
               },
               {
                 role: "user",

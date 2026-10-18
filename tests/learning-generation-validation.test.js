@@ -55,6 +55,25 @@ Deno.test("validation accepts a grounded factual draft and auto-publishes an uns
   assertEquals(result.value[0].provenance, "provider-draft");
 });
 
+Deno.test("all generated MCQs allow at most five options and three correct choices", () => {
+  const choices = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"].map((label, index) => ({ id: `choice-${index}`, label }));
+  const scope = context({ units: [{ id: "unit-a", sourceAnchorIds: ["anchor-a"], text: choices.map(choice => choice.label).join(" ") }] });
+  for (const kind of ["single-choice", "multiple-choice"]) {
+    const correctChoiceIds = kind === "single-choice" ? ["choice-0"] : ["choice-0", "choice-1", "choice-2"];
+    assertEquals(validateDrafts([factualDraft({ kind, choices: choices.slice(0, 5), correctChoiceIds })], scope).ok, true);
+    const limited = validateDrafts([factualDraft({ kind, choices, correctChoiceIds })], scope);
+    assertEquals(limited.ok, true);
+    if (limited.ok) assertEquals(limited.value[0].choices?.length, 5);
+  }
+  const limited = validateDrafts([factualDraft({ kind: "multiple-choice", choices: choices.slice(0, 5), correctChoiceIds: choices.slice(0, 4).map(choice => choice.id) })], scope);
+  assertEquals(limited.ok, true);
+  if (limited.ok) {
+    assertEquals(limited.value[0].correctChoiceIds?.length, 3);
+    assertEquals(limited.value[0].choices?.some(choice => choice.id === "choice-3"), false);
+  }
+  assertEquals(choices.length, 6);
+});
+
 Deno.test("validation applies the versioned 30 percent factual sample and reviews non-factual tasks", () => {
   const sampled = validateDrafts(
     [factualDraft({ id: "task-c" })],

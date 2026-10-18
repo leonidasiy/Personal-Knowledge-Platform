@@ -1,6 +1,6 @@
 // @ts-check
 
-import { QUIZ_MAX_ATTEMPTS } from "../src/features/knowledge-workflows/quiz.js";
+import { normalizeQuizDraftLimits, QUIZ_MAX_ATTEMPTS } from "../src/features/knowledge-workflows/quiz.js";
 import { quoteHash } from "./webpage-citations.js";
 import { parseClassification } from "../src/features/knowledge-subjects/public.js";
 import { validateAssembledQuizPair } from "../src/features/knowledge-workflows/quiz-pair.js";
@@ -328,6 +328,9 @@ export class D1QuizRepository {
 
   /** @param {{ readonly ownerId: string, readonly runId: string, readonly knowledge: KnowledgePoint, readonly draft: QuestionDraft, readonly score: number, readonly attempt: number, readonly status: "published" | "pending-review" }} command @returns {Promise<ContentResult | { readonly ok: false, readonly error: { readonly kind: "QuizDuplicate" } }>} */
   async publish(command) {
+    const limited = normalizeQuizDraftLimits(command?.draft);
+    if (!isDraft(limited)) return { ok: false, error: { kind: "QuizPublicationFailed" } };
+    command = { ...command, draft: limited };
     const fingerprint = draftFingerprint(command?.draft);
     if (!text(command?.ownerId) || !text(command.runId) || !isKnowledgePoint(command.knowledge) || !isDraft(command.draft) || fingerprint === null || !Number.isInteger(command.score) || command.score < 8 || command.score > 10 || !positiveInteger(command.attempt) || (command.status !== "published" && command.status !== "pending-review")) return { ok: false, error: { kind: "QuizPublicationFailed" } };
     try {
@@ -447,18 +450,18 @@ function isDraft(value) {
   if (value.pairedQuiz !== undefined && (!validateAssembledQuizPair(value.pairedQuiz) || value.kind !== value.pairedQuiz.multipleChoice.kind || value.prompt !== value.pairedQuiz.multipleChoice.prompt || value.knowledgeId === "")) return false;
   if (!text(value.answer) && !(Array.isArray(value.answer) && value.answer.length > 0 && value.answer.every(text))) return false;
   const options = value.options;
-  if (value.kind === "single-choice" && (options.length < 2 || typeof value.answer !== "string" || !options.includes(value.answer))) return false;
-  if (value.kind === "multiple-choice" && (!Array.isArray(value.answer) || value.answer.length >= options.length || new Set(value.answer).size !== value.answer.length || value.answer.some((answer) => !options.includes(answer)))) return false;
+  if (value.kind === "single-choice" && (options.length < 2 || options.length > 5 || typeof value.answer !== "string" || !options.includes(value.answer))) return false;
+  if (value.kind === "multiple-choice" && (options.length > 5 || !Array.isArray(value.answer) || value.answer.length > 3 || value.answer.length >= options.length || new Set(value.answer).size !== value.answer.length || value.answer.some((answer) => !options.includes(answer)))) return false;
   if (value.kind === "fill-blank" && options.length !== 0) return false;
   if (value.blanks === undefined) return true;
-  if (value.kind !== "fill-blank" || !Array.isArray(value.answer) || !Array.isArray(value.blanks) || value.blanks.length < 2 || value.blanks.length > 4 || value.blanks.length !== value.answer.length || (value.prompt.match(/_{2,}/gu) ?? []).length !== value.blanks.length) return false;
+  if (value.kind !== "fill-blank" || !Array.isArray(value.answer) || !Array.isArray(value.blanks) || value.blanks.length < 2 || value.blanks.length > 3 || value.blanks.length !== value.answer.length || (value.prompt.match(/_{2,}/gu) ?? []).length !== value.blanks.length) return false;
   const blanks = value.blanks;
   const answers = value.answer;
   return blanks.every((blank, index) => isRecord(blank) && blank.id === `blank-${index + 1}` && Array.isArray(blank.acceptedAnswers) && blank.acceptedAnswers.length > 0 && blank.acceptedAnswers.every(text) && blank.acceptedAnswers[0] === answers[index]);
 }
 
 /** @param {unknown} draft @returns {string | null} */
-function draftFingerprint(draft) {
+export function draftFingerprint(draft) {
   if (!isDraft(draft)) return null;
   const answer = Array.isArray(draft.answer) ? [...draft.answer].sort() : draft.answer;
   const canonical = JSON.stringify({ kind: draft.kind, prompt: draft.prompt.trim(), options: [...draft.options], answer, blanks: draft.blanks, pairedQuiz: draft.pairedQuiz ?? null, citedEvidenceUrls: [...draft.citedEvidenceUrls].sort() });
