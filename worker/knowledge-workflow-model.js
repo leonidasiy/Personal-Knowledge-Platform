@@ -26,6 +26,37 @@ function positiveInteger(value) { return typeof value === "number" && Number.isS
 /** @param {unknown} value @returns {value is number} */
 function nonNegativeInteger(value) { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
 
+/** Factor only redundant conjunctions at the wire boundary; durable call identities retain the original schema.
+ * @param {KnowledgeResponseSchema} definition @returns {KnowledgeResponseSchema} */
+function compactReviewSchema(definition) {
+  if (definition.name !== "knowledge_quality_review_v11") return definition;
+  const schema = structuredClone(definition.schema);
+  /** @param {unknown} node */
+  function visit(node) {
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (!record(node)) return;
+    if (node.type === "object" && record(node.properties) && Array.isArray(node.anyOf)) {
+      const properties = node.properties;
+      for (const branch of node.anyOf) {
+        if (!record(branch) || branch.type !== "object" || !record(branch.properties)) continue;
+        delete branch.type;
+        if (JSON.stringify(branch.required) === JSON.stringify(node.required)) delete branch.required;
+        if (branch.additionalProperties === false && node.additionalProperties === false && JSON.stringify(Object.keys(branch.properties).sort()) === JSON.stringify(Object.keys(properties).sort())) delete branch.additionalProperties;
+        for (const [key, constraints] of Object.entries(branch.properties)) {
+          const inherited = properties[key];
+          if (!record(constraints) || !record(inherited)) continue;
+          for (const [name, value] of Object.entries(constraints)) {
+            if (JSON.stringify(value) === JSON.stringify(inherited[name])) delete constraints[name];
+          }
+        }
+      }
+    }
+    for (const [key, child] of Object.entries(node)) if (key !== "enum" && key !== "const") visit(child);
+  }
+  visit(schema);
+  return { ...definition, schema };
+}
+
 /** Shared wire contract for the model adapter, evaluation roles and billed transport.
  * @param {unknown} value @returns {value is KnowledgeModelProvider} */
 export function isKnowledgeModelProvider(value) {
@@ -170,6 +201,7 @@ export function createOpenRouterKnowledgeModel(dependencies) {
       if (!text(serializedInput) || serializedInput.length > dependencies.maximumInputCharacters) return fail({ kind: "KnowledgeModelCommandInvalid", field: "input" }, dependencies, /** @type {KnowledgeModelRole} */ (input.role), startedAt);
       if (apiKey === null || apiKey.trim() === "") return fail({ kind: "KnowledgeModelCredentialMissing" }, dependencies, /** @type {KnowledgeModelRole} */ (input.role), startedAt);
       const command = /** @type {KnowledgeModelTransportCommand} */ (input);
+      const responseSchema = command.responseSchema === undefined ? undefined : compactReviewSchema(command.responseSchema);
       dependencies.logger({ event: "knowledge-model-entry", role: command.role, phase: command.phase });
       const controller = new AbortController();
       const timeoutMs = command.timeoutMs ?? dependencies.timeoutMs;
@@ -189,7 +221,7 @@ export function createOpenRouterKnowledgeModel(dependencies) {
         response = await dependencies.fetch(endpoint, {
           method: "POST",
           headers: { accept: "application/json", "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({ model: dependencies.model, messages: [{ role: "system", content: `${command.systemPrompt}${protocol&&command.responseSchema?`\nRequired full local JSON schema (${command.responseSchema.name}); satisfy ALL fields, bounds, uniqueness and domain constraints: ${JSON.stringify(command.responseSchema.schema)}`:""}\nReturn only one JSON object. Do not include prose outside JSON.` }, { role: "user", content: command.attachments === undefined ? `<task_input>\n${serializedInput}\n</task_input>` : [{ type: "text", text: `<task_input>\n${serializedInput}\n</task_input>` }, ...imageBlocks(command.attachments)] }], response_format: protocol?.responseFormat === "json_object" || command.responseSchema === undefined ? { type: "json_object" } : { type: "json_schema", json_schema: { name: command.responseSchema.name, strict: true, schema: command.responseSchema.schema } }, ...(protocol?{provider:protocol.provider}:command.responseSchema === undefined ? {} : { provider: command.role === "question-evaluator" ? { require_parameters: true, allow_fallbacks: true } : { sort: command.providerSort ?? "throughput", require_parameters: true } }), ...((protocol?.reasoningEffort ?? command.reasoningEffort) === undefined ? {} : { reasoning: { effort: protocol?.reasoningEffort ?? command.reasoningEffort } }), max_tokens: protocol?.maximumOutputTokens===undefined?command.maxOutputTokens:Math.min(command.maxOutputTokens,protocol.maximumOutputTokens), stream: false }),
+          body: JSON.stringify({ model: dependencies.model, messages: [{ role: "system", content: `${command.systemPrompt}${protocol?.responseFormat==="json_object"&&responseSchema?`\nRequired full local JSON schema (${responseSchema.name}); satisfy ALL fields, bounds, uniqueness and domain constraints: ${JSON.stringify(responseSchema.schema)}`:""}\nReturn only one JSON object. Do not include prose outside JSON.` }, { role: "user", content: command.attachments === undefined ? `<task_input>\n${serializedInput}\n</task_input>` : [{ type: "text", text: `<task_input>\n${serializedInput}\n</task_input>` }, ...imageBlocks(command.attachments)] }], response_format: protocol?.responseFormat === "json_object" || responseSchema === undefined ? { type: "json_object" } : { type: "json_schema", json_schema: { name: responseSchema.name, strict: true, schema: responseSchema.schema } }, ...(protocol?{provider:protocol.provider}:responseSchema === undefined ? {} : { provider: command.role === "question-evaluator" ? { require_parameters: true, allow_fallbacks: true } : { sort: command.providerSort ?? "throughput", require_parameters: true } }), ...((protocol?.reasoningEffort ?? command.reasoningEffort) === undefined ? {} : { reasoning: { effort: protocol?.reasoningEffort ?? command.reasoningEffort } }), max_tokens: protocol?.maximumOutputTokens===undefined?command.maxOutputTokens:Math.min(command.maxOutputTokens,protocol.maximumOutputTokens), stream: false }),
           signal: requestSignal,
         });
         if(requestSignal.aborted)return aborted("fetch");
