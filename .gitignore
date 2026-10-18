@@ -1,6 +1,7 @@
 .DS_Store
 .agents/
 .codex/
+.impeccable/
 .dev.vars*
 .env*
 .deno/
@@ -19,10 +20,28 @@ dist.tmp-*/
 logs/
 node_modules/
 playwright-report/
+.playwright/
 test-results/
 /.playwright-cli/
 /output/
 /skills-lock.json
+/skills/
+/artifacts/
+
+# Local editor state and runtime data; never distribute a learner's database.
+.idea/
+.vscode/
+*.log
+*.tsbuildinfo
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-wal
+*.db-shm
 
 # Internal documentation and its dedicated checks stay local.
 /AGENTS.md
@@ -30,6 +49,8 @@ test-results/
 /SELF_IMPROVEMENT.md
 /PROCESS.history-*.md
 /INDEPENDENT-REVIEW.md
+/DESIGN.md
+/todo.md
 __pycache__/
 /docs/
 /documentations/
@@ -38,5 +59,7 @@ __pycache__/
 /scripts/check-frontend-showcase.mjs
 
 # Personal deployment configuration; distribute only the placeholder template.
+/wrangler.jsonc
 /wrangler.self-host.jsonc
 /wrangler.acquisition.jsonc
+/worker/seeds/0001_personal_music.sql

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-18 repository cleanup
+
+- Excluded local agent/design tools, internal notes, generated validation reports,
+  editor/runtime state and personal Cloudflare configuration from Git.
+- Kept local copies and complete public setup inputs. Deployment/seed checks now
+  use the public templates instead of requiring the maintainer's local files.
+
 ## 2026-10-18 unused ZIP dependency removal
 
 - Replaced Cloudflare Puppeteer's unused browser-helper dependency with upstream

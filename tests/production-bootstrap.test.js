@@ -5,16 +5,16 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-Deno.test("production bootstrap seeds only the approved owner, Music area, and empty R2 ledger", async () => {
+Deno.test("self-host bootstrap seeds only the configured owner, Music area, and empty R2 ledger", async () => {
   const sql = await Deno.readTextFile(
-    new URL("../worker/seeds/0001_personal_music.sql", import.meta.url),
+    new URL("../worker/seeds/self-host.sql", import.meta.url),
   );
   for (
     const evidence of [
-      "'personal-owner-v1'",
+      "'self-host-owner-v1'",
       "'music'",
       "'Music'",
-      "'resonance-r2-free-v1'",
+      "'self-host-r2-v1'",
       "stored_bytes",
       "strftime('%Y-%m', 'now')",
     ]

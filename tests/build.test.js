@@ -86,7 +86,7 @@ Deno.test("Worker Browser Run pins Cloudflare Puppeteer without adding it to the
 
 Deno.test("production assets route shell and API requests through the Worker selectively", async () => {
   const configuration = await Deno.readTextFile(
-    new URL("../wrangler.jsonc", import.meta.url),
+    new URL("../wrangler.self-host.example.jsonc", import.meta.url),
   );
   const routes = configuration.match(/"run_worker_first"\s*:\s*(\[[\s\S]*?\])/);
   assert(routes !== null, "Assets must configure selective Worker-first routes.");

@@ -11,8 +11,8 @@
 Both full options process permitted sources into knowledge and quizzes using
 [your own API services](SERVICES.md). Neither needs the maintainer's keys,
 Cloudflare membership, private files or credits. Cloudflare mode uses the
-included `wrangler.self-host.example.jsonc`, never the maintainer's
-`wrangler.jsonc`. Phone installation is a window onto your backend, not a server
+included `wrangler.self-host.example.jsonc`; personal deployment configurations
+are excluded from Git. Phone installation is a window onto your backend, not a server
 running on the phone. YouTube search is metadata-only; automatic podcast
 transcription is not included.
 

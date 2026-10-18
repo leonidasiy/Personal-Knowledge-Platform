@@ -24,8 +24,15 @@ maintainer files are required. A separate [sample demo](SETUP.md#run-the-local-d
 needs no API keys. Phone installation opens your backend; it does not run one
 on the phone.
 
-The original `wrangler.jsonc` is the maintainer's deployment configuration.
+Personal deployment configurations stay local and are excluded from Git.
 For your account use `wrangler.self-host.example.jsonc` and the guide above.
+
+The repository keeps application source, reusable tests, lockfiles, required
+runtime assets and setup examples. Agent skills, internal development notes,
+editor state, credentials, local databases, validation reports and build outputs
+stay local. `npm ci` recreates dependencies; `deno task build` recreates `dist/`.
+The pinned `vendor/` files and source offline manifest are runtime inputs,
+so they remain included.
 
 ## Use the learning workflow
 

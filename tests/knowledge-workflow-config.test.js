@@ -191,8 +191,8 @@ Deno.test("all checked-in role configurations satisfy the closed schema", async 
   }
 });
 
-Deno.test("deployed workflow digests match the checked-in role configurations", async () => {
-  const config = await Deno.readTextFile(new URL("../wrangler.jsonc", import.meta.url));
+Deno.test("setup template workflow digests match the checked-in role configurations", async () => {
+  const config = await Deno.readTextFile(new URL("../wrangler.self-host.example.jsonc", import.meta.url));
   const encoded = /"KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS":\s*("(?:\\.|[^"\\])*")/.exec(config)?.[1];
   if (encoded === undefined) throw new Error("Workflow digest configuration is missing.");
   const digests = JSON.parse(JSON.parse(encoded));

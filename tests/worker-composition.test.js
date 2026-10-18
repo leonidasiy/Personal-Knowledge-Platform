@@ -381,7 +381,7 @@ Deno.test("Production composition resolves one stable Durable Object stub", () =
 
 Deno.test("Worker deployment routes outbound fetches through the public Internet", async () => {
   const configuration = await Deno.readTextFile(
-    new URL("../wrangler.jsonc", import.meta.url),
+    new URL("../wrangler.self-host.example.jsonc", import.meta.url),
   );
   const entry = await Deno.readTextFile(
     new URL("../worker/cloudflare-entry.mjs", import.meta.url),
@@ -424,17 +424,17 @@ Deno.test("Worker deployment routes outbound fetches through the public Internet
   assert(
     configuration.includes('"binding": "SOURCE_LIBRARY_DB"') &&
       configuration.includes(
-        '"database_id": "a5996f69-07e4-4a15-a41e-282133571d0a"',
+        '"database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"',
       ) &&
       configuration.includes('"migrations_dir": "worker/migrations"'),
-    "The Worker must bind the approved D1 database and ordered migrations.",
+    "The template must require the user's D1 database and ordered migrations.",
   );
   assert(
     configuration.includes('"binding": "SOURCE_CONTENT_BUCKET"') &&
       configuration.includes(
-        '"bucket_name": "resonance-source-content"',
+        '"bucket_name": "my-resonance-content"',
       ),
-    "The Worker must bind the approved private R2 bucket.",
+    "The template must bind the user's private R2 bucket.",
   );
   assert(
     configuration.includes('"SOURCE_R2_STORED_BYTES_LIMIT": "8589934592"') &&
