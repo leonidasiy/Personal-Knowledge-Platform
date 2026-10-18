@@ -7,7 +7,7 @@ import { createLearningProgressService } from "../worker/learning-progress-d1.js
 test("progress and manual classification use real SQLite, isolate owners, preserve null history and reject stale edits", async () => {
   const db = new DatabaseSync(":memory:");
   try {
-    db.exec("PRAGMA foreign_keys=ON; CREATE TABLE extraction_knowledge_points(owner_id TEXT, knowledge_id TEXT, point_json TEXT, source_id TEXT, source_revision INTEGER, PRIMARY KEY(owner_id,knowledge_id)); CREATE TABLE library_sources(owner_id TEXT, source_id TEXT, state TEXT, revision INTEGER); CREATE TABLE learning_generation_tasks(owner_id TEXT,task_id TEXT,item_id TEXT); CREATE TABLE learner_review_answers(owner_id TEXT,batch_id TEXT,question_id TEXT,answered_at TEXT,correct INTEGER,score REAL,PRIMARY KEY(owner_id,batch_id,question_id)); CREATE TABLE learner_feed_batches(owner_id TEXT,status TEXT,completed_at TEXT,item_ids_json TEXT);");
+    db.exec("PRAGMA foreign_keys=ON; CREATE TABLE extraction_knowledge_points(owner_id TEXT, knowledge_id TEXT, point_json TEXT, source_id TEXT, source_revision INTEGER, PRIMARY KEY(owner_id,knowledge_id)); CREATE TABLE library_sources(owner_id TEXT, source_id TEXT, state TEXT, revision INTEGER); CREATE TABLE source_classifications(owner_id TEXT,source_id TEXT,source_revision INTEGER,main_subject TEXT,status TEXT); CREATE TABLE learning_generation_tasks(owner_id TEXT,task_id TEXT,item_id TEXT); CREATE TABLE learner_review_answers(owner_id TEXT,batch_id TEXT,question_id TEXT,answered_at TEXT,correct INTEGER,score REAL,PRIMARY KEY(owner_id,batch_id,question_id)); CREATE TABLE learner_feed_batches(owner_id TEXT,status TEXT,completed_at TEXT,item_ids_json TEXT);");
     db.exec(await readFile(new URL("../worker/migrations/0015_progress_classification.sql", import.meta.url), "utf8"));
     const events = [];
     const database = { prepare(query) {
@@ -50,10 +50,19 @@ test("progress and manual classification use real SQLite, isolate owners, preser
       db.prepare("INSERT INTO extraction_knowledge_points VALUES('a',?,?,?,1)").run(id, JSON.stringify({ classification }), id);
     }
     for (let i = 0; i < 3; i++) db.prepare("INSERT INTO extraction_knowledge_points VALUES('a',?,?,'s',1)").run(`extra-${i}`, JSON.stringify({ classification }));
-    db.prepare("INSERT INTO extraction_knowledge_points VALUES('a','unclassified',?,'s',1)").run(JSON.stringify({ classification: { version: 1, primarySubject: null, secondarySubjects: [], subcategory: null } }));
+    db.prepare("INSERT INTO library_sources VALUES('a','unclassified-source','active',1)").run();
+    db.prepare("INSERT INTO extraction_knowledge_points VALUES('a','unclassified',?,'unclassified-source',1)").run(JSON.stringify({ classification: { version: 1, primarySubject: null, secondarySubjects: [], subcategory: null } }));
     const inventory = await service.loadProgress("a", 7, null);
     assert.deepEqual(inventory.value.subjects.map(row => [row.id, row.count]), [["music", 3], ["mathematics", 1]], "unreviewed knowledge counts, manual classifications override metadata, disabled/stale/other-owner points excluded");
     assert.equal((await service.loadProgress("a", 90, null)).value.subjects[0].count, 3, "library inventory is independent of review period");
+    db.prepare("INSERT INTO source_classifications VALUES('a','s',1,'computing','classified')").run();
+    const canonical = await service.loadProgress("a", 7, null);
+    assert.deepEqual(canonical.value.subjects.map(row => [row.id, row.count]), [["computing", 4]], "current source classification supplies subjects even when point metadata is absent or legacy");
+    assert.equal((await service.loadProgress("a", 7, "computing")).value.attempts.count, 2, "accuracy filters use the same canonical source subject");
+    assert.equal((await service.loadProgress("a", 7, "music")).value.attempts.count, 0);
+    assert.equal((await service.loadProgress("b", 7, "music")).value.subjects[0].count, 1, "source classifications remain owner-isolated");
+    db.prepare("UPDATE source_classifications SET source_revision=2 WHERE owner_id='a'").run();
+    assert.deepEqual((await service.loadProgress("a", 7, null)).value.subjects.map(row => [row.id,row.count]), [["music",3],["mathematics",1]], "stale source classification cannot override current point metadata");
     db.prepare("DELETE FROM extraction_knowledge_points WHERE owner_id='a'").run();
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM knowledge_classifications").get().n, 0, "corrections erased with point");
     db.exec("DROP TABLE learner_review_answers");
