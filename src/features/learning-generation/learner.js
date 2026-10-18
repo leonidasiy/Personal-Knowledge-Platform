@@ -144,20 +144,20 @@ export function createLearnerController(dependencies) {
   }
 
   async function refreshReview() {
-    if (!begin("review-refresh")) return;
-    const previousBatchId = review.value?.batch?.batchId ?? null;
+    if (review.state === "loading" || review.value?.questions.some(question => questionPending(question.questionId)) || !begin("review-refresh")) return;
     const result = await gateway.refreshReview(`review-refresh:${createId()}`);
     pending.delete("review-refresh");
-    if (result.ok && result.value.batch?.batchId !== previousBatchId) {
+    if (result.ok) {
       answers.clear();
+      attempts.clear();
     }
     review = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: review.value, error: result.error };
-    onChange();
+    onChange(undefined, "review-refresh");
     return result;
   }
 
   /** @param {string} questionId */
-  function questionPending(questionId) { return pending.has(`review-submit:${questionId}`) || pending.has(`review-skip:${questionId}`); }
+  function questionPending(questionId) { return pending.has("review-refresh") || pending.has(`review-submit:${questionId}`) || pending.has(`review-skip:${questionId}`); }
 
   /** @param {HTMLFormElement} form */
   async function answerReview(form) {
@@ -259,7 +259,6 @@ export function createLearnerController(dependencies) {
     if (failure.kind === "LearningBatchGatewayUnavailable" || failure.kind === "LearningBatchGatewayTimedOut") return feedMarkup(7);
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchInsufficientCandidates") return feedMarkup(8);
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchIncomplete") return feedMarkup(9);
-    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewRefreshLocked") return feedMarkup(10);
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradePending") return feedMarkup(11);
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradingUnavailable") return feedMarkup(12);
     return feedMarkup(13);
@@ -317,9 +316,14 @@ export function createLearnerController(dependencies) {
     if (review.state === "loading" && review.value === null) return feedMarkup(4);
     if (review.state === "error" && review.value === null) return statePanel("Review", friendly(review.error), "retry-learner-review");
     const value = review.value;
-    if (value === null || value.questions.length === 0) return renderDailyGoal("review") + feedMarkup(2);
-    const complete = value.batch?.status === "completed" || [...answers.keys()].filter((id) => value.questions.some((question) => question.questionId === id)).length === value.questions.length;
-    return feedMarkup(17, renderDailyGoal("review"), String(value.questions.length), value.questions.length === 1 ? "" : "s", complete ? feedMarkup(18, actionState("review-refresh"), actionLabel("review-refresh", "Refresh questions", "Finding questions…")) : feedMarkup(19), review.error === null ? "" : feedMarkup(20, escapeHtml(friendly(review.error))), value.questions.map(renderQuestion).join(""));
+    const error = review.error === null ? "" : feedMarkup(20, escapeHtml(friendly(review.error)));
+    if (value === null || value.questions.length === 0) return renderDailyGoal("review") + error + feedMarkup(2, renderReviewRefresh());
+    return feedMarkup(17, renderDailyGoal("review"), String(value.questions.length), value.questions.length === 1 ? "" : "s", renderReviewRefresh(), error, value.questions.map(renderQuestion).join(""));
+  }
+
+  function renderReviewRefresh() {
+    const busy = review.state === "loading" || pending.has("review-refresh") || review.value?.questions.some(question => questionPending(question.questionId));
+    return feedMarkup(18, `${actionState("review-refresh")} ${busy ? "disabled" : ""}`, actionLabel("review-refresh", "Refresh batch", "Finding questions…"));
   }
 
   /** @param {LearningReviewQuestion} question */

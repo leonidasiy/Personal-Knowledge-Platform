@@ -392,7 +392,6 @@ export function createLearningBatchService(dependencies) {
     if (!force && current.value !== null && current.value.learningDay === day && current.value.itemIds.every(id => all.value.some(candidate => candidate.questionId === id))) {
       return hydrateReview(ownerId, current.value, all.value);
     }
-    if (force && current.value !== null && current.value.learningDay === day && current.value.status !== "completed") return { ok: false, error: { kind: "ReviewRefreshLocked" } };
     const due = all.value.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now()));
     if (due.length < 1) return { ok: true, value: Object.freeze({ batch: null, questions: Object.freeze([]), dueCount: 0 }) };
     const selection = selectKnowledgeBatch(due.map((candidate) => ({ knowledgeId: candidate.questionId, sourceId: candidate.sourceId, questionId: candidate.questionId, viewCount: candidate.viewCount, lastAnswerCorrect: candidate.lastAnswerCorrect, scheduledDays: candidate.scheduledDays, preference: candidate.preference })), { count: Math.min(MAX_BATCH_SIZE, due.length), random, now: dependencies.now() });

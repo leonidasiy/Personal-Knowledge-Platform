@@ -430,9 +430,7 @@ Deno.test("all approved theme text tokens meet WCAG AA contrast", async () => {
 
 Deno.test("Feed and Review keep study and quiz controls exclusive", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
-  const learner = await Deno.readTextFile(
-    new URL("src/features/learning-generation/learner.js", root),
-  );
+  const learner = await readLearnerPresentation();
   const libraryRoute = await readLibraryPresentation();
   assert(
     learner.includes("data-learner-feed-sentinel") &&
@@ -443,10 +441,10 @@ Deno.test("Feed and Review keep study and quiz controls exclusive", async () => 
   assert(
     learner.includes("data-learner-review") &&
       learner.includes('data-action="refresh-learner-review"') &&
-      learner.includes("Answer every question before refreshing") &&
+      !learner.includes("Answer every question before refreshing") &&
       learner.includes("answerText") &&
       learner.includes('question.kind === "fill-blank"'),
-    "Review must render paired questions, including fill-blank input, and lock refresh until completion.",
+    "Review must render questions, including fill-blank input, and allow unfinished batches to refresh.",
   );
   assert(
     !learner.includes("mark-studied") &&

@@ -49,6 +49,35 @@ const review = {
   dueCount: 1,
 };
 
+Deno.test("Review offers Refresh for unfinished, completed and empty batches with pending and retry feedback", async () => {
+  for (const projection of [review, { ...review, batch: { ...review.batch, status: "completed" } }, { batch: null, questions: [], dueCount: 0 }]) {
+    let requests = 0;
+    /** @type {(value: Response) => void} */ let settle = () => {};
+    const controller = createLearnerController({ fetch: async input => {
+      if (String(input).endsWith("/refresh")) { requests++; return await new Promise(resolve => { settle = resolve; }); }
+      return response({ result: projection });
+    }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", onChange: () => {} });
+    await controller.loadReview();
+    /** @type {() => void} */ let refresh = () => {};
+    controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: (/** @type {string} */ selector) => selector === "[data-action='refresh-learner-review']" ? { addEventListener: (/** @type {string} */ _event, /** @type {() => void} */ listener) => { refresh = listener; } } : null, querySelectorAll: () => [] })));
+    const html = controller.renderReview();
+    assert(html.includes('data-action="refresh-learner-review"') && !html.includes("Answer every question before refreshing"), "Refresh is available in every settled state");
+    for (const succeed of [false, true]) {
+      refresh(); refresh();
+      assert(requests === (succeed ? 2 : 1), "Duplicate pending clicks send one request");
+      const pending = controller.renderReview();
+      assert(pending.includes('aria-busy="true"') && pending.includes("Finding questions…") && pending.includes("disabled"), "Pending refresh has visible feedback and is disabled");
+      if (projection.batch?.status === "open") assert(pending.includes('<input disabled '), "Answer inputs are disabled while replacing the batch");
+      settle(succeed ? response({ result: { ...review, batch: { ...review.batch, batchId: "review:replacement" }, questions: [{ ...review.questions[0], prompt: "Replacement question" }] } }) : new Response(JSON.stringify({ error: "LearningBatchPersistenceFailed" }), { status: 503 }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const after = controller.renderReview();
+      assert(!after.includes("Finding questions…"), "Refresh returns to its ready state");
+      if (succeed) assert(after.includes("Replacement question"), "Success displays the replacement batch");
+      else assert(after.includes('role="alert"') && (projection.batch === null || after.includes(review.questions[0].prompt)), "Failure reports an error and preserves the current questions");
+    }
+  }
+});
+
 Deno.test("Feed is text-only without associated media and hides legacy fallback images", async () => {
   for (const media of [null, { assetId: "old-fallback", kind: "image", url: "/assets/fallback-media/old.png", attribution: "User-attested local fallback" }]) {
     const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:a", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media, questionLocked: true }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
@@ -399,10 +428,13 @@ Deno.test("Skip reveals feedback without an answer or progress request, handles 
     }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", onChange: () => {} });
     await controller.loadReview();
     const button = new Button();
-    controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-action='skip-review']" ? [button] : [] })));
+    /** @type {() => void} */ let refresh = () => {};
+    controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: (/** @type {string} */ selector) => selector === "[data-action='refresh-learner-review']" ? { addEventListener: (/** @type {string} */ _event, /** @type {() => void} */ listener) => { refresh = listener; } } : null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-action='skip-review']" ? [button] : [] })));
     for (const succeed of [false, true]) {
       button.click?.(); button.click?.();
+      refresh();
       assert(calls === (failed ? 1 : 2), "Duplicate pending clicks send one Skip request.");
+      assert(!paths.some(path => path.endsWith("/refresh")), "Refresh cannot replace a question while Skip is saving.");
       assert(controller.renderReview().includes('aria-busy="true"') && controller.renderReview().includes("Loading…"), "Pending Skip has visible feedback.");
       settle(succeed ? response({ result: skip }) : new Response(JSON.stringify({ error: "LearningBatchPersistenceFailed" }), { status: 503 }));
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -413,7 +445,7 @@ Deno.test("Skip reveals feedback without an answer or progress request, handles 
     }
     const html = controller.renderReview();
     assert(html.includes("Skipped.") && html.includes("Correct answer:</strong> Tritone</p><details"), "Skip reveals the correction immediately without marking correct or incorrect.");
-    assert(html.includes('<summary>Source explanation</summary>') && html.includes("Refresh questions"), "The source drawer and next-batch action remain available.");
+    assert(html.includes('<summary>Source explanation</summary>') && html.includes("Refresh batch"), "The source drawer and next-batch action remain available.");
     assert(paths.every(path => !path.includes("/answer") && !path.includes("/progress")), "Skip never submits an answer or refreshes answer-based progress.");
     revealed = true;
     await controller.loadReview();

@@ -43,6 +43,27 @@ function fixture(count = 8) {
   return { db, service, value, complete, answer, skip, setBeforeGrade: value => { beforeGrade = value; }, setSkipUnavailable: value => { skipUnavailable = value; }, gradingRequests, day: () => clock.slice(0, 10), setClock: value => { clock = value; }, setProbability: value => { probability = value; }, setUnavailable: value => { unavailable = value; } };
 }
 
+test('Review refresh replaces an unfinished batch and preserves saved answers, schedules and progress', async () => {
+  const f = fixture();
+  try {
+    await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+    const initial = f.value(await f.service.loadReview('owner', f.day()));
+    f.value(await f.answer(initial.batch, initial.questions[0]));
+    f.value(await f.skip(initial.batch, initial.questions[1]));
+    const answers = f.db.prepare('SELECT * FROM learner_review_answers').all();
+    const schedules = f.db.prepare('SELECT * FROM learner_question_state ORDER BY question_id').all();
+    const progress = f.value(await f.service.loadProgress('owner', 7, null));
+    const next = f.value(await f.service.loadReview('owner', f.day(), true));
+    assert.notEqual(next.batch.batchId, initial.batch.batchId);
+    assert.equal(next.batch.status, 'open');
+    assert.equal(next.questions.some(q => q.questionId === initial.questions[0].questionId), false, 'Answered question remains scheduled for later');
+    assert.deepEqual(f.db.prepare('SELECT * FROM learner_review_answers').all(), answers);
+    assert.deepEqual(f.db.prepare('SELECT * FROM learner_question_state ORDER BY question_id').all(), schedules);
+    assert.deepEqual(f.value(await f.service.loadProgress('owner', 7, null)), progress);
+    assert.deepEqual(f.value(await f.service.loadReview('owner', f.day())), { ...next, skipped: [] });
+  } finally { f.db.close(); }
+});
+
 test('removing one Feed card replaces its slot, preserves four cards and survives reload', async () => {
   const f = fixture();
   try {
