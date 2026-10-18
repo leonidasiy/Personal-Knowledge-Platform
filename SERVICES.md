@@ -39,7 +39,7 @@ cookies, D1 ID, R2 bucket or Cloudflare membership.
 
 ## AI and grading
 
-**Required for uploaded-source extraction and AI features:** your own
+**Default for uploaded-source extraction and AI features:** your own
 `OPENROUTER_API_KEY`. [Create and limit a key](https://openrouter.ai/settings/keys);
 see [OpenRouter authentication](https://openrouter.ai/docs/api/reference/authentication).
 Store it with:
@@ -59,12 +59,12 @@ The current checked-in implementation requests:
 These are code/configuration contracts, not a claim that every account can access
 them indefinitely. Model availability, account permissions and pricing can
 change. Confirm access in your own account. If Jev is unavailable, exact-key and
-choice checks still work; semantic answers can remain pending. A direct provider
-key or a paid chat subscription is not interchangeable with OpenRouter here.
-There is no supported arbitrary-provider selector. Changing model YAML also
-requires supported-model/schema compatibility and canonical digest updates.
+choice checks still work; semantic answers can remain pending. A paid chat
+subscription is not an API key. To use a different model or an
+OpenAI-compatible API, follow [switching model APIs](MODEL_APIS.md). This includes
+replacing semantic grading; the default Jev service is optional in that setup.
 
-`agent-config/*.yaml`, their loader, and the matching digest setting are included
+`agent-config/*.yaml`, their loader, the digest command, and the matching digest setting are included
 in GitHub. Private development skills and evaluation credentials are not runtime
 dependencies. Submitted text/images are sent to the configured AI services when
 you authorize processing; review their privacy terms before uploading material.

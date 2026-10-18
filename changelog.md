@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-18 model API substitution and dependency review
+
+- Added server-side OpenAI-compatible model API configuration, replacement semantic
+  grading and reranking, and a canonical agent-digest command. An isolated synthetic
+  pipeline verifies a different endpoint/model through publication, grading and restart.
+- Updated vulnerable IP parsing and FTP parsing dependencies. Three remaining high
+  audit alerts trace to an unpatched ZIP installer dependency outside the deployed
+  Worker graph; see [the scoped assessment](DEPENDENCY_SECURITY.md).
+
 ## 2026-10-18 independent setup
 
 - Added a standalone computer backend with private SQLite/files, password login,

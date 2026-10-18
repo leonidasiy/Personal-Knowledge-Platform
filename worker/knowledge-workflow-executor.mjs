@@ -1,4 +1,5 @@
 // Shared executor keeps hosted and computer runs on the same persistence and control paths.
+import {resolveModelApi} from "./model-api.js";
 import {observeWorkflowDatabase} from './knowledge-workflow-database.js';
 import { WEBPAGE_IMAGE_POLICY } from './webpage-image-budget.js';
 import { D1KnowledgeWorkflowRepository } from "./knowledge-workflow-d1.js";
@@ -51,7 +52,7 @@ async function sha256(input) {
 
 /** @param {Readonly<Record<string, string>>} expected @returns {Promise<import("../src/features/knowledge-workflows/config.js").Result<Readonly<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>, { readonly kind: string }>>} */
 async function loadConfigurationSnapshots(expected, sources) {
-  const loader = createAgentConfigurationLoader({ sha256, supportedModels: new Set(["openrouter/z-ai/glm-5.3-flash", "openrouter/mistralai/mistral-large-4-0", "openrouter/xiaomi/mimo-v2.6-pro"]), supportedTools });
+  const loader = createAgentConfigurationLoader({ sha256, supportedTools });
   /** @type {Partial<Record<import("../src/features/knowledge-workflows/memory.js").AgentRole, import("../src/features/knowledge-workflows/config.js").AgentConfigurationSnapshot>>} */
   const snapshots = {};
   for (const role of roleNames) {
@@ -71,6 +72,9 @@ async function loadConfigurationSnapshots(expected, sources) {
  * lifecycle digests.
  */
 export async function executeKnowledgeWorkflow(environment, event, step, sources, workerFetch = globalThis.fetch.bind(globalThis)) {
+    const modelApi = resolveModelApi(environment);
+    if (!modelApi.ok) throw new Error(`ModelApiConfigurationInvalid:${modelApi.error.field}`);
+    const ai = modelApi.value;
     const payload = event?.payload;
     if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
       typeof payload.runId !== "string" || payload.runId.trim() === "" ||
@@ -171,8 +175,10 @@ export async function executeKnowledgeWorkflow(environment, event, step, sources
       database,
       fetch: workerFetch,
       browser: createBrowser(),
-      apiKey: typeof environment.OPENROUTER_API_KEY === "string" ? environment.OPENROUTER_API_KEY : null,
-      endpoint: "https://openrouter.ai/api/v1/chat/completions",
+      apiKey: ai.apiKey,
+      endpoint: ai.endpoint,
+      apiStyle:ai.apiStyle,
+      gradingModel:ai.gradingModel ?? undefined,
       now,
       nowMs: () => Date.now(),
       logger: (entry) => logger({...entry,ownerId,runId}),

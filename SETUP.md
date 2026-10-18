@@ -72,7 +72,7 @@ delivery have not been acceptance-tested for this release.
    knowledge-and-quiz pairs are needed for a batch.
 
 Multiple-choice and exact text answers use the saved answer key. Other text
-answers pass when the Jev decision model gives them at least 70% probability of
+answers pass when the configured decision model (Jev by default) gives them at least 70% probability of
 being correct. A paired question requires its choice and all blanks to pass.
 If the grading service is unavailable, the answer stays pending; try again later.
 **See more often** moves a knowledge point to a shorter recall interval;
@@ -203,3 +203,6 @@ open **your HTTPS URL**, then
 follow the [device installation steps](#install-on-your-devices). `localhost` on
 a phone points to the phone itself. A computer's local demo is not a full online
 service and does not synchronize its sample records to your hosted account.
+
+To replace the default AI models or API, see [Switching model APIs](MODEL_APIS.md).
+See [Dependency security assessment](DEPENDENCY_SECURITY.md) for known dependency alerts.

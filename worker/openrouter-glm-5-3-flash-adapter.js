@@ -34,7 +34,7 @@ export function createOpenRouterGlm53FlashAdapter(dependencies) {
     !isNonEmptyText(dependencies.endpoint) ||
     !URL.canParse(dependencies.endpoint) ||
     new URL(dependencies.endpoint).protocol !== "https:" ||
-    dependencies.model !== OPENROUTER_GLM_5_3_FLASH_MODEL ||
+    !isNonEmptyText(dependencies.model) ||
     !positiveInteger(dependencies.maximumInputCharacters) ||
     !positiveInteger(dependencies.maximumOutputTokens) ||
     !positiveInteger(dependencies.timeoutMs) ||
@@ -78,7 +78,7 @@ export function createOpenRouterGlm53FlashAdapter(dependencies) {
             authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
-            model: OPENROUTER_GLM_5_3_FLASH_MODEL,
+            model: dependencies.model,
             messages: [
               {
                 role: "system",
@@ -97,6 +97,7 @@ export function createOpenRouterGlm53FlashAdapter(dependencies) {
             max_tokens: command.value.maximumOutputTokens,
             stream: false,
           }),
+          redirect: "error",
           signal: controller.signal,
         });
       } catch (error) {

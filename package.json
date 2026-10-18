@@ -11,5 +11,10 @@
     "@types/node": "22.20.1",
     "@types/web-push": "3.6.4",
     "playwright-core": "1.61.1"
+  },
+  "overrides": {
+    "get-uri": {
+      "basic-ftp": "6.2.3"
+    }
   }
 }

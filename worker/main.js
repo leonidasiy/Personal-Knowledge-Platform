@@ -1,3 +1,4 @@
+import {resolveModelApi} from "./model-api.js";
 import { createUrlPdfCapture } from "./url-pdf.mjs";
 import { D1KnowledgeContentRepository } from "./knowledge-workflow-content-d1.js";
 import { D1KnowledgeWorkflowProgressRepository } from './knowledge-workflow-progress-d1.js';
@@ -108,6 +109,13 @@ import { createReminderRuntime } from "./reminders/runtime.js";
  *   readonly YOUTUBE_OAUTH_STORE?: unknown,
  *   readonly YOUTUBE_OAUTH_LEDGER?: unknown,
  *   readonly OPENROUTER_API_KEY?: unknown,
+ *   readonly LLM_API_KEY?: unknown,
+ *   readonly LLM_CHAT_ENDPOINT?: unknown,
+ *   readonly LLM_MODEL?: unknown,
+ *   readonly LLM_GRADING_MODEL?: unknown,
+ *   readonly RERANK_API_KEY?: unknown,
+ *   readonly RERANK_ENDPOINT?: unknown,
+ *   readonly RERANK_MODEL?: unknown,
  *   readonly OPENROUTER_INPUT_USD_PER_MILLION?: unknown,
  *   readonly OPENROUTER_OUTPUT_USD_PER_MILLION?: unknown,
  *   readonly TRANSCRIPT_AUTHORIZATION?: unknown,
@@ -329,6 +337,9 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
   }
   const configuration = parseEnvironment(environment);
   if (!configuration.ok) return configuration;
+  const modelApi = resolveModelApi(/** @type {Record<string,unknown>} */(environment));
+  if (!modelApi.ok) return {ok:false,error:{kind:"DiscoveryDeploymentConfigurationInvalid",field:modelApi.error.field}};
+  const ai = modelApi.value;
   const knowledgeWorkflowLogger = createKnowledgeWorkflowLogger({
     sink: (record) => console.info(JSON.stringify(record)),
     now: () => platform.now().toISOString(),
@@ -427,12 +438,12 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
   const sourceClassification = configuration.value.sourceLibraryDatabase === null
     ? null
     : new D1SourceClassificationRepository({ database: /** @type {import("./source-classification-d1.js").SourceClassificationDatabase} */ (configuration.value.sourceLibraryDatabase), now: () => platform.now().toISOString(), logger: (entry) => console.info(JSON.stringify(entry)) });
-  const sourceClassificationBackfill = configuration.value.sourceLibraryDatabase === null || configuration.value.openRouterApiKey === null
+  const sourceClassificationBackfill = configuration.value.sourceLibraryDatabase === null || ai.apiKey === null
     ? null
     : createSourceClassificationBackfillRuntime({
       backfillRepository: new D1SourceClassificationBackfillRepository({ database: /** @type {import("./source-classification-backfill-d1.js").D1DatabasePort} */ (configuration.value.sourceLibraryDatabase), now: () => platform.now().toISOString(), logger: (entry) => console.info(JSON.stringify(entry)) }),
       classificationRepository: /** @type {D1SourceClassificationRepository} */ (sourceClassification),
-      classifier: createSourceClassifier({ provider: createOpenRouterKnowledgeModel({ apiKey: configuration.value.openRouterApiKey, endpoint: "https://openrouter.ai/api/v1/chat/completions", model: "z-ai/glm-5.3-flash", timeoutMs: 15_000, maximumInputCharacters: 100_000, fetch: platform.fetch, now: () => platform.now().getTime(), logger: (entry) => console.info(JSON.stringify(entry)) }), logger: (entry) => console.info(JSON.stringify(entry)) }),
+      classifier: createSourceClassifier({ provider: createOpenRouterKnowledgeModel({ apiKey: ai.apiKey, endpoint: ai.endpoint, apiStyle:ai.apiStyle, model: ai.model, timeoutMs: 15_000, maximumInputCharacters: 100_000, fetch: platform.fetch, now: () => platform.now().getTime(), logger: (entry) => console.info(JSON.stringify(entry)) }), logger: (entry) => console.info(JSON.stringify(entry)) }),
       now: () => platform.now().toISOString(),
       logger: (entry) => console.info(JSON.stringify(entry)),
     });
@@ -461,7 +472,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       ),
       // Dedicated reranker model: https://openrouter.ai/cohere/rerank-4-fast
       semanticRanker: createSemanticRanker({
-        apiKey: configuration.value.openRouterApiKey,
+        ...ai.rerank,
         fetch: platform.fetch,
         maximumCandidates: 20,
         timeoutMs: 3_000,
@@ -548,7 +559,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
     monthlyBudgetUsd: 2,
   });
   const learningDatabase = configuration.value.sourceLibraryDatabase;
-  const jevGrader = createJevAnswerGrader({ apiKey: configuration.value.openRouterApiKey, configuration: JEV_GRADER_CONFIGURATION, fetch: platform.fetch, timeoutMs: 10_000, logger: (entry) => learningLogger({ event: entry.event, failureKind: entry.failureKind }) });
+  const jevGrader = createJevAnswerGrader({ apiKey: ai.apiKey, ...(ai.gradingModel === null ? {} : {chat:{endpoint:ai.endpoint,model:ai.gradingModel,apiStyle:ai.apiStyle}}), configuration: JEV_GRADER_CONFIGURATION, fetch: platform.fetch, timeoutMs: 10_000, logger: (entry) => learningLogger({ event: entry.event, failureKind: entry.failureKind }) });
   const learningBatches = learningDatabase === null
     ? null
     : createLearningBatchService({
@@ -569,7 +580,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
     ? null
     : new LearningGenerationService({
       repository: learningRepository,
-      provider: createOpenRouterGlm53FlashAdapter({ apiKey: configuration.value.openRouterApiKey, endpoint: "https://openrouter.ai/api/v1/chat/completions", model: "z-ai/glm-5.3-flash", maximumInputCharacters: learningPolicy.maximumProviderInputCharacters, maximumOutputTokens: learningPolicy.maximumOutputTokens, timeoutMs: 15_000, fetch: platform.fetch, now: () => platform.now().getTime(), logger: learningLogger }),
+      provider: createOpenRouterGlm53FlashAdapter({ apiKey: ai.apiKey, endpoint: ai.endpoint, model: ai.model, maximumInputCharacters: learningPolicy.maximumProviderInputCharacters, maximumOutputTokens: learningPolicy.maximumOutputTokens, timeoutMs: 15_000, fetch: platform.fetch, now: () => platform.now().getTime(), logger: learningLogger }),
       budget: new D1LearningBudgetLedger({ database: learningDatabase, logger: learningLogger }),
       costModel: createLearningCostModel(configuration.value.learningCost),
       createId: () => hex(/** @type {(length:number)=>Uint8Array} */ (platform.randomBytes)(16)),

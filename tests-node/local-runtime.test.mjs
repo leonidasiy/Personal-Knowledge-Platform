@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -132,10 +132,18 @@ test('computer image binding decodes and emits bounded metadata-free WebP via th
   assert.equal((await createCloudflareImageDerivative(localImages)({assetId:'fixture',variant:'thumbnail',bytes:new Uint8Array([1,2,3]),mediaType:'image/png'})).ok,false);
 });
 
-test('own-text upload completes the local pipeline, publishes paired quizzes, records study/review, and survives restart without external calls',()=>temporary(async directory=>{
-  const {provider,sentences,calls}=createLocalPipelineFixtureProvider();
-  let application,cookie;
-  const create=()=>createLocalApplication({root,dataDirectory:directory,password,environment:{OPENROUTER_API_KEY:'synthetic-own-key'},fetch:provider,logger:()=>{}});
+for(const compatible of [false,true])test(`${compatible?'Alternate compatible API':'OpenRouter'}: own-text upload completes the local pipeline, publishes paired quizzes, records study/review, and survives restart without external calls`,()=>temporary(async directory=>{
+  const chatEndpoint='https://alternate-api.example.test/v1/chat/completions',model='synthetic/alternate-model';
+  const {provider,sentences,calls}=createLocalPipelineFixtureProvider(compatible?{chatEndpoint,model}:{});
+  let application,cookie,applicationRoot=root;
+  if(compatible){
+    applicationRoot=join(directory,'configured-project');await mkdir(join(applicationRoot,'agent-config'),{recursive:true});await symlink(join(root,'worker'),join(applicationRoot,'worker'),'dir');
+    for(const role of ['rights-assessor','knowledge-scraper','question-generator','question-evaluator']){
+      const source=await readFile(join(root,'agent-config',`${role}.yaml`),'utf8');
+      await writeFile(join(applicationRoot,'agent-config',`${role}.yaml`),source.replace('provider: openrouter','provider: openai-compatible').replace(/name: (?:z-ai\/glm-5.3-flash|xiaomi\/mimo-v2.6-pro)/,`name: ${model}`));
+    }
+  }
+  const create=()=>createLocalApplication({root:applicationRoot,dataDirectory:join(directory,'data'),password,environment:compatible?{LLM_API_KEY:'synthetic-own-key',LLM_CHAT_ENDPOINT:chatEndpoint,LLM_MODEL:model,LLM_GRADING_MODEL:model}:{OPENROUTER_API_KEY:'synthetic-own-key'},fetch:provider,logger:()=>{}});
   const api=async(path,body)=>{const response=await application.fetch(request(path,{method:body===undefined?'GET':'POST',headers:{cookie,...(body===undefined?{}:{origin,'content-type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body)}));const result=await response.json();assert.equal(response.status,200,`${path}: ${JSON.stringify(result)}`);return result.result;};
   try{
     application=await create();cookie=await login(application);
@@ -146,9 +154,13 @@ test('own-text upload completes the local pipeline, publishes paired quizzes, re
     const review=await api(`/api/learning-generation/review-batch?day=${day}`),question=review.questions.find(question=>question.kind!=='fill-blank');
     assert(question,'The paired quiz batch includes a choice variant.');
     await api('/api/learning-generation/review-batch/answer',{batchId:review.batch.batchId,questionId:question.questionId,questionRevision:question.revision,selectedChoiceIds:['choice-a'],idempotencyKey:'fixture-answer-owned'});
-    const progress=await api('/api/learning-generation/progress?days=7');
-    assert.equal(progress.attempts.count,1);assert.equal(progress.attempts.correct,1);
-    assert.equal(progress.activity.at(-1).studyItems,5);assert.equal(progress.activity.at(-1).studyBatches,1);assert.equal(progress.activity.at(-1).reviewAttempts,1);
+    if(compatible){
+      const blank=review.questions.find(question=>question.kind==='fill-blank');assert(blank);
+      await api('/api/learning-generation/review-batch/answer',{batchId:review.batch.batchId,questionId:blank.questionId,questionRevision:blank.revision,selectedChoiceIds:[],blankAnswers:[{id:blank.blanks[0].id,text:'the fixture'}],idempotencyKey:'fixture-semantic-answer'});
+    }
+    const expected=compatible?2:1,progress=await api('/api/learning-generation/progress?days=7');
+    assert.equal(progress.attempts.count,expected);assert.equal(progress.attempts.correct,expected);
+    assert.equal(progress.activity.at(-1).studyItems,5);assert.equal(progress.activity.at(-1).studyBatches,1);assert.equal(progress.activity.at(-1).reviewAttempts,expected);
     const callsBefore=calls();
     await application.close();application=await create();cookie=await login(application);
     assert.deepEqual(await api('/api/learning-generation/progress?days=7'),progress);

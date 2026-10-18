@@ -3,22 +3,24 @@ import {workflowInstanceId} from '../../worker/main.js';
 import {syntheticAssessment} from './knowledge-review-audit.mjs';
 
 // Constructed responses exercise wiring only; they are never model/source accuracy claims.
-export function createLocalPipelineFixtureProvider(){
+export function createLocalPipelineFixtureProvider({chatEndpoint="https://openrouter.ai/api/v1/chat/completions",model}={}){
   const sentences=Array.from({length:5},(_,index)=>`Synthetic relationship ${index+1} has the canonical fixture answer.`);
   let modelCalls=0;
   const provider=async(input,init)=>{
     const endpoint=String(input);
-    assert(['https://openrouter.ai/api/v1/chat/completions','https://openrouter.ai/api/alpha/decisions'].includes(endpoint),'Only the synthetic own provider may be contacted.');
+    assert([chatEndpoint,...(model?[]:['https://openrouter.ai/api/alpha/decisions'])].includes(endpoint),'Only the synthetic own provider may be contacted.');
     assert.equal(new Headers(init.headers).get('authorization'),'Bearer synthetic-own-key');
     assert(++modelCalls<60,'Bound synthetic pipeline calls.');
     const body=JSON.parse(init.body);
+    if(model){assert.equal(body.model,model);assert.equal(body.provider,undefined);assert.equal(body.reasoning,undefined);}
     if(endpoint.endsWith('/alpha/decisions'))return Response.json({model:'typesafe/jev-1.13-20260917',answers:Object.fromEntries(Object.keys(body.questions).map(id=>[id,{type:'noul',noul:1}]))});
     const message=body.messages[1].content;
     const envelope=Array.isArray(message)?message[0].text:message;
     const inputTask=JSON.parse(envelope.slice(envelope.indexOf('\n')+1,envelope.lastIndexOf('\n')));
     const task=inputTask.task??inputTask,schema=body.response_format?.json_schema?.name;
     let output;
-    if(schema==='knowledge_batch_selection_v1')output={keptKnowledgeIds:task.points.map(point=>point.id)};
+    if(schema==='semantic_decisions_v1')output={probabilities:Object.fromEntries(Object.keys(task.questions).map(id=>[id,1]))};
+    else if(schema==='knowledge_batch_selection_v1')output={keptKnowledgeIds:task.points.map(point=>point.id)};
     else if(schema==='knowledge_quality_review_v11')output=syntheticAssessment(task,{decision:'pass',reasons:['Constructed synthetic source evidence.'],feedback:'Accepted fixture.',matchedLessOftenIds:[],supportingImageEvidence:'',allowTextOnly:true});
     else if(task.operation==='plan-authorized-material'||task.operation==='replan-authorized-material')output={revision:1,frontier:[],coverageGoals:[],unresolvedGaps:[],stopDecision:{decision:'continue',rationale:'Observe the supplied fixture inventory.',evidenceUrls:[],unresolvedGapIds:[]}};
     else if(task.operation==='review-material-source')output={notes:'Constructed source review.',reviews:task.candidates.map(candidate=>({candidateIndex:candidate.candidateIndex,points:[{summary:candidate.summary,visibleEvidence:candidate.evidenceAnchors[0].visibleEvidence??candidate.summary}]}))};

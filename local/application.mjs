@@ -22,7 +22,7 @@ import { createFirecrawlPdfCapture } from '../worker/firecrawl-pdf.js';
 import { resolvePublicAddresses } from '../worker/knowledge-workflow-network.js';
 
 const roles=['rights-assessor','knowledge-scraper','question-generator','question-evaluator'];
-const providerKeys=['OPENROUTER_API_KEY','FIRECRAWL_API_KEY','BRAVE_SEARCH_API_KEY','YOUTUBE_API_KEY','TADDY_USER_ID','TADDY_API_KEY'];
+const providerKeys=['OPENROUTER_API_KEY','FIRECRAWL_API_KEY','BRAVE_SEARCH_API_KEY','YOUTUBE_API_KEY','TADDY_USER_ID','TADDY_API_KEY','LLM_API_KEY','LLM_CHAT_ENDPOINT','LLM_MODEL','LLM_GRADING_MODEL','RERANK_API_KEY','RERANK_ENDPOINT','RERANK_MODEL'];
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.jpg':'image/jpeg','.woff2':'font/woff2','.webmanifest':'application/manifest+json'};
 
 export async function createLocalApplication({root,dataDirectory,password,origin='http://127.0.0.1:8787',port=8787,environment={},fetch=globalThis.fetch,acquisitionBinding,logger=entry=>console.info(JSON.stringify(entry))}) {

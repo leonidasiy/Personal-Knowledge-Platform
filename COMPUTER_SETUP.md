@@ -3,7 +3,7 @@
 This option runs Resonance's server, database, private file storage, image
 processing, and background workflow on **your computer**. It does not use the
 original owner's APIs or Cloudflare resources and needs **no Cloudflare account**.
-Your own OpenRouter/Firecrawl services still run online and can charge your
+Your own AI/Firecrawl services still run online and can charge your
 account. This is not an offline AI model installation.
 
 For a comparison with your own Cloudflare deployment, see
@@ -23,6 +23,10 @@ examples. You do not need private development skills, the maintainer's `.env`,
 credentials, test accounts or a prebuilt `dist/` folder.
 
 ## 2. Add your own API keys and password
+
+The instructions below use OpenRouter by default. To use a different model API,
+follow [Switching model APIs](MODEL_APIS.md) for the replacement key/settings and
+workflow-role models, then continue with the server startup steps here.
 
 Create [your own OpenRouter key](https://openrouter.ai/settings/keys) with a credit
 limit. It supplies the current extraction, vision, generation, review and grading
@@ -201,7 +205,7 @@ cannot send a reminder at the requested time.
 | Port 8787 or data directory already in use | Stop the previous local server with Ctrl+C. Do not run two servers on the same data. |
 | Phone says unrecognized host/origin | `LOCAL_ORIGIN` must equal the exact HTTPS address from your private Serve configuration; restart after editing it. |
 | Phone cannot connect | Check both Tailscale connections, Serve status, computer sleep and the running server terminal. |
-| No AI processing | Configure your own valid OpenRouter key/credits and required model access; use Firecrawl for website processing. |
+| No AI processing | Check your configured AI key, credits and model access ([replacement API guide](MODEL_APIS.md)); use Firecrawl for website processing. |
 | Website blocked or upload requested | Respect the named rights/robots/authentication restriction; supply permitted material instead. |
 | Build fails | Stop before starting the server, keep the error and fix the tool/dependency problem. Do not copy a build from the maintainer's live service. |
 

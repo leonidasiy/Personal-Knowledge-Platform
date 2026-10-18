@@ -38,7 +38,8 @@ Create accounts that **you control**:
   Durable Objects (coordination) and Zero Trust Access (login).
 - [OpenRouter](https://openrouter.ai/), for extraction, quiz generation/review,
   vision and semantic answer grading. A ChatGPT/Claude subscription is not an
-  API key for this app. Direct OpenAI/Anthropic keys cannot replace this key.
+  API key for this app. Other compatible APIs/models can be configured using
+  [Switching model APIs](MODEL_APIS.md); native incompatible protocols need a gateway.
 - Optional discovery accounts and notification setup are described in
   [SERVICES.md](SERVICES.md). Leave them until the basic workflow works.
 
@@ -174,6 +175,10 @@ bridge, so it must exist before main deployment.
 
 Store your own `FIRECRAWL_API_KEY` as described there for website browsing.
 
+These steps use the default OpenRouter setup. For another provider, use
+[Switching model APIs](MODEL_APIS.md) for the replacement secrets/settings and
+role digests instead of the OpenRouter key below.
+
 On [OpenRouter's key page](https://openrouter.ai/settings/keys), create a dedicated
 key for this app, set its credit limit, and ensure your account can use the
 [models the app requires](SERVICES.md#ai-and-grading). Copy it when shown.
@@ -303,6 +308,8 @@ In the updated project folder, run `npm ci`, `deno task build`, the migration
 Do not run the seed again or delete/recreate the database. If you changed agent
 YAML, its canonical configuration digests must also be updated; copying the
 matching template's digest setting is sufficient for an unmodified release.
+For replacement models/APIs, follow [model API configuration](MODEL_APIS.md),
+including the command that prints your updated canonical digests.
 Do not overwrite your own account/Access/database settings with the example.
 
 Closing the installed app does not stop background processing, scheduled jobs

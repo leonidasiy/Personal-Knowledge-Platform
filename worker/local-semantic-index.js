@@ -9,10 +9,13 @@ export const SEMANTIC_RANKER_PROMPT_VERSION = "source-semantic-ranker-v2";
 /** @typedef {{ readonly id: string, readonly sourceId: string, readonly sourceRevision: number, readonly title: string, readonly text: string }} SemanticCandidate */
 // Dedicated model identifier: https://openrouter.ai/cohere/rerank-4-fast
 const MODEL_ID = "cohere/rerank-4-fast";
-/** @typedef {{ readonly apiKey: string | null, readonly fetch: typeof fetch, readonly maximumCandidates: number, readonly timeoutMs: number, readonly logger: (entry: { readonly event: string, readonly candidateCount?: number, readonly failureReason?: string }) => void }} SemanticRankerDependencies */
+/** @typedef {{ readonly endpoint?: string, readonly model?: string, readonly apiKey: string | null, readonly fetch: typeof fetch, readonly maximumCandidates: number, readonly timeoutMs: number, readonly logger: (entry: { readonly event: string, readonly candidateCount?: number, readonly failureReason?: string }) => void }} SemanticRankerDependencies */
 
 /** @param {SemanticRankerDependencies} dependencies */
 export function createSemanticRanker(dependencies) {
+  const endpoint = dependencies.endpoint ?? "https://openrouter.ai/api/v1/rerank";
+  const model = dependencies.model ?? MODEL_ID;
+  if (!URL.canParse(endpoint) || new URL(endpoint).protocol !== "https:" || !isNonEmptyText(model)) throw new TypeError("Semantic ranker endpoint/model invalid.");
   if ((dependencies?.apiKey !== null && !isNonEmptyText(dependencies?.apiKey)) || typeof dependencies.fetch !== "function" || !positiveInteger(dependencies.maximumCandidates) || dependencies.maximumCandidates > 20 || !positiveInteger(dependencies.timeoutMs) || dependencies.timeoutMs > 3000 || typeof dependencies.logger !== "function") throw new TypeError("Semantic ranker dependencies are invalid.");
   return Object.freeze({
     /** @param {unknown} input @returns {Promise<Result<{ readonly matches: readonly { readonly id: string, readonly score: number }[], readonly modelId: string, readonly promptVersion: string }, SourceLibraryFailure>>} */
@@ -29,7 +32,7 @@ export function createSemanticRanker(dependencies) {
       }
       if (command.value.candidates.length === 0) {
         dependencies.logger({ event: "semantic-ranker.succeeded", candidateCount: 0 });
-        return { ok: true, value: Object.freeze({ matches: Object.freeze([]), modelId: MODEL_ID, promptVersion: SEMANTIC_RANKER_PROMPT_VERSION }) };
+        return { ok: true, value: Object.freeze({ matches: Object.freeze([]), modelId: model, promptVersion: SEMANTIC_RANKER_PROMPT_VERSION }) };
       }
       if (dependencies.apiKey === null) {
         dependencies.logger({ event: "semantic-ranker.failed", failureReason: "NotConfigured" });
@@ -40,10 +43,10 @@ export function createSemanticRanker(dependencies) {
       command.value.signal?.addEventListener("abort", cancel, { once: true });
       const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs);
       try {
-        const response = await dependencies.fetch("https://openrouter.ai/api/v1/rerank", {
-          method: "POST", signal: controller.signal,
+        const response = await dependencies.fetch(endpoint, {
+          method: "POST", redirect: "error", signal: controller.signal,
           headers: { Authorization: `Bearer ${dependencies.apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: MODEL_ID, query: command.value.query, documents: command.value.candidates.map((candidate) => `${candidate.title}\n${candidate.text}`), top_n: Math.min(command.value.limit, command.value.candidates.length) }),
+          body: JSON.stringify({ model, query: command.value.query, documents: command.value.candidates.map((candidate) => `${candidate.title}\n${candidate.text}`), top_n: Math.min(command.value.limit, command.value.candidates.length) }),
         });
         if (!response.ok) {
           await response.body?.cancel();
@@ -63,7 +66,7 @@ export function createSemanticRanker(dependencies) {
           return matches;
         }
         dependencies.logger({ event: "semantic-ranker.succeeded", candidateCount: command.value.candidates.length });
-        return { ok: true, value: Object.freeze({ matches: matches.value, modelId: MODEL_ID, promptVersion: SEMANTIC_RANKER_PROMPT_VERSION }) };
+        return { ok: true, value: Object.freeze({ matches: matches.value, modelId: model, promptVersion: SEMANTIC_RANKER_PROMPT_VERSION }) };
       } catch (error) {
         const reason = controller.signal.aborted ? "TimedOut" : "TransportFailed";
         dependencies.logger({ event: "semantic-ranker.failed", failureReason: reason });
