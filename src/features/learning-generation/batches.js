@@ -32,8 +32,7 @@
  * | { readonly kind: "KnowledgeBatchInsufficientCandidates", readonly required: number, readonly available: number }
  * | { readonly kind: "LearningBatchInvalid", readonly field: string }
  * | { readonly kind: "LearningBatchIncomplete" }
- * | { readonly kind: "LearningBatchAlreadyClosed" }
- * | { readonly kind: "LearningBatchRefreshSameDay", readonly learningDay: string }} LearningBatchFailure
+ * | { readonly kind: "LearningBatchAlreadyClosed" }} LearningBatchFailure
  */
 
 const MAX_BATCH_SIZE = 5;
@@ -158,19 +157,6 @@ export function completeKnowledgeBatch(batch, command) {
   if (!command.reachedBottom) return { ok: false, error: { kind: "LearningBatchIncomplete" } };
   const completed = Object.freeze({ ...batch, completed: true });
   return { ok: true, value: Object.freeze({ batch: completed, unlockedQuestionIds: Object.freeze(batch.items.map((item) => item.questionId)) }) };
-}
-
-/**
- * @param {KnowledgeBatch} batch
- * @param {{ readonly requestedDay: string }} command
- * @returns {Result<true, LearningBatchFailure>}
- */
-export function validateBatchRefresh(batch, command) {
-  if (!isBatch(batch)) return { ok: false, error: { kind: "LearningBatchInvalid", field: "batch" } };
-  if (!isRecord(command) || !nonEmptyText(command.requestedDay)) return { ok: false, error: { kind: "LearningBatchInvalid", field: "requestedDay" } };
-  if (!batch.completed) return { ok: false, error: { kind: "LearningBatchIncomplete" } };
-  if (command.requestedDay < batch.learningDay) return { ok: false, error: { kind: "LearningBatchRefreshSameDay", learningDay: batch.learningDay } };
-  return { ok: true, value: true };
 }
 
 export { MAX_BATCH_SIZE };

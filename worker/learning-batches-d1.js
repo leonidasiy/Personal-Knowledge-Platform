@@ -229,7 +229,6 @@ export function createLearningBatchService(dependencies) {
       if (!hydrated.ok) return hydrated;
       return { ok: true, value: Object.freeze({ batch: current.value, items: Object.freeze(hydrated.value.map(publicCandidate)) }) };
     }
-    if (force && current.value !== null && current.value.status !== "completed") return { ok: false, error: { kind: "LearningBatchIncomplete" } };
     if (!force && current.value !== null && current.value.status === "open" && current.value.learningDay !== day) {
       dependencies.logger({ event: "learning-feed-incomplete-day-expired", ownerId, batchId: current.value.batchId });
     }

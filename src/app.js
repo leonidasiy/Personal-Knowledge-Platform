@@ -535,7 +535,7 @@ async function loadActiveRoute() {
         if (uploadPage === null) {
           const { createUploadPage } = await import("./features/uploads/page.js");
           const library = libraryPageController;
-          uploadPage = createUploadPage({ fetch, baseUrl:new URL("./",location.href).href,createId:()=>crypto.randomUUID(),onChange:()=>render(),onRenamed:(id,title)=>library.renamed(id,title),onExtracted:()=>{location.hash="library";},upload:async(id,form,context)=>{await library.uploadMaterial(id,form,context);return library.uploadResult();} });
+          uploadPage = createUploadPage({ fetch, baseUrl:new URL("./",location.href).href,createId:()=>crypto.randomUUID(),onChange:()=>render(),onRenamed:(id,title)=>library.renamed(id,title),onExtracted:()=> (learnerController?.refreshFeed(),location.hash="library"),upload:async(id,form,context)=>{await library.uploadMaterial(id,form,context);return library.uploadResult();} });
         }
         const prefill = uploadPrefill;
         uploadPrefill = null;
@@ -593,6 +593,7 @@ async function loadActiveRoute() {
             location.hash = "upload";
           },
           navigateToLibrary: (sourceId) => {
+            learnerController?.refreshFeed();
             void libraryPageController?.revealSource(sourceId).catch(() => {
               libraryRouteIssue = APP_COPY.libraryRouteUnavailable;
               render();

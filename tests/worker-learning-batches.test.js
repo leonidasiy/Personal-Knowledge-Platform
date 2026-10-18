@@ -135,6 +135,27 @@ Deno.test("learner D1 service only selects paired knowledge and creates a five-c
   assertEquals(database.queries.some((query) => query.includes("LEFT JOIN learner_preference_feedback pf") && query.includes("COALESCE(ls.preference, pf.preference, 0)")), true);
 });
 
+Deno.test("manual Feed refresh replaces an unfinished batch on the same day", async () => {
+  const previous = { batch_id: "unfinished", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(Array.from({ length: 5 }, (_, i) => `knowledge-${i}`)), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
+  class CurrentBatchDatabase extends Database {
+    /** @override @param {string} query @param {readonly (string | number | null)[]} [bindings] */
+    async first(query, bindings = []) {
+      if (query.includes("FROM learner_feed_batches")) return previous;
+      return await super.first(query, bindings);
+    }
+  }
+  const database = new CurrentBatchDatabase(rows(8));
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T12:00:00.000Z", random: () => 0.1, logger: () => {} });
+  const result = await service.loadFeed("owner-a", "2026-08-19", true);
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  const projection = /** @type {{ batch: { batchId: string, status: string, itemIds: readonly string[] } }} */ (result.value);
+  assertEquals(projection.batch.status, "open");
+  assertEquals(projection.batch.batchId === previous.batch_id, false);
+  assertEquals(projection.batch.itemIds.length, 5);
+  assertEquals(database.queries.some(query => query.startsWith("INSERT INTO learner_feed_batches")), true);
+});
+
 Deno.test("learner D1 service accepts evidence anchors produced by the extractor without synthetic ids", async () => {
   const extractorRows = rows().map((row, index) => ({
     ...row,

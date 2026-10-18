@@ -58,7 +58,7 @@ Deno.test("Feed is text-only without associated media and hides legacy fallback 
     const card = html.slice(html.indexOf('<article class="learning-card"'));
     assert(card.indexOf('card-knowledge') < card.indexOf('card-source') && card.indexOf('card-source') < card.indexOf('card-subject'), "Reading order must be knowledge, source, then subject.");
     assert(!html.includes('session-panel') && !html.includes('progress-bridge'), "Completion must not repeat competing panels.");
-    assert(html.includes('Mark batch studied') && !html.includes('data-view="review"'), "Open batch must retain explicit completion before the Review continuation.");
+    assert(html.includes('Mark batch studied') && html.includes('data-action="refresh-learner-feed"') && html.indexOf('data-action="refresh-learner-feed"') > html.indexOf('Mark batch studied') && !html.includes('data-view="review"'), "Open batch must offer manual refresh beside explicit completion.");
     assert(!html.includes("<img") && !html.includes("card-media") && !html.includes("source-icon-fallback") && !html.includes("card-visual"), "Unassociated fallback must not render.");
   }
 });
@@ -124,7 +124,7 @@ Deno.test("completed Feed replaces study action with one Review continuation", a
   const html = controller.renderFeed();
   assert(!html.includes('data-action="complete-learner-feed"'), "Completed batch must not offer another study write.");
   assert(html.split('data-view="review"').length === 2, "Exactly one closing Review continuation must be available.");
-  assert(html.includes('data-action="refresh-learner-feed"'), "Completed batch retains refresh.");
+  assert(html.split('data-action="refresh-learner-feed"').length === 2, "Completed batch keeps one manual refresh beside its bottom continuation.");
 });
 
 Deno.test("Review renders the paired quiz prompt, not the knowledge-card summary", async () => {

@@ -120,7 +120,6 @@ export function createLearnerController(dependencies) {
     pending.delete("feed-refresh");
     feed = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: feed.value, error: result.error };
     onChange(undefined, "feed-refresh");
-    return result;
   }
 
   async function completeFeed() {
@@ -259,7 +258,7 @@ export function createLearnerController(dependencies) {
     const value = feed.value;
     if (value === null || value.batch === null || value.items.length === 0) return "";
     const complete = value.batch.status === "completed";
-    return feedMarkup(14, String(value.items.length), complete ? feedMarkup(15, actionState("feed-refresh"), actionLabel("feed-refresh", "Refresh batch", "Finding new ideas…")) : feedMarkup(16));
+    return feedMarkup(14, value.items.length, complete ? "" : feedMarkup(16));
   }
 
   function renderFeedBody() {
@@ -372,7 +371,7 @@ export function createLearnerController(dependencies) {
     root.querySelectorAll("[data-learner-review]").forEach((element) => element.addEventListener("submit", (event) => { event.preventDefault(); if (event.currentTarget instanceof HTMLFormElement) void answerReview(event.currentTarget); }));
   }
 
-  return freeze({ loadFeed, loadReview, refreshDay, renderFeed, renderReview, bind, hasDueReview: () => (review.value?.dueCount ?? 0) > 0 });
+  return freeze({ loadFeed, loadReview, refreshFeed, refreshDay, renderFeed, renderReview, bind, hasDueReview: () => (review.value?.dueCount ?? 0) > 0 });
 }
 
 export {};

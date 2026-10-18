@@ -4,7 +4,6 @@ import {
   calculateKnowledgeWeight,
   completeKnowledgeBatch,
   selectKnowledgeBatch,
-  validateBatchRefresh,
 } from "../src/features/learning-generation/batches.js";
 
 /** @template T @param {T} actual @param {T} expected */
@@ -79,20 +78,6 @@ Deno.test("bottom sentinel completes every card atomically and locks its paired 
   const repeated = completeKnowledgeBatch(completed.value.batch, { reachedBottom: true });
   assertEquals(repeated.ok, false);
   if (!repeated.ok) assertEquals(repeated.error.kind, "LearningBatchAlreadyClosed");
-});
-
-Deno.test("Feed refresh is blocked until the current batch is complete", () => {
-  const batch = {
-    batchId: "feed-2026-08-19",
-    learningDay: "2026-08-19",
-    items: [candidate(1), candidate(2), candidate(3), candidate(4), candidate(5)],
-    completed: false,
-  };
-  const locked = validateBatchRefresh(batch, { requestedDay: "2026-08-19" });
-  assertEquals(locked.ok, false);
-  if (!locked.ok) assertEquals(locked.error.kind, "LearningBatchIncomplete");
-  const nextDay = validateBatchRefresh({ ...batch, completed: true }, { requestedDay: "2026-08-20" });
-  assertEquals(nextDay.ok, true);
 });
 
 Deno.test("already completed batches may be selected again on a later day", () => {
