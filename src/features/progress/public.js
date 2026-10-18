@@ -17,7 +17,7 @@ const isRecord = value => typeof value === "object" && value !== null && !Array.
 /** @param {unknown} value */
 const iso = value => typeof value === "string" && Number.isFinite(Date.parse(value));
 /** @param {unknown} value */
-const identifier = value => typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= 200;
+const identifier = value => typeof value === "string" && value.trim() === value && value.length > 0;
 /** @param {string} value */
 const day = value => new Date(value).toISOString().slice(0, 10);
 /** @param {string} value */

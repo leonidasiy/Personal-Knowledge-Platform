@@ -21,7 +21,8 @@ test("progress and manual classification use real SQLite, isolate owners, preser
       db.prepare("INSERT INTO learning_generation_tasks VALUES(?,?,?)").run(owner, "q", "k");
     }
     db.prepare("INSERT INTO learner_review_answers(owner_id,batch_id,question_id,answered_at,correct,score) VALUES('a','legacy','q','2026-09-18T10:00:00.000Z',0,NULL)").run();
-    db.prepare("INSERT INTO learner_review_answers VALUES('a','new','q','2026-09-19T10:00:00.000Z',1,1,'k',80,1,0)").run();
+    const workflowQuestionId = `knowledge-workflow-task:run:${"knowledge:source:1:" + "a".repeat(64)}:${"b".repeat(200)}:choice`;
+    db.prepare("INSERT INTO learner_review_answers VALUES('a','new',?,'2026-09-19T10:00:00.000Z',1,1,'k',80,1,0)").run(workflowQuestionId);
     db.prepare("INSERT INTO learner_review_answers(owner_id,batch_id,question_id,answered_at,correct,score) VALUES('b','foreign','q','2026-09-19T10:00:00.000Z',1,1)").run();
     db.prepare("INSERT INTO learner_feed_batches VALUES('a','completed','2026-09-18T09:00:00.000Z','[\"1\",\"2\",\"3\",\"4\",\"5\"]')").run();
     const progress = await service.loadProgress("a", 7, null);

@@ -14,6 +14,19 @@ Deno.test("progress aggregates current UTC day, fractions, recovery, and primary
 Deno.test("progress distinguishes empty denominators and rejects invalid data", () => { const empty = buildProgress(input({ attempts: [], studies: [] })); assert(empty.ok && empty.value.attempts.accuracy === null && empty.value.daily[0].accuracy === null, "empty nulls"); for (const bad of [input({ days: 8 }), input({ attempts: [{ ...attempt, confidence: 80 }] }), input({ attempts: [{ ...attempt, primarySubject: "nope" }] }), input({ studies: [{ completedAt: now, itemCount: 6 }] })]) assert(!buildProgress(bad).ok, "invalid rejected"); });
 Deno.test("progress deduplicates identical attempts and rejects same batch/question conflicts", () => { const duplicate = buildProgress(input({ attempts: [attempt, { ...attempt }] })); assert(duplicate.ok && duplicate.value.attempts.count === 1, "identical dedupe"); const conflict = buildProgress(input({ attempts: [attempt, { ...attempt, answeredAt: "2026-09-19T11:00:00.000Z" }] })); assert(!conflict.ok && conflict.error.field.endsWith("duplicate"), "timestamp conflict"); });
 Deno.test("progress rejects invalid scores and excludes future records", () => { assert(!buildProgress(input({ attempts: [{ ...attempt, score: .5, correct: true }] })).ok, "score consistency"); const future = buildProgress(input({ attempts: [{ ...attempt, answeredAt: "2026-09-19T23:00:00.000Z" }] })); assert(future.ok && future.value.attempts.count === 0, "future excluded"); });
+Deno.test("progress accepts composed workflow identifiers and still rejects empty or padded identifiers", () => {
+  const knowledgeId = `knowledge:source:${"a".repeat(64)}:1:${"b".repeat(64)}`;
+  const questionId = `knowledge-workflow-task:run:${knowledgeId}:${knowledgeId}:choice`;
+  const result = buildProgress(input({ attempts: [{ ...attempt, knowledgeId, questionId }] }));
+  assert(questionId.length > 200, "Fixture covers workflow identifiers beyond the former limit");
+  assert(result.ok && result.value.activity.at(-1)?.studyItems === 5 && result.value.activity.at(-1)?.reviewAttempts === 1, "Valid workflow answers retain both activity counts");
+  for (const field of ["batchId", "questionId", "knowledgeId"]) {
+    for (const value of [null, 1, "", " ", " padded"]) {
+      if (field === "knowledgeId" && value === null) continue;
+      assert(!buildProgress(input({ attempts: [{ ...attempt, [field]: value }] })).ok, "Invalid identifiers remain rejected");
+    }
+  }
+});
 Deno.test("progress page safely reports malformed responses", async () => {
   const result = buildProgress(input({ attempts: [] })); if (!result.ok) throw new Error("fixture invalid");
   /** @param {string} value */ const escapeHtml = value => value.replaceAll("<", "&lt;");
