@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-18 unused ZIP dependency removal
+
+- Replaced Cloudflare Puppeteer's unused browser-helper dependency with upstream
+  3.2.5 through a scoped npm override. This removes `extract-zip` and its old
+  FTP/proxy chain while preserving the existing Cloudflare browser client.
+- Full npm audit now reports zero vulnerabilities. Dependency and remote-binding
+  regressions replace checks for packages no longer installed; URL/PDF capture
+  behavior retains its existing coverage. See [the assessment](DEPENDENCY_SECURITY.md).
+
 ## 2026-10-18 model API substitution and dependency review
 
 - Added server-side OpenAI-compatible model API configuration, replacement semantic

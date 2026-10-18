@@ -1,4 +1,5 @@
 import { createRobotsGate } from '../src/features/knowledge-workflows/robots.js';
+// shortcut: the browsers override covers remote use only; reassess before using Node launchers.
 import puppeteer from '@cloudflare/puppeteer';
 import { validatePublisherDestination } from './destination-policy.js';
 import { resolvePublicAddresses } from './knowledge-workflow-network.js';

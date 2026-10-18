@@ -13,8 +13,8 @@
     "playwright-core": "1.61.1"
   },
   "overrides": {
-    "get-uri": {
-      "basic-ftp": "6.2.3"
+    "@cloudflare/puppeteer": {
+      "@puppeteer/browsers": "3.2.5"
     }
   }
 }
