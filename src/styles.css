@@ -65,6 +65,8 @@
   --elevation: 0 8px 24px var(--studio-shadow);
 
   /* Component tokens */
+  --goal-shadow: #0004;
+  --goal-backdrop: #0c1828a6;
   --card-border: var(--border);
   --card-surface: var(--surface);
   --panel-radius: 8px;
@@ -361,7 +363,7 @@ a.discover-result-action:is(:hover, :focus-visible){text-decoration:underline;ba
 :root[data-theme="dark"] .observatory-art { display: block; }
 :root[data-theme="dark"] .data-list { grid-template-columns: minmax(0, 1fr); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: var(--motion-standard); }
-@keyframes answer-confirm { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes answer-confirm { from { opacity: 0; transform: translateY(6px); } }
 @media (prefers-reduced-motion: no-preference) {
   :root:not([data-motion="off"]) .reveal-enter { animation: card-enter 700ms cubic-bezier(.2,.7,.3,1) both; }
   :root:not([data-motion="off"]) select::picker-icon { transition: rotate 180ms; }
@@ -429,22 +431,22 @@ a.discover-result-action:is(:hover, :focus-visible){text-decoration:underline;ba
 
 .daily-goal { margin: 0 auto 24px; max-width: 1200px; color: var(--text-muted); line-height: 1.8; }
 .daily-goal strong { color: var(--text); margin-inline: 12px; }
-.learning-goal-dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 36px clamp(24px, 6vw, 48px); border: 1px solid var(--border); border-radius: 28px; background: var(--surface); color: var(--text); text-align: center; box-shadow: 0 32px 100px #0004; animation: goal-arrive 360ms cubic-bezier(.16,1,.3,1) both; }
-.learning-goal-dialog::backdrop { background: #0c1828a6; backdrop-filter: blur(6px); animation: goal-veil 240ms ease-out both; }
+.learning-goal-dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 36px clamp(24px, 6vw, 48px); border: 1px solid var(--border); border-radius: 28px; background: var(--surface); color: var(--text); text-align: center; box-shadow: 0 32px 100px var(--goal-shadow); animation: goal-enter 360ms cubic-bezier(.16,1,.3,1) both; }
+.learning-goal-dialog::backdrop { background: var(--goal-backdrop); backdrop-filter: blur(6px); animation: goal-veil 240ms ease-out both; }
 .learning-goal-dialog h2 { margin: 12px 0 20px; font-size: clamp(32px, 6vw, 46px); line-height: 1.08; letter-spacing: -.035em; }
 .learning-goal-dialog > p:not(.eyebrow) { color: var(--text-muted); line-height: 1.7; }
 .goal-actions { display: grid; gap: 10px; margin-top: 28px; }
 .goal-actions .primary { justify-content: center; gap: 18px; }
 .goal-constellation { position: relative; width: 220px; height: 190px; margin: 0 auto 20px; color: var(--action); }
-.goal-seal { position: absolute; inset: 28px 46px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 1px solid currentColor; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 10px color-mix(in srgb, var(--action) 7%, transparent); }
+.goal-seal { position: absolute; inset: 28px 46px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 1px solid; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 10px color-mix(in srgb, var(--action) 7%, transparent); }
 .goal-seal strong { font-size: 42px; line-height: 1; font-weight: 500; }
 .goal-seal small { font-size: 11px; letter-spacing: .06em; }
-.goal-orbit { position: absolute; inset: 12px 22px; border: 1px dashed currentColor; opacity: .3; border-radius: 50%; transform: rotate(-24deg) scaleY(.75); }
+.goal-orbit { position: absolute; inset: 12px 22px; border: 1px dashed; opacity: .3; border-radius: 50%; transform: rotate(-24deg) scaleY(.75); }
 .goal-star { position: absolute; left: 100px; top: 85px; transform: rotate(calc(var(--star) * 45deg)) translateX(95px) rotate(calc(var(--star) * -45deg)); animation: goal-burst 620ms calc(var(--star) * 10ms) cubic-bezier(.16,1,.3,1) both; }
 .goal-star:nth-child(3n) { color: var(--signal-three); }
 .goal-star .spark-icon { width: 15px; height: 15px; }
-@keyframes goal-arrive { from { opacity: 0; transform: translateY(24px) scale(.96); } to { opacity: 1; transform: none; } }
-@keyframes goal-veil { from { opacity: 0; } to { opacity: 1; } }
-@keyframes goal-burst { from { opacity: 0; transform: rotate(calc(var(--star) * 45deg)) translateX(20px) scale(.2); } to { opacity: 1; } }
+@keyframes goal-enter { from { opacity: 0; transform: translateY(24px) scale(.96); } }
+@keyframes goal-veil { from { opacity: 0; } }
+@keyframes goal-burst { from { opacity: 0; transform: rotate(calc(var(--star) * 45deg)) translateX(20px) scale(.2); } }
 @media (prefers-reduced-motion: reduce) { .learning-goal-dialog, .learning-goal-dialog::backdrop, .goal-star { animation: none; } }
 :root[data-motion="off"] .learning-goal-dialog, :root[data-motion="off"] .learning-goal-dialog::backdrop, :root[data-motion="off"] .goal-star { animation: none; }

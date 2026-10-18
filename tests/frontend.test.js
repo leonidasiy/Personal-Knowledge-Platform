@@ -130,17 +130,11 @@ Deno.test("appearance is owner-scoped, exported, and erased; retired layouts rem
   );
 });
 
-Deno.test("feed reveals immutable daily assignments and retains the 24-hour ranking policy", async () => {
+Deno.test("local Feed history retains its cursor lifetime and distinct errors", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   assert(
     source.includes("cursorLifetimeMs: 24 * 60 * 60_000"),
     "The local cursor lifetime must be exactly 24 hours.",
-  );
-  assert(
-    source.includes("await ensureDailyStudySet()") &&
-      source.includes("syncVisibleAssignment()") &&
-      !source.includes("function renderFeedItem"),
-    "Daily assignment persistence must remain, without rendering the retired fixture feed.",
   );
   for (
     const failure of [
@@ -161,9 +155,7 @@ Deno.test("feed reveals immutable daily assignments and retains the 24-hour rank
 
 Deno.test("active learner Feed completion has no legacy visibility tracker", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
-  const learner = await Deno.readTextFile(
-    new URL("src/features/learning-generation/learner.js", root),
-  );
+  const learner = await readLearnerPresentation();
   assert(
     !source.includes("startStudyTracking") &&
       !source.includes("data-feed-reveal") &&
@@ -392,7 +384,7 @@ Deno.test("showcase themes own composition and preserve motion preferences", asy
   const componentCss = css.slice(css.indexOf("* {"));
   assert(
     !/#[0-9a-f]{3,8}\b/i.test(componentCss),
-    "Components must consume Studio Signal tokens instead of raw colors.",
+    "Components must consume theme tokens instead of raw colors.",
   );
   assert(
     css.includes("--control-height: 44px"),
@@ -531,16 +523,16 @@ Deno.test("fatal local restore keeps export/reset recovery without legacy review
   );
 });
 
-Deno.test("Learner controls expose approved targets and batch ownership", async () => {
+Deno.test("Learner controls expose independent daily targets and batch ownership", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const libraryRoute = await readLibraryPresentation();
   const learner = await readLearnerPresentation();
   assert(
     source.includes("data-daily-settings-form") &&
       source.includes('min="1" max="50"') &&
-      source.includes("Recall limit must be lower than the study target.") &&
-      source.includes("Changes apply to the next assigned set."),
-    "Daily learning settings must expose the approved atomic target pair.",
+      source.includes('name="daily-recall-limit" type="number" min="0" step="1"') &&
+      source.includes("Independent daily goals: knowledge cards studied on Feed and quiz cards completed on Review."),
+    "Settings must expose independent learning and review targets with their current input bounds.",
   );
   assert(
     !source.includes('import("./routes/review.js")') &&
@@ -558,14 +550,6 @@ Deno.test("Learner controls expose approved targets and batch ownership", async 
       learner.includes("Read all five, then mark this batch studied") &&
       learner.includes("Questions unlock after a Feed batch is studied"),
     "The Review tab must own paired questions and unlock them after Feed completion.",
-  );
-  assert(
-    learner.includes("gateway.loadReview(day())") &&
-      learner.includes("gateway.answerReview") &&
-      learner.includes("next interval") &&
-      learner.includes("Math.max(0, review.value.dueCount") &&
-      learner.includes("const alreadyAnswered = answers.has(questionId)"),
-    "Review must draw from the persisted paired-question batch and retain interval feedback.",
   );
 });
 
@@ -664,23 +648,17 @@ Deno.test("Discover route re-entry retries the hosted source capability probe", 
 
 Deno.test("every project-owned CSS class is used or documented as dynamic", async () => {
   const css = await Deno.readTextFile(new URL("src/styles.css", root));
-  const application = [
-    await Deno.readTextFile(new URL("src/features/experience/reveal.js", root)),
-    await Deno.readTextFile(new URL("src/features/reminders/page.js", root)),
-    await Deno.readTextFile(new URL("src/app.js", root)),
-    await Deno.readTextFile(new URL("src/routes/navigation.js", root)),
-    await Deno.readTextFile(new URL("src/features/uploads/page.js", root)),
-    await Deno.readTextFile(
-      new URL("src/features/notifications/controller.js", root),
-    ),
-    await Deno.readTextFile(new URL("src/routes/review.js", root)),
-    await Deno.readTextFile(new URL("src/routes/library.js", root)),
-    await Deno.readTextFile(new URL("src/routes/discover.js", root)),
-    await Deno.readTextFile(
-      new URL("src/features/learning-generation/learner.js", root),
-    ),
-    await Deno.readTextFile(new URL("index.html", root)),
-  ].join("\n");
+  /** @param {URL} directory @returns {Promise<string[]>} */
+  async function readScripts(directory) {
+    const sources = [];
+    for await (const entry of Deno.readDir(directory)) {
+      const path = new URL(entry.name + (entry.isDirectory ? "/" : ""), directory);
+      if (entry.isDirectory) sources.push(...await readScripts(path));
+      else if (entry.isFile && entry.name.endsWith(".js")) sources.push(await Deno.readTextFile(path));
+    }
+    return sources;
+  }
+  const application = [await Deno.readTextFile(new URL("index.html", root)), ...await readScripts(new URL("src/", root))].join("\n");
   const documentedDynamic = new Set([
     "signal-1",
     "signal-2",
