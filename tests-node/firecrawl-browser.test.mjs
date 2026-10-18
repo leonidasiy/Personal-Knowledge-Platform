@@ -20,7 +20,7 @@ function fixture(options={}){
   unroute:async()=>{guard=null;},route:async(_pattern,handler)=>{guard=handler;},
   on:(name,handler)=>listeners.set(name,handler),off:name=>listeners.delete(name),
   async goto(url,options){loaded=options?.waitUntil==='load';location=url;listeners.get('response')?.({request:()=>({isNavigationRequest:()=>true,frame:()=>page}),status:()=>status,headers:()=>({'content-type':'text/html'})});emitImages(false);},
-  waitForLoadState:async()=>{if(options.waitError)throw options.waitError;},content:async()=>options.html??'<main><p>Fixture educational text.</p></main>',screenshot:async()=>png,
+  emulateMedia:async()=>{},pdf:async()=>Buffer.from(options.pdf??'%PDF-fixture'),waitForLoadState:async()=>{if(options.waitError)throw options.waitError;},content:async()=>options.html??'<main><p>Fixture educational text.</p></main>',screenshot:async()=>png,
   locator:()=>({click:async()=>{if(options.clickError)throw options.clickError;location=second;await page.goto(second);}}),
   async evaluate(fn,arg){
    if(fn.name==='collectWebpageEvidence')return {ok:true,value:{...evidence(),...(options.delayedContent&&!loaded?{blocks:[]}: {})}};
@@ -346,4 +346,21 @@ test('decompression respects the existing payload budget and explicit provider t
   const f=fixture({execute:async()=>Response.json({success:true,truncated,stdout:JSON.stringify({transport:'gzip-base64',total:data.length,data})})});
   try{assert.equal((await f.browser.readPage({url:first,rootUrl:root})).error.kind,truncated?'FirecrawlBrowserOutputTruncated':'FirecrawlBrowserResponseTooLarge');assert.equal(f.calls.at(-1).method,'DELETE');if(truncated)assert(f.logs.some(e=>e.diagnosticToken==='provider-output-truncated'));}finally{await f.browser.close();}
  }
+});
+
+
+test('PDF capture prints only a current observed public page, validates bytes and never relaunches an expired observation',async()=>{
+ const f=fixture();assert.equal((await f.browser.capturePdf({url:first,rootUrl:root})).error.kind,'KnowledgeBrowserObservationStale');
+ assert.equal((await f.browser.readPage({url:first,rootUrl:root})).ok,true);
+ const printed=await f.browser.capturePdf({url:first,rootUrl:root});assert.equal(printed.ok,true);assert.equal(new TextDecoder().decode(printed.value),'%PDF-fixture');
+ assert.equal((await f.browser.capturePdf({url:second,rootUrl:root})).error.kind,'KnowledgeBrowserObservationStale');
+ f.advance(121000);assert.equal((await f.browser.capturePdf({url:first,rootUrl:root})).error.kind,'KnowledgeBrowserObservationStale');assert.equal(f.reserves.length,1);
+ const bad=fixture({pdf:'not a PDF'});assert.equal((await bad.browser.readPage({url:first,rootUrl:root})).ok,true);assert.equal((await bad.browser.capturePdf({url:first,rootUrl:root})).error.kind,'MaterialUrlCaptureInvalid');
+});
+
+test('PDF output size failures keep their named limit and safe diagnostic stage',async()=>{
+ const f=fixture({pdf:'%PDF-'+ 'x'.repeat(policy.encodedOperationBytes)});
+ assert.equal((await f.browser.readPage({url:first,rootUrl:root})).ok,true);
+ assert.equal((await f.browser.capturePdf({url:first,rootUrl:root})).error.kind,'MaterialByteLimitExceeded');
+ assert(f.logs.some(entry=>entry.operationStage==='pdf'&&entry.failureKind==='MaterialByteLimitExceeded'));
 });

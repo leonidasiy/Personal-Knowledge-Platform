@@ -199,7 +199,7 @@ test("workflow alerts recheck authoritative ownership/revision and report invali
 
 test("actual workflow entry sends before retention/waits and preserves extraction success on push failure", async () => {
   const source = await readFile(
-    new URL("../worker/knowledge-workflow-entry.mjs", import.meta.url),
+    new URL("../worker/knowledge-workflow-executor.mjs", import.meta.url),
     "utf8",
   );
   for (
@@ -308,11 +308,11 @@ test("actual workflow entry sends before retention/waits and preserves extractio
     const Entry = new Function(
       ...Object.keys(bindings),
       source.replace(/^import .*;\n/gm, "").replace(
-        "export class KnowledgeExtractionWorkflow",
-        "class KnowledgeExtractionWorkflow",
-      ) + "\nreturn KnowledgeExtractionWorkflow;",
+        "export async function executeKnowledgeWorkflow",
+        "async function executeKnowledgeWorkflow",
+      ) + "\nreturn executeKnowledgeWorkflow;",
     )(...Object.values(bindings));
-    const entry = new Entry();
+    const entry = {run(event,step){return Entry(this.env,event,step,bindings.KNOWLEDGE_WORKFLOW_CONFIG_SOURCES);}};
     entry.env = {
       SOURCE_LIBRARY_DB: { prepare: noOp, batch: noOp },
       SOURCE_CONTENT_BUCKET: { put: noOp, get: noOp, delete: noOp },

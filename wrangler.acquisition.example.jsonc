@@ -1,0 +1,14 @@
+// Copy to wrangler.acquisition.jsonc; deploy only to your own account.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "my-learning-acquisition",
+  "account_id": "REPLACE_WITH_YOUR_CLOUDFLARE_ACCOUNT_ID",
+  "main": "worker/acquisition-gateway.js",
+  "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "ACQUISITION_ORIGIN": "https://your-acquisition.example.com"
+  }
+}

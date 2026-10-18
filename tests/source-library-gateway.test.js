@@ -189,6 +189,16 @@ Deno.test("private document creation rejects owner injection and validates an at
   assertEquals(malformed.ok, false);
 });
 
+Deno.test("private document identities survive local and private phone origins without accepting foreign sources", async () => {
+  for (const baseUrl of ["http://127.0.0.1:8787/", "https://my-computer.example.ts.net/"]) {
+    for (const [canonicalUrl, expected] of [["https://local-resonance.invalid/api/private-documents/source-a", true], ["https://foreign.example/api/private-documents/source-a", false], ["https://local-resonance.invalid/other", false]]) {
+      const documentSource = { ...source, origin: "private-document", canonicalUrl, submittedUrl: canonicalUrl };
+      const client = new SourceLibraryGatewayClient({baseUrl, timeoutMs: 1000, fetch: async () => Response.json({result: {source: documentSource, runId: "private-run", reused: false}})});
+      assertEquals((await client.createPrivateDocument({title: "Lesson", fileName: "lesson.txt", idempotencyKey: "local-doc"})).ok, expected);
+    }
+  }
+});
+
 Deno.test("source gateway reads the user-facing workflow blocker explanation", async () => {
   let requested = "";
   const client = gateway((request) => {

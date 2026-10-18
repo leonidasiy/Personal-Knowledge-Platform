@@ -101,7 +101,13 @@ await page.route('**/*',async route=>{const request=route.request();const main=r
 const onResponse=response=>{const request=response.request();if(request.isNavigationRequest()&&request.frame()===page.mainFrame()){status=response.status();contentType=response.headers()['content-type']??'';if(status>=300&&status<400)redirects++;}else if(request.resourceType?.()==='image'&&imageResponses.size<input.resources){let cursor=request;const chain=[];while(cursor&&chain.length<=input.mediaRedirects){chain.unshift(cursor.url());cursor=cursor.redirectedFrom();}if(!cursor&&chain.every(url=>publicUrl(url)&&url.length<=input.urlCharacters)&&(response.status()<300||response.status()>=400))imageResponses.set(request.url(),{response,chain});}};
 page.on('response',onResponse);
 try{
- if(input.operation==='screenshot'){operationStage='screenshot';
+ if(input.operation==='pdf'){operationStage='pdf';
+  if(page.url()!==input.url||!scopedUrl(page.url()))throw new Error('KnowledgeBrowserObservationStale');
+  await page.emulateMedia({media:'screen'});
+  const pdf=await page.pdf({format:'A4',printBackground:true,timeout:input.timeoutMs});
+  if(pdf.length>input.maximumBytes)throw new Error('MaterialByteLimitExceeded');
+  emit({pdf:pdf.toString('base64'),url:page.url()});
+ }else if(input.operation==='screenshot'){operationStage='screenshot';
   if(page.url()!==input.url)throw new Error('KnowledgeBrowserObservationStale');
   emit({screenshot:(await page.screenshot({type:'png'})).toString('base64'),url:page.url()});
  }else{
@@ -285,8 +291,8 @@ export function createFirecrawlWorkflowBrowser(dependencies) {
       try{while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.byteLength;if(size>maximum){await reader.cancel();return fail('FirecrawlBrowserResponseTooLarge');}json+=decoder.decode(chunk.value,{stream:true});}}finally{reader.releaseLock();}
       parsed=JSON.parse(json+decoder.decode());if(!record(parsed))return fail('FirecrawlBrowserResponseInvalid');
     }
-if(typeof parsed.failure==='string'){const allowed=['KnowledgeBrowserClickObstructed','KnowledgeBrowserClickTargetUnavailable','KnowledgeBrowserClickTimedOut','KnowledgeBrowserLoadTimedOut','KnowledgeBrowserPageClosed','KnowledgeBrowserCaptureInterrupted','KnowledgeBrowserCaptureTimedOut','KnowledgeBrowserTimedOut','KnowledgeBrowserObservationStale','KnowledgeBrowserTargetRejected','KnowledgeBrowserNavigationRejected','RedirectLimitExceeded','KnowledgeBrowserResponseInvalid','KnowledgePageAuthenticationRequired','KnowledgePagePaywallDetected','KnowledgePageBotAccessDenied','KnowledgePageRateLimited','KnowledgePageFetchFailed','KnowledgePageTypeUnsupported','KnowledgePageTooLarge','WebpageTextLimitExceeded','KnowledgeBrowserNavigationFailed'];const kind=allowed.includes(parsed.failure)?parsed.failure:'KnowledgeBrowserNavigationFailed';
- const stages=['route-setup','screenshot','target-validation','click','wait-load','read-navigation','navigation-verification','html-capture','evidence-capture','image-capture','controls-capture','text-capture'];
+if(typeof parsed.failure==='string'){const allowed=['MaterialByteLimitExceeded','KnowledgeBrowserClickObstructed','KnowledgeBrowserClickTargetUnavailable','KnowledgeBrowserClickTimedOut','KnowledgeBrowserLoadTimedOut','KnowledgeBrowserPageClosed','KnowledgeBrowserCaptureInterrupted','KnowledgeBrowserCaptureTimedOut','KnowledgeBrowserTimedOut','KnowledgeBrowserObservationStale','KnowledgeBrowserTargetRejected','KnowledgeBrowserNavigationRejected','RedirectLimitExceeded','KnowledgeBrowserResponseInvalid','KnowledgePageAuthenticationRequired','KnowledgePagePaywallDetected','KnowledgePageBotAccessDenied','KnowledgePageRateLimited','KnowledgePageFetchFailed','KnowledgePageTypeUnsupported','KnowledgePageTooLarge','WebpageTextLimitExceeded','KnowledgeBrowserNavigationFailed'];const kind=allowed.includes(parsed.failure)?parsed.failure:'KnowledgeBrowserNavigationFailed';
+ const stages=['route-setup','pdf','screenshot','target-validation','click','wait-load','read-navigation','navigation-verification','html-capture','evidence-capture','image-capture','controls-capture','text-capture'];
  const tokens=['browser-operation-failed','click-pointer-intercepted','click-target-not-visible-or-stable','click-target-outside-viewport','click-target-detached','browser-page-closed','capture-navigation-interrupted','click-timeout','load-timeout','browser-operation-timeout'];
  dependencies.logger({event:'firecrawl-browser-operation-failure',failureKind:kind,...(typeof parsed.operationStage==='string'&&stages.includes(parsed.operationStage)?{operationStage:parsed.operationStage}:{}),...(typeof parsed.diagnosticToken==='string'&&tokens.includes(parsed.diagnosticToken)?{diagnosticToken:parsed.diagnosticToken}:{}),...(typeof parsed.failureName==='string'&&['TimeoutError','TypeError','ReferenceError','SyntaxError','Error'].includes(parsed.failureName)?{failureName:parsed.failureName}:{})});return fail(kind);}return {ok:true,value:parsed};}catch{return fail('FirecrawlBrowserResponseInvalid');}
   }
@@ -360,5 +366,18 @@ if(typeof parsed.failure==='string'){const allowed=['KnowledgeBrowserClickObstru
   }
   /** @param {PageCommand} command @returns {Promise<Result<{url:string,bytes:Uint8Array,mediaType:'image/png'}>>} */
   async function screenshot(command){if(session&&dependencies.nowMs()>=session.expires){const deleted=await deleteSession();return deleted.ok?fail('KnowledgeBrowserObservationStale'):deleted;}if(!current||current.navigation.url!==command.url)return fail('KnowledgeBrowserObservationStale');return exclusive(command,async signal=>{if(!current)return fail('KnowledgeBrowserObservationStale');const output=await execute({operation:'screenshot',url:command.url,rootUrl:command.rootUrl},signal);if(!output.ok)return output;const v=output.value;if(v.url!==command.url||typeof v.screenshot!=='string'||v.screenshot.length>Math.ceil(policy.screenshotBytes*4/3)+4||! /^[A-Za-z0-9+/]*={0,2}$/.test(v.screenshot))return fail('KnowledgeScreenshotFailed');try{const bytes=decodeBase64(v.screenshot);if(bytes.byteLength>policy.screenshotBytes)return fail('KnowledgeScreenshotTooLarge');if(bytes.length<8||[137,80,78,71,13,10,26,10].some((b,i)=>bytes[i]!==b))return fail('KnowledgeScreenshotFailed');return {ok:true,value:{url:command.url,bytes,mediaType:'image/png'}};}catch{return fail('KnowledgeScreenshotFailed');}});}
-  return Object.freeze({readPage,inspect,click,screenshot,readImage,readRobots:dependencies.readRobots,async close(){closed=true;shutdown.abort();const deleted=await deleteSession();try{const robotsClosed=await dependencies.closeRobots();if(!robotsClosed.ok)return robotsClosed;}catch{return fail('KnowledgeBrowserSessionCloseFailed');}return deleted;}});
+  /** Print the already observed public page; navigation and resource checks stay active.
+   * @param {PageCommand} command @returns {Promise<Result<Uint8Array>>} */
+  async function capturePdf(command){
+    if(session&&dependencies.nowMs()>=session.expires){const deleted=await deleteSession();return deleted.ok?fail('KnowledgeBrowserObservationStale'):deleted;}
+    if(!current||current.navigation.url!==command.url)return fail('KnowledgeBrowserObservationStale');
+    return exclusive(command,async signal=>{
+      const output=await execute({operation:'pdf',url:command.url,rootUrl:command.rootUrl,timeoutMs:policy.requestMilliseconds,maximumBytes:policy.encodedOperationBytes},signal);
+      if(!output.ok)return output;
+      const value=output.value;
+      if(value.url!==command.url||typeof value.pdf!=='string'||value.pdf.length>Math.ceil(policy.encodedOperationBytes*4/3)+4||!/^[A-Za-z0-9+/]*={0,2}$/.test(value.pdf))return fail('MaterialUrlCaptureInvalid');
+      try{const bytes=decodeBase64(value.pdf);if(bytes.byteLength>policy.encodedOperationBytes)return fail('MaterialByteLimitExceeded');return new TextDecoder().decode(bytes.subarray(0,5))==='%PDF-'?{ok:true,value:bytes}:fail('MaterialUrlCaptureInvalid');}catch{return fail('MaterialUrlCaptureInvalid');}
+    });
+  }
+  return Object.freeze({readPage,inspect,click,screenshot,capturePdf,readImage,readRobots:dependencies.readRobots,async close(){closed=true;shutdown.abort();const deleted=await deleteSession();try{const robotsClosed=await dependencies.closeRobots();if(!robotsClosed.ok)return robotsClosed;}catch{return fail('KnowledgeBrowserSessionCloseFailed');}return deleted;}});
 }

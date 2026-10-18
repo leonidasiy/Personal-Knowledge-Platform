@@ -2,34 +2,33 @@
 
 ## Choose how to use Resonance
 
-| What you want | Where to start |
-| --- | --- |
-| Use all features on a computer or phone | [Use the live app](#use-the-live-app). No coding tools or API keys needed. |
-| Run a sample version on your own computer | [Run the local demo](#run-the-local-demo). This uses sample content and separate local data. |
+| Option | Advantages | Tradeoffs | Guide |
+| --- | --- | --- | --- |
+| Full backend on your computer | No Cloudflare account/provisioning; database and files stay on your computer; uses your own API keys. | Computer must stay awake with server running; phone needs private Tailscale HTTPS; you manage backups. AI still needs internet and provider credits. | [Computer setup](COMPUTER_SETUP.md) |
+| Your own Cloudflare deployment | App, files and learning records stay available when your computer is off; Access email login; scheduled cloud jobs. | More account/billing/configuration steps; cloud storage/compute can cost money. Public website extraction also needs your acquisition computer/server running, or your own always-on host. | [Cloudflare setup](SELF_HOSTING.md) and [acquisition setup](ACQUISITION_SETUP.md) |
+| Sample demo | No API keys/charges; quickly try the screens. | Sample browser-local data only; no full processing backend or phone synchronization. | [Run the demo](#run-the-local-demo) |
 
-The full learning service runs online. Installing its icon on your device does
-not move the server onto that device. The live site is private: ask the site
-owner to authorize your email before signing in.
+Both full options process permitted sources into knowledge and quizzes using
+[your own API services](SERVICES.md). Neither needs the maintainer's keys,
+Cloudflare membership, private files or credits. Cloudflare mode uses the
+included `wrangler.self-host.example.jsonc`, never the maintainer's
+`wrangler.jsonc`. Phone installation is a window onto your backend, not a server
+running on the phone. YouTube search is metadata-only; automatic podcast
+transcription is not included.
 
-## Use the live app
+## Install on your devices
 
-Open [Resonance](https://resonance-discovery.lirenleonidas.workers.dev) on your
-computer or phone. Sign in through Cloudflare Access using an authorized email
-and its one-time code. This is a private site, not open registration.
-Installation is optional; you can use the same app in a normal browser.
-
-1. Open the link above in Chrome or Safari.
-2. Enter your authorized email, check your inbox for the sign-in code, and enter
-   it on the sign-in page. Check spam if the message does not arrive.
-3. Open **Library** to find your sources, **Feed** to study, and **Review** to
-   answer questions. Use the same authorized email on your other devices.
-
-If you see an access-denied page, contact the site owner. Creating a GitHub or
-Cloudflare account does not grant access to this app.
+First finish [computer setup](COMPUTER_SETUP.md#5-use-the-same-backend-on-your-phone)
+or [Cloudflare setup](SELF_HOSTING.md). Open **your own HTTPS URL** on both
+devices. Computer mode uses your local app password; Cloudflare mode uses the
+email allowed by your Access policy. Installation is optional. Use the same URL
+and owner login to share server data. Cloudflare dashboard login is separate
+from application login. A GitHub/Cloudflare account does not grant access to
+someone else's private deployment.
 
 ### Desktop
 
-In Chrome on Windows, macOS or Linux, open the signed-in site, then use the
+In Chrome on Windows, macOS or Linux, open your signed-in site, then use the
 address-bar install icon or **Menu → Cast, save, and share → Install page as app**.
 Confirm and open Resonance from your app launcher. If installation is unavailable,
 bookmark the site instead. Menu wording varies by browser/version.
@@ -37,7 +36,7 @@ bookmark the site instead. Menu wording varies by browser/version.
 
 ### Android
 
-1. Open the live URL in Chrome and sign in, outside an embedded messaging browser.
+1. Open your deployed HTTPS URL in Chrome and sign in, outside an embedded messaging browser.
 2. Choose **Menu → Install and create shortcut → Install**. Some versions show
    **Install app** or **Add to Home screen**.
 3. Launch the Resonance icon; sign in again if that app context asks you to.
@@ -48,7 +47,7 @@ app. [Chrome's Android guide](https://support.google.com/chrome/answer/9658361?h
 
 ### iPhone and iPad
 
-Open the live URL in Safari, sign in, then choose **Share → Add to Home Screen**.
+Open your deployed HTTPS URL in Safari, sign in, then choose **Share → Add to Home Screen**.
 Enable **Open as Web App** if offered, then tap **Add**. Launch the new icon;
 its login/storage context may differ from the Safari tab.
 [Apple's guide](https://support.apple.com/guide/iphone/open-as-web-app-iphea86e5236/ios).
@@ -81,10 +80,12 @@ If the grading service is unavailable, the answer stays pending; try again later
 
 ### Login and data
 
-Cloudflare admin login is separate from Resonance login. Do not share codes.
-New devices, cleared cookies, sign-out or session expiry can require a new code.
+Computer mode uses your password and signs browsers out when the server restarts.
+Cloudflare mode uses its Access login; admin login is separate. Do not share
+passwords/codes. New devices, cleared cookies, sign-out or session expiry can
+require signing in again.
 
-Hosted sources, knowledge and review records belong to the authenticated server
+Server sources, knowledge and review records belong to the authenticated server
 account. Appearance and reminder enrollment are browser/device-specific.
 Local-demo IndexedDB records are separate: **Library → Export** exports local
 data, not a complete backup of your hosted account. Clearing browser data can erase local
@@ -103,7 +104,8 @@ home screen without force-stopping Chrome. If you already completed today's
 learning, the scheduled reminder is suppressed. Restore your preferred time after
 the check. No reinstall is needed; reopen the app online if Settings looks stale.
 Check site/browser and OS permissions if notifications stop. Revisit settings
-after a timezone change. Delivery is best-effort, not an exact alarm; physical
+after a timezone change. Computer-hosted reminders need the computer awake and running.
+Delivery is best-effort, not an exact alarm; physical
 Android test-push delivery has been confirmed; scheduled and source-event delivery
 still need your device check. iOS delivery remains unverified.
 
@@ -127,11 +129,13 @@ reset. Installation does not bypass Cloudflare Access.
 This is a sample version for learning how the screens work. It does not provide
 the hosted search, extraction, image processing, AI grading or notifications.
 Its records stay in the browser on that computer and do not sync to your phone.
-Use the live app above for those features. No API keys are needed for the demo.
+Use [computer setup](COMPUTER_SETUP.md) or [Cloudflare setup](SELF_HOSTING.md)
+for those features. No API keys
+are needed for the demo.
 
 ### 1. Install the tools once
 
-- Install **Node.js LTS** from [nodejs.org](https://nodejs.org/en/download).
+- Install **Node.js 24 LTS or newer** from [nodejs.org](https://nodejs.org/en/download).
   Keep the installer's default options; it includes `npm`.
 - Install **Deno 2** using the instructions for your operating system at
   [deno.com](https://docs.deno.com/runtime/getting_started/installation/).
@@ -191,14 +195,11 @@ Windows command above). You only need to rebuild after changing/updating files.
 | `package.json` or `deno.json` not found | Use `cd` to enter the extracted project folder. |
 | Build/download failure | Check your internet connection; keep the error message if you need help. Do not continue to the server step until the build succeeds. |
 | Port 4173 already in use | Stop an earlier demo terminal with Ctrl+C. |
-| The local app has no hosted source processing | This is expected in the sample demo. Open the live URL for the full service. |
+| The demo has no source processing | This is expected in the sample demo. Follow one of the two full backend guides above. |
 
-To use Resonance on your phone, open the **live HTTPS URL**, then follow the
-Android or iPhone instructions above. `localhost` on a phone points to that
-phone, so the computer's demo address will not work there.
-
-Running your own full online service requires separate Cloudflare resources,
-access policies and provider credentials. The repository's `wrangler.jsonc`
-targets the existing owner's service; it is not a ready-to-deploy configuration
-for another account. Ordinary users only need the live link and an authorized
-email.
+To use Resonance on your phone with synchronized learning records, finish
+[computer setup](COMPUTER_SETUP.md) or [Cloudflare setup](SELF_HOSTING.md),
+open **your HTTPS URL**, then
+follow the [device installation steps](#install-on-your-devices). `localhost` on
+a phone points to the phone itself. A computer's local demo is not a full online
+service and does not synchronize its sample records to your hosted account.

@@ -239,7 +239,7 @@ Deno.test("Cloudflare decoder reuses successful pixels, rechecks changed bytes a
 });
 
 Deno.test("production composes exactly one atomic media public egress without raw fetch or separate DNS", async () => {
-  const source = await Deno.readTextFile("worker/knowledge-workflow-entry.mjs");
+  const source = await Deno.readTextFile("worker/knowledge-workflow-executor.mjs");
   assertEquals((source.match(/createMediaPublicEgress\(/gu) ?? []).length, 1);
   const mediaStart = source.indexOf("const media = createMediaPipeline({");
   const mediaEnd = source.indexOf("const imageSearch =", mediaStart);

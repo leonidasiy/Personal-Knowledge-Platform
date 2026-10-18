@@ -55,7 +55,7 @@ test('domain invalid result never falls back from strict schema after provider r
 async function productionLogger(records) {
   const { readFileSync } = await import('node:fs');
   const { createKnowledgeWorkflowLogger } = await import('../worker/knowledge-workflow-logging.js');
-  const source = readFileSync('worker/knowledge-workflow-entry.mjs', 'utf8');
+  const source = readFileSync('worker/knowledge-workflow-executor.mjs', 'utf8');
   const line = source.split('\n').find(l => l.includes('logger: (entry) => logger({...entry,ownerId,runId})'));
   assert(line, 'Production runtime logger forwarder must exist');
   const expression = line.trim().slice('logger: '.length, -1);

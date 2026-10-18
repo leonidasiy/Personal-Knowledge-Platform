@@ -42,6 +42,7 @@
         "npm:@types/node@22.20.1",
         "npm:@types/web-push@3.6.4",
         "npm:playwright-core@1.61.1",
+        "npm:sharp@0.35.5",
         "npm:unpdf@1.8.1",
         "npm:web-push@3.6.7"
       ]

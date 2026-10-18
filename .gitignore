@@ -36,3 +36,7 @@ __pycache__/
 /milestones/
 /tests/documentation-contract.test.js
 /scripts/check-frontend-showcase.mjs
+
+# Personal deployment configuration; distribute only the placeholder template.
+/wrangler.self-host.jsonc
+/wrangler.acquisition.jsonc

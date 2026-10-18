@@ -19,6 +19,8 @@
     "browser:acceptance:login": "node scripts/browser-acceptance-login.mjs",
     "check": "deno check scripts/webpage-image-evaluation.mjs && deno check acquisition/*.ts scripts/acquisition-local.mjs && deno check src/app.js scripts/build.mjs src/features/discovery/*.js src/routes/*.js src/startup/*.js worker/*.js companion/*.js tests/*.test.js && deno check scripts/browser-acceptance-composition.mjs scripts/browser-acceptance-core.mjs scripts/browser-acceptance-login-core.mjs scripts/browser-acceptance-login.mjs scripts/browser-acceptance.mjs scripts/browser-session-state.mjs",
     "serve": "python3 -m http.server 4173 --directory dist",
-    "test": "deno test --allow-read --allow-write --allow-run=git tests/"
+    "test": "deno test --allow-read --allow-write --allow-run=git tests/",
+    "start:local": "node --env-file=.env.local local/server.mjs",
+    "acquisition:serve": "node --env-file=.env.acquisition scripts/acquisition-server.mjs"
   }
 }

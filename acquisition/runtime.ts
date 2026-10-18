@@ -8,6 +8,7 @@ import {
 import type {
   Logger,
   Policy,
+  Renderer,
   Resolver as AddressResolver,
 } from "./contracts.ts";
 export class DnsFailed extends Error {
@@ -72,7 +73,8 @@ export function createAcquisitionRuntime(
     readonly maximumActive: number;
     readonly maximumRetained: number;
     readonly retentionMilliseconds: number;
-    readonly transport: { readonly kind: "loopback-fixture" } | {
+    readonly decodeImage?: Renderer["decodeImage"];
+    readonly transport: { readonly kind: "loopback-fixture" | "loopback" } | {
       readonly kind: "tls";
       readonly key: string;
       readonly cert: string;
@@ -93,7 +95,13 @@ export function createAcquisitionRuntime(
     platform: deps.platform,
     request: gate.request,
   });
-  const handler = createAcquisitionHandler({ ...deps, gate, renderer });
+  const handler = createAcquisitionHandler({
+    ...deps,
+    gate,
+    renderer: deps.decodeImage
+      ? { ...renderer, decodeImage: deps.decodeImage }
+      : renderer,
+  });
   return {
     handler,
     server: createAcquisitionServer({

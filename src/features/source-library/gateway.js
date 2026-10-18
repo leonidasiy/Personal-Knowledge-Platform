@@ -6,6 +6,7 @@ import {
   isPublicHttpsUrl,
   isRecord,
 } from "./contracts.js";
+import { sourceHref } from "./source-link.js";
 import { parseWorkflowProgress } from '../knowledge-workflows/progress.js';
 import { isSubjectId } from '../knowledge-subjects/public.js';
 
@@ -209,7 +210,9 @@ export class SourceLibraryGatewayClient {
     const value = isRecord(response.value) ? response.value.result : null;
     if (!isRecord(value) || !isNonEmptyText(value.runId) || typeof value.reused !== "boolean" || !isRecord(value.source) || value.source.origin !== "private-document") return bad();
     const source = parseSource(value.source);
-    if (source === null || new URL(source.canonicalUrl).origin !== this.#base.origin || !new URL(source.canonicalUrl).pathname.startsWith("/api/private-documents/")) return bad();
+    if (source === null) return bad();
+    const url = new URL(sourceHref(source.canonicalUrl), this.#base);
+    if (url.origin !== this.#base.origin || !url.pathname.startsWith("/api/private-documents/")) return bad();
     return { ok: true, value: freeze({ source, runId: value.runId, reused: value.reused }) };
   }
 

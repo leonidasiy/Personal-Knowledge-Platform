@@ -155,7 +155,7 @@ Deno.test("knowledge browser reports identity configuration failures before navi
 });
 
 Deno.test("knowledge workflow production composition injects isolated robots requests without page execution", async () => {
-  const source = await Deno.readTextFile(new URL("../worker/knowledge-workflow-entry.mjs", import.meta.url));
+  const source = await Deno.readTextFile(new URL("../worker/knowledge-workflow-executor.mjs", import.meta.url));
 
   assertEquals(source.includes("browserRequest: async ({ page"), false);
   assertEquals(source.includes("browserRequest: async ({ page, url, timeout }) => page.goto"), false);

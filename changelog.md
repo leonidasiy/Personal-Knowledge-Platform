@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-18 independent setup
+
+- Added a standalone computer backend with private SQLite/files, password login,
+  persistent learning workflows and private HTTPS phone access using readers’
+  own API services. It needs no Cloudflare account.
+- Added portable acquisition deployment, authenticated private Cloudflare bridge,
+  own-account templates and empty-install seed. Shared workflow execution keeps
+  local and cloud processing aligned.
+- Added beginner computer/cloud/acquisition/API guides with option tradeoffs,
+  backups, troubleshooting and no dependency on maintainer credentials.
+- Fixed private-document links when moving between computer and phone origins.
+  Synthetic integration covers upload, publication, study, review and restart.
+
 ## 2026-10-14
 
 - Follow-up user exploration by Luna verified signed-in production navigation,

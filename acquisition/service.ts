@@ -313,7 +313,7 @@ export function createAcquisitionServer(
   deps: {
     readonly handler: (request: Request) => Promise<Response>;
     readonly policy: Policy;
-    readonly transport: { readonly kind: "loopback-fixture" } | {
+    readonly transport: { readonly kind: "loopback-fixture" | "loopback" } | {
       readonly kind: "tls";
       readonly key: string;
       readonly cert: string;
@@ -322,12 +322,12 @@ export function createAcquisitionServer(
 ): http.Server | https.Server {
   if (
     typeof deps.handler !== "function" ||
-    !["tls", "loopback-fixture"].includes(deps.transport?.kind)
+    !["tls", "loopback-fixture", "loopback"].includes(deps.transport?.kind)
   ) throw new TypeError("ConfigurationInvalid");
   validatePolicy(deps.policy);
   const listener: http.RequestListener = async (req, res) => {
     if (
-      deps.transport.kind === "loopback-fixture" &&
+      deps.transport.kind !== "tls" &&
       !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(
         req.socket.remoteAddress ?? "",
       )

@@ -5,23 +5,34 @@ source-linked knowledge cards and retrieval-practice quizzes. Music is its first
 subject; extraction now uses a fixed 22-subject taxonomy with source-specific
 subcategories. Fieldnotes is the light theme and Observatory the dark theme.
 
-## Use it on your computer or phone
+## Set up your own copy on computer and phone
 
-Open the [private live site](https://resonance-discovery.lirenleonidas.workers.dev)
-and sign in with your authorized email. No development tools are needed.
-You can use the browser or install its desktop/home-screen web app.
-Follow [desktop, Android and iPhone/iPad setup](SETUP.md#use-the-live-app).
-For a sample version on your own computer, follow the step-by-step
-[local demo setup](SETUP.md#run-the-local-demo). Hosted processing requires the live service.
-Settings controls appearance, motion, sound and optional daily reminders and source-processing alerts.
-YouTube information is tucked into a collapsed Settings disclosure. Card entrances
-respect both the motion toggle and your device's reduced-motion preference.
-Reminders are available for Android Chrome; enable them in Settings on each device.
+Start with [SETUP.md](SETUP.md) to compare two complete setups:
 
-## Use the hosted knowledge workflow
+- [Run the backend on your computer](COMPUTER_SETUP.md): local database/storage,
+  password login, your own API keys, and private phone access. No Cloudflare
+  account; the computer must stay on.
+- [Deploy to your own Cloudflare account](SELF_HOSTING.md): hosted app, database,
+  files and login, plus [your acquisition server](ACQUISITION_SETUP.md) for web
+  extraction. More setup and cloud services, with learning available when your
+  computer is off.
 
-The [hosted site](https://resonance-discovery.lirenleonidas.workers.dev) is
-private. Sign in through Cloudflare Access with an authorized account.
+Both use [your own API services](SERVICES.md), never the maintainer's credits.
+The repository includes the runtime, lockfiles, assets, agent configuration,
+migrations, new-install seed and safe configuration examples. No private
+maintainer files are required. A separate [sample demo](SETUP.md#run-the-local-demo)
+needs no API keys. Phone installation opens your backend; it does not run one
+on the phone.
+
+The original `wrangler.jsonc` is the maintainer's deployment configuration.
+For your account use `wrangler.self-host.example.jsonc` and the guide above.
+
+## Use the learning workflow
+
+Open **your own backend URL** and sign in with your local password or
+Cloudflare Access policy. The maintainer's private deployment is not a shared backend for forks.
+Enable optional discovery providers only with your own keys; use direct uploads
+until any required acquisition service is provisioned.
 
 1. In **Discover**, search for an educational source and choose **Add to
    Library** when its rights evidence permits processing. If acquisition is
@@ -53,14 +64,14 @@ The production MiMo reviewer approves extracted points and quizzes before
 publication; external test evaluation does not control publication.
 
 Only upload material you are allowed to use. Source rights checks, access
-controls, and private storage are part of the hosted path; local fixture study
-and hosted processing are separate modes.
+controls and private storage apply in both full backend modes. The sample demo
+uses separate browser-local records.
 
 ## Project map
 
 Library offers subject shelves and source/knowledge search. Feed cards reveal
 as you scroll; missing associated imagery leaves no placeholder box. Progress
-shows retrieval, spacing, activity and subject summaries without confidence
-metrics. Historical unclassified records are preserved without backfills.
+shows daily and subject review accuracy, activity, scores and attempt totals.
+Historical unclassified records are preserved without backfills.
 
 See [setup and everyday use](SETUP.md) for installation, reminders, data and offline limits.

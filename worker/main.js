@@ -191,6 +191,7 @@ import { createReminderRuntime } from "./reminders/runtime.js";
  *   readonly subtle: SubtleCrypto,
  *   readonly randomBytes?: (length: number) => Uint8Array,
  *   readonly waitUntil?: (promise: Promise<unknown>) => void,
+ *   readonly urlCapture?: (command: {ownerId:string,url:string}) => Promise<{ok:true,value:Uint8Array}|{ok:false,error:{kind:string}}>,
  *   readonly browserLauncher?: { readonly limits: (binding: unknown) => Promise<unknown>, readonly launch: (binding: unknown) => Promise<unknown> },
  *   readonly publicEgress?: import("../src/features/knowledge-workflows/media.js").MediaPublicEgress,
  * }} CloudflarePlatform
@@ -1039,10 +1040,10 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       now: () => platform.now().toISOString(),
       requestLogger: discoveryRequestLogger,
       waitUntil: platform.waitUntil,
-      urlCapture:browserConfiguration===null || configuration.value.sourceLibraryDatabase===null ? undefined : createUrlPdfCapture({
+      urlCapture:platform.urlCapture ?? (browserConfiguration===null || configuration.value.sourceLibraryDatabase===null ? undefined : createUrlPdfCapture({
         binding:/** @type {import("@cloudflare/puppeteer").BrowserWorker} */ (browserConfiguration.binding),fetch:platform.fetch,now:()=>platform.now().getTime(),logger:entry=>console.info(JSON.stringify(entry)),
         capacity:new D1BrowserRunCapacityLedger({database:/** @type {import("./browser-run-capacity-d1.js").D1DatabasePort} */(/** @type {unknown} */(configuration.value.sourceLibraryDatabase)),now:()=>platform.now().toISOString(),createId:()=>crypto.randomUUID(),policy:browserRunCapacityPolicy(browserConfiguration.accountScope)}),
-      }),
+      })),
       manualMaterial,
       learningGeneration: learningRepository === null || learningStatus === null || learningReview === null || learningRevocation === null
         ? null

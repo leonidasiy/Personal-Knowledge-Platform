@@ -4,7 +4,7 @@ import { createOpenSourceImageSearch } from "../worker/open-source-image-search.
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
 Deno.test("knowledge browser and image-search composition adapters return the typed logger Result", async () => {
-  const source = await Deno.readTextFile(new URL("../worker/knowledge-workflow-entry.mjs", import.meta.url));
+  const source = await Deno.readTextFile(new URL("../worker/knowledge-workflow-executor.mjs", import.meta.url));
   assert(source.includes("const browserLogger=(entry)=>logger({event:entry.event,ownerId,runId,stage:'browser'") && source.includes("logger:browserLogger"), "Shared browser logger adapter must return the typed logger result.");
   assert(source.includes('logger: (entry) => logger({ event: entry.event, ownerId, stage: "media"'), "Image-search logger adapter must return the typed logger result.");
   assert(!source.includes('logger: (entry) => { logger({ event: entry.event, ownerId, stage: "browser"'), "Browser logger adapter must not discard the typed logger result.");

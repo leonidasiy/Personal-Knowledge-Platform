@@ -2,6 +2,7 @@
 import { createShellMarkup } from "../shell-markup.js";
 
 import { countProcessingWorkflowStatuses } from "../features/source-library/gateway.js";
+import { sourceHref } from "../features/source-library/source-link.js";
 import { isRecord } from "../features/source-library/contracts.js";
 import { SUBJECTS, isSubjectId } from "../features/knowledge-subjects/public.js";
 
@@ -119,7 +120,7 @@ function renderKnowledgeSearchResults(model) {
     const score = Number.isFinite(result.score)
       ? ` · score ${result.score.toFixed(2)}`
       : "";
-    return shellMarkup(14, knowledgeId, escapeHtml(result.summary), escapeHtml(result.sourceUrl), escapeHtml(result.sourceTitle), matchLabel, score, result.questionLocked ? shellMarkup(36) : shellMarkup(37), knowledgeId);
+    return shellMarkup(14, knowledgeId, escapeHtml(result.summary), escapeHtml(sourceHref(result.sourceUrl)), escapeHtml(result.sourceTitle), matchLabel, score, result.questionLocked ? shellMarkup(36) : shellMarkup(37), knowledgeId);
   }).join("");
   return shellMarkup(15, results.length, results.length === 1 ? "" : "s", content);
 }
@@ -145,7 +146,7 @@ function renderSource(model, source) {
   const extracted = workflowStatus?.run?.state === "completed" || !progress && knowledge.length > 0
     ? shellMarkup(19, sourceId, knowledge.length, knowledge.length ? shellMarkup(52, knowledge.map(point => shellMarkup(51, escapeHtml(point.summary))).join("")) : shellMarkup(53))
     : "";
-  return shellMarkup(20, sourceId, sourceId, sourceId, escapeHtml(source.title), escapeHtml(source.origin==="private-document"?"Uploaded material":new URL(source.canonicalUrl).hostname), formatDate(source.approvedAt), escapeHtml(source.description), extracted + workflowNotice + upload, workflowRetry + workflowCancel, escapeHtml(source.canonicalUrl), sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
+  return shellMarkup(20, sourceId, sourceId, sourceId, escapeHtml(source.title), escapeHtml(source.origin==="private-document"?"Uploaded material":new URL(source.canonicalUrl).hostname), formatDate(source.approvedAt), escapeHtml(source.description), extracted + workflowNotice + upload, workflowRetry + workflowCancel, escapeHtml(sourceHref(source.canonicalUrl)), sourceId, source.revision, pending ? "disabled" : "", pending ? "Removing..." : "Remove");
 }
 
 /** @param {WorkflowSourceStatus|null} status @param {(value:string)=>string} escapeHtml */

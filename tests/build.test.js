@@ -203,7 +203,7 @@ Deno.test("artifact budgets accept exact production boundaries", async () => {
   assertEquals(oversizedStylesheet.ok, false);
   if (!oversizedStylesheet.ok) assertEquals(oversizedStylesheet.error.kind, "ArtifactRawBudgetExceeded");
   assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.rawBytes, 231_823);
-  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 76_578);
+  assertEquals(ARTIFACT_BUDGETS.aggregateJavascript.gzipBytes, 76_811);
   /** @type {string[]} */
   const manifest = JSON.parse(await Deno.readTextFile("dist/asset-manifest.json"));
   const measured = { path: "src/*.js", rawBytes: 0, gzipBytes: 0 };

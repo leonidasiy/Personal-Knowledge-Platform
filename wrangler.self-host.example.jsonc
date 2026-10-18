@@ -1,0 +1,133 @@
+// Copy to wrangler.self-host.jsonc, then follow SELF_HOSTING.md.
+// Use your own account/resources; deploy the acquisition bridge before this Worker.
+// Placeholders deliberately require editing. No secrets belong here.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "my-resonance",
+  "main": "worker/cloudflare-entry.mjs",
+  "keep_names": false,
+  "compatibility_date": "2026-07-21",
+  "compatibility_flags": [
+    "global_fetch_strictly_public",
+    "nodejs_compat"
+  ],
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.yaml"
+      ],
+      "fallthrough": false
+    }
+  ],
+  "browser": {
+    "binding": "SOURCE_BROWSER",
+    "remote": true
+  },
+  "images": {
+    "binding": "IMAGES"
+  },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
+  "workers_dev": true,
+  "preview_urls": false,
+  "triggers": {
+    "crons": [
+      "* * * * *",
+      "*/15 * * * *"
+    ]
+  },
+  "workflows": [
+    {
+      "binding": "KNOWLEDGE_WORKFLOW",
+      "name": "my-resonance-extraction",
+      "class_name": "KnowledgeExtractionWorkflow"
+    }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/",
+      "/index.html",
+      "/api",
+      "/api/*"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  },
+  "vars": {
+    "REMINDER_PUSH_ORIGINS": "[\"https://fcm.googleapis.com\"]",
+    "ALLOWED_ORIGIN": "https://my-resonance.YOUR_SUBDOMAIN.workers.dev",
+    "ACCESS_ISSUER": "https://YOUR_TEAM.cloudflareaccess.com",
+    "ACCESS_AUDIENCE": "REPLACE_WITH_YOUR_ACCESS_APPLICATION_AUD",
+    "ACCESS_OWNER_EMAIL": "you@example.com",
+    "ACCESS_OWNER_ID": "self-host-owner-v1",
+    "TRANSCRIPT_LANGUAGES": "en",
+    "YOUTUBE_SEARCH_DAILY_LIMIT": "100",
+    "YOUTUBE_GENERAL_DAILY_LIMIT": "10000",
+    "SOURCE_INGESTION_POLICY_VERSION": "bounded-source-v1",
+    "SOURCE_BROWSER_ACCOUNT_SCOPE": "self-host-browser-v1",
+    "SOURCE_MANUAL_MAX_BYTES": "104857600",
+    "SOURCE_MANUAL_MAX_CHARACTERS": "1000000",
+    "SOURCE_MANUAL_MEDIA_TYPES": "text/plain,text/vtt,image/png,image/jpeg,image/webp,image/gif",
+    "SOURCE_R2_ACCOUNT_SCOPE": "self-host-r2-v1",
+    "SOURCE_R2_STORED_BYTES_LIMIT": "8589934592",
+    "SOURCE_R2_CLASS_A_MONTHLY_LIMIT": "100000",
+    "SOURCE_R2_CLASS_B_MONTHLY_LIMIT": "1000000",
+    "SOURCE_R2_OBSERVATION_MAX_AGE_MS": "86400000",
+    "KNOWLEDGE_WORKFLOW_ENABLED": "true",
+    "KNOWLEDGE_WORKFLOW_CONFIG_DIGESTS": "{\"rights-assessor\":\"sha256:735d8469a95f2a63a2359ab5de8764ec5ffc7ce39ed2557c407393f2da196670\",\"knowledge-scraper\":\"sha256:499e8d1952cc73541287dac39a22f8a5e7e38a353ece463ecc3ecc4eb7bf7cd4\",\"question-generator\":\"sha256:a0a2499540a002b1e6c6a1ff486debd9618a16c3b27bf4dc2cb7f0168aabb7e5\",\"question-evaluator\":\"sha256:50257d4b2f1586745d01d043cde730b0757f385f0f99d9161ae3e51fa7a25fee\"}",
+    "PUBLIC_ACQUISITION_ENDPOINT": "https://YOUR_ACQUISITION_HOST"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "YOUTUBE_QUOTA_LEDGER",
+        "class_name": "YouTubeQuotaDurableObject"
+      },
+      {
+        "name": "TRANSCRIPT_AUTHORIZATION_LEDGER",
+        "class_name": "PublisherTranscriptAuthorizationDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "youtube-quota-sqlite-v1",
+      "new_sqlite_classes": [
+        "YouTubeQuotaDurableObject"
+      ]
+    },
+    {
+      "tag": "publisher-transcript-authorization-sqlite-v1",
+      "new_sqlite_classes": [
+        "PublisherTranscriptAuthorizationDurableObject"
+      ]
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "SOURCE_LIBRARY_DB",
+      "database_name": "my-resonance-library",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SOURCE_CONTENT_BUCKET",
+      "bucket_name": "my-resonance-content"
+    }
+  ],
+  "account_id": "REPLACE_WITH_YOUR_CLOUDFLARE_ACCOUNT_ID",
+  "services": [
+    {
+      "binding": "PUBLIC_ACQUISITION",
+      "service": "my-learning-acquisition"
+    }
+  ]
+}
