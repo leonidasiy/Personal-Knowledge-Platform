@@ -43,14 +43,14 @@ Deno.test("empty progress replaces unused plots with guidance and keeps real act
   assert(!html.includes("What these measurements mean") && !html.includes("progress-definitions"), "The removed bottom explanation must not render.");
   assert(html.includes('href="#review">Start reviewing') && html.includes("empty-states.svg#progress"), "Review action and decorative empty-state art");
   assert(!html.includes('aria-label="Daily accuracy chart"') && html.includes('aria-label="Activity calendar chart"'), "no blank accuracy canvas; activity remains");
-  assert(html.includes("0/0 attempts") && html.includes("Unavailable") && !html.includes("<table"), "honest empty metrics without a data table");
+  assert(html.includes("Review attempts</span><strong>0</strong>") && html.includes("Unavailable") && !html.includes("<table"), "honest empty metrics without a data table");
 });
 Deno.test("progress page ignores stale out-of-order responses", async () => {
   const first = Promise.withResolvers(), second = Promise.withResolvers(); let call = 0;
   const one = buildProgress(input({ attempts: [attempt] })), none = buildProgress(input({ attempts: [] })); if (!one.ok || !none.ok) throw new Error("fixtures invalid");
   const page = createProgressPage({ fetch: /** @type {typeof fetch} */(() => (++call === 1 ? first.promise : second.promise)), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
   const loadingOne = page.load(), loadingTwo = page.load(); second.resolve(new Response(JSON.stringify({ result: none.value }))); await loadingTwo; first.resolve(new Response(JSON.stringify({ result: one.value }))); await loadingOne;
-  assert(page.render().includes("0/0 attempts"), "latest response wins");
+  assert(page.render().includes("Review attempts</span><strong>0</strong>"), "latest response wins");
 });
 
 Deno.test("progress response validates ratios, real dates and recovery counts", () => {
@@ -96,11 +96,15 @@ Deno.test("Progress has only interactive daily and subject accuracy charts plus 
   await page.load(); const html = page.render();
   for (const removed of ["<table", "<details", "data table", "Recovery after", "Recorded activity", "Spacing intervals", "Unclassified"]) assert(!html.includes(removed), `${removed} removed`);
   assert((html.match(/data-progress-chart/g) ?? []).length === 3, "three remaining charts");
-  assert(html.includes('data-chart-value="2026-09-19: 50% accuracy, 1/2 correct answers"'), "exact daily accuracy on its point");
-  assert(html.includes('data-chart-value="2026-09-19: 5 knowledge points studied in 1 batches, 2 quiz attempts"'), "activity details on its cell");
-  assert(html.includes('data-chart-value="Music & Performing Arts: 50% accuracy"'), "accuracy on subject bar");
+  assert(html.includes('data-chart-value="50%"'), "exact daily accuracy on its point");
+  assert(html.includes('data-chart-value="5 cards · 2 quizzes"'), "activity details on its cell");
+  assert(html.includes('aria-label="Music & Performing Arts: 50%" data-chart-value="50%"'), "accuracy on subject bar");
   assert(html.includes("Review accuracy by subject") && !html.includes("Primary subjects") && !html.includes("1 knowledge points"), "subject purpose and accuracy replace displayed inventory counts");
   assert(html.includes('--bar-width:50%'), "bar uses absolute accuracy rather than inventory count");
+  assert(html.includes('aria-label="2026-09-19: 50%"') && html.includes('aria-label="2026-09-19: 5 cards · 2 quizzes"'), "dates remain available to screen readers");
+  assert(html.includes('y="210" text-anchor="middle">09-14</text>') && html.includes('>Mon</text>') && html.includes('>Sun</text>'), "calendar exposes week dates and weekday axes");
+  for (const redundant of ["correct answers", "scored attempts", "One per question", "Stronger shading", "Answer accuracy by day", "Accuracy for the selected period"]) assert(!html.includes(redundant), `${redundant} is omitted`);
+  assert(html.includes("Top 5 by knowledge points.") && html.includes("Gaps mean no review attempts."), "only non-obvious chart notes remain");
   assert((html.match(/role="tooltip" hidden/g) ?? []).length === 3, "data readouts start hidden");
   assert(html.includes('tabindex="0" role="img"'), "chart data is keyboard and screen-reader accessible");
 });
@@ -121,7 +125,7 @@ Deno.test("chart values respond to hover, tap and focus, dismiss on exit, outsid
     const root = { querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-progress-chart]" ? [plot] : [tooltip], addEventListener: (/** @type {string} */ name, /** @type {(e:any)=>void} */ handler) => rootHandlers.set(name, handler) };
     const page = createProgressPage({ fetch: async () => Response.json({}), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
     page.bind(/** @type {HTMLElement} */(/** @type {unknown} */(root)));
-    const point = new Point("2026-09-19: 50% accuracy, 1/2 correct answers");
+    const point = new Point("50%");
     for (const name of ["pointerover", "click", "focusin"]) {
       handlers.get(name)({ target: point });
       assert(!tooltip.hidden && tooltip.textContent === point.value, `${name} reveals the data value`);
@@ -148,5 +152,20 @@ Deno.test("subject accuracy uses selected-period attempts and distinguishes no a
   assert(!isProgressSummary({ ...result.value, subjects: [{ id: "music", label: "Music", accuracy: 2 }] }), "invalid subject accuracy rejected");
   const page = createProgressPage({ fetch: async () => Response.json({ result: result.value }), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
   await page.load(); const html = page.render();
-  assert(html.includes('data-chart-value="Computer Science & AI: No review attempts"') && html.includes('data-chart-value="Physics & Astronomy: 0% accuracy"'), "no data and genuine zero remain distinct");
+  assert(html.includes('aria-label="Computer Science & AI: Unavailable" data-chart-value="Unavailable"') && html.includes('aria-label="Physics & Astronomy: 0%" data-chart-value="0%"'), "no data and genuine zero remain distinct");
+});
+
+Deno.test("calendar axes align weekdays and week dates across periods and year boundaries", async () => {
+  for (const days of [7, 30, 90]) {
+    const result = buildProgress(input({ days, now: "2026-01-04T12:00:00Z", attempts: [], studies: [] }));
+    if (!result.ok) throw new Error("fixture invalid");
+    const page = createProgressPage({ fetch: async () => Response.json({ result: result.value }), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
+    await page.load(); const html = page.render(), calendar = html.slice(html.indexOf('aria-label="Activity calendar chart"'), html.indexOf('class="progress-tooltip"', html.indexOf('aria-label="Activity calendar chart"')));
+    const cells = [...calendar.matchAll(/aria-label="(\d{4}-\d{2}-\d{2}): [^"]*" data-chart-value="[^"]*"><rect x="[^"]*" y="(\d+)"/g)];
+    assert(cells.length === days, "each in-period day has one calendar cell");
+    for (const [, date, y] of cells) assert(Number(y) === 8 + (new Date(date).getUTCDay() + 6) % 7 * 26, "cell matches its weekday label");
+    assert(calendar.includes('>12-29</text>') && calendar.includes('>Sun</text>'), "last week and Sunday remain labelled across New Year");
+    const readouts = [...calendar.matchAll(/data-chart-value="([^"]*)"/g)].map(match => match[1]);
+    assert(readouts.every(value => value === "0 cards · 0 quizzes"), "empty-day readouts contain only quantities");
+  }
 });

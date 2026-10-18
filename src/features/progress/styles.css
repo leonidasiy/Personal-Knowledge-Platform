@@ -5,7 +5,7 @@
 .progress-summary > div { min-width: 0; display: grid; gap: 12px; padding: 24px; border-right: 1px solid var(--border); }
 .progress-summary > div:last-child { border: 0; }
 .progress-summary strong { font-family: var(--font-display); font-size: clamp(16px, 2vw, 28px); font-weight: 600; line-height: 1.15; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.progress-summary span, .progress-summary small { font-size: 12px; color: var(--text-muted); }
+.progress-summary span { font-size: 12px; color: var(--text-muted); }
 .progress-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .progress-charts > div { min-width: 0; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--panel-radius); }
 .progress-timeline { grid-column: 1 / -1; }
@@ -13,11 +13,12 @@
 .progress-chart h2 { margin: 0 0 16px; font-size: 26px; }
 .progress-chart svg { display: block; width: 100%; color: var(--signal-one); }
 .progress-plot { overflow-x: auto; }
-.progress-chart p, .progress-note { color: var(--text-muted); font-size: 12px; }
-.progress-chart p { margin: 12px 0 0; }
+.progress-chart p, .progress-note { color: var(--text-muted); }
+.progress-chart p { font-size: 12px; margin: 12px 0 0; }
+.progress-note { font-size: 16px; }
 .progress-chart [data-chart-value] { cursor: pointer; }
 .progress-chart [data-chart-value]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.progress-tooltip { position: absolute; max-width: 100%; box-sizing: border-box; z-index: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface); color: var(--text); font-size: 12px; pointer-events: none; }
+.progress-tooltip { position: absolute; width: max-content; max-width: 100%; box-sizing: border-box; z-index: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface); color: var(--text); font-size: 12px; pointer-events: none; }
 .progress-subject-bars { display: grid; gap: 14px; }
 .progress-subject-bars > div { display: grid; gap: 6px; font-size: 13px; }
 .progress-subject-bar { width: var(--bar-width); height: 10px; background: var(--signal-one); }
