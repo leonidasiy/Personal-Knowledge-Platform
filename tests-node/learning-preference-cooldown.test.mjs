@@ -10,6 +10,7 @@ import {knowledgeReviewAuditInput,knowledgeReviewTokens} from '../src/features/k
 function fixture(days=8,due='2026-10-17T00:00:00.000Z',studied='2026-10-09T00:00:00.000Z') {
   const db=new DatabaseSync(':memory:');
   db.exec(readFileSync(new URL('../worker/migrations/0012_learner_batches.sql',import.meta.url),'utf8'));
+  db.exec(readFileSync(new URL('../worker/migrations/0030_learner_question_state.sql',import.meta.url),'utf8'));
   db.exec('CREATE TABLE extraction_knowledge_points(owner_id TEXT, knowledge_id TEXT, source_id TEXT);');
   db.prepare('INSERT INTO extraction_knowledge_points VALUES(?,?,?)').run('test-owner','point','music-source');
   db.prepare('INSERT INTO learner_knowledge_state VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('test-owner','point','music-source',3,1,days,due,studied,2,0,'2026-10-09T00:00:00.000Z');

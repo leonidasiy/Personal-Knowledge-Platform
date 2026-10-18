@@ -118,12 +118,12 @@ Deno.test("Feed displays topic beneath subject separately from the classificatio
   assert(unclassified.includes('name="topic"'), "Topic remains editable in the existing editor.");
 });
 
-Deno.test("completed Feed replaces study action with one Review continuation", async () => {
+Deno.test("completed Feed offers the next batch without urging Review", async () => {
   const controller = createLearnerController({ fetch: async () => response({ result: { batch: { ...review.batch, batchId: "feed:done", status: "completed", completedAt: "2026-09-01T12:00:00.000Z", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "A useful relationship.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: false }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: (value) => value, now: () => "2026-09-08T00:00:00.000Z", createId: () => "test", onChange: () => {} });
   await controller.loadFeed();
   const html = controller.renderFeed();
   assert(!html.includes('data-action="complete-learner-feed"'), "Completed batch must not offer another study write.");
-  assert(html.split('data-view="review"').length === 2, "Exactly one closing Review continuation must be available.");
+  assert(!html.includes('data-view="review"'), "A completed batch alone must not urge Review.");
   assert(html.split('data-action="refresh-learner-feed"').length === 2, "Completed batch keeps one manual refresh beside its bottom continuation.");
 });
 
@@ -312,7 +312,7 @@ Deno.test("only crossing the learning target opens the Review celebration", asyn
         return response({ result: progress.value });
       }
       if (path.includes("review-batch")) return response({ result: { batch: null, questions: [], dueCount: 0 } });
-      if (path.endsWith("/refresh")) status = "open";
+      if (path.endsWith("/refresh") || path.includes("/feed-batch?")) status = "open";
       return response({ result: { batch: { ...review.batch, status, itemIds: cards.map(c => c.knowledgeId) }, items: cards } });
     }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", getDailyTargets: () => ({ learning: 10, review: 5 }), onChange: () => {} });
     await controller.loadFeed();
@@ -320,8 +320,7 @@ Deno.test("only crossing the learning target opens the Review celebration", asyn
     actions["[data-action='complete-learner-feed']"].click?.();
     await new Promise(resolve => setTimeout(resolve, 0));
     assert(shown === 0 && controller.renderFeed().includes("5 / 10"), "The first five-card batch must not trigger a ten-card goal.");
-    actions["[data-action='refresh-learner-feed']"].click?.();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    assert(controller.renderFeed().includes('data-action="complete-learner-feed"'), "The next batch is ready without a manual refresh.");
     actions["[data-action='complete-learner-feed']"].click?.();
     await new Promise(resolve => setTimeout(resolve, 0));
     assert(shown === 1 && popup.includes("5 quiz cards") && popup.includes('href="#review"'), "Crossing ten opens a celebration with the independent Review goal.");
@@ -331,5 +330,52 @@ Deno.test("only crossing the learning target opens the Review celebration", asyn
     assert(shown === 1, "Reloading or re-completing the closed batch must not repeat the popup.");
   } finally {
     if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+  }
+});
+
+Deno.test("separate typed quiz cards show failed corrections outside Source explanation and hide passed feedback", async () => {
+  const originalForm = Object.getOwnPropertyDescriptor(globalThis, "HTMLFormElement");
+  const originalData = Object.getOwnPropertyDescriptor(globalThis, "FormData");
+  class Form {
+    dataset = { learnerReviewBatch: "review:music", learnerReviewQuestion: "question-1" };
+    /** @type {((event: { preventDefault: () => void, currentTarget: Form }) => void) | null} */ submit = null;
+    /** @param {string} _name @param {(event: { preventDefault: () => void, currentTarget: Form }) => void} listener */
+    addEventListener(_name, listener) { this.submit = listener; }
+  }
+  class Values {
+    /** @param {string} _name */ getAll(_name) { return []; }
+    /** @param {string} name */ get(name) { return name === "blank:blank-1" ? "home note" : null; }
+  }
+  Object.defineProperty(globalThis, "HTMLFormElement", { configurable: true, value: Form });
+  Object.defineProperty(globalThis, "FormData", { configurable: true, value: Values });
+  try {
+    for (const score of [0.7, 0.699999]) {
+      const correct = score >= 0.7;
+      const projection = { ...review, questions: [{ ...review.questions[0], kind: "fill-blank", choices: null, blanks: [{ id: "blank-1" }], pairedVariants: null }] };
+      const controller = createLearnerController({ fetch: async (input, options) => {
+        if (String(input).endsWith("/answer")) {
+          const command = JSON.parse(String(options?.body));
+          assert(command.blankAnswers[0].text === "home note" && command.pairedBlankAnswers === null, "Only this card's response is submitted.");
+          return response({ result: { correct, score, completed: true, nextDueAt: "2026-09-02T12:00:00.000Z", feedback: { correctAnswer: "tonic", explanation: "Source explanation of the tonal center.", components: [{ id: "blank-1", correct, correctAnswer: "tonic" }] } } });
+        }
+        return response({ result: projection });
+      }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", onChange: () => {} });
+      await controller.loadReview();
+      const form = new Form();
+      controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-learner-review]" ? [form] : [] })));
+      assert(controller.renderReview().includes("Check answer"), "An individual quiz has its own submit button.");
+      form.submit?.({ preventDefault: () => {}, currentTarget: form });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const html = controller.renderReview();
+      if (correct) {
+        assert(html.includes("Correct (70%).") && !html.includes("Correct answer:") && !html.includes("Source explanation"), "Jev pass hides correction and explanation.");
+      } else {
+        assert(html.includes("Correct answer:</strong> tonic</p><details"), "Correct answer is outside the drawer and immediately above it.");
+        assert(html.includes('<details class="source-details"><summary>Source explanation</summary>'), "Only Source explanation titles the closed drawer.");
+      }
+    }
+  } finally {
+    if (originalForm) Object.defineProperty(globalThis, "HTMLFormElement", originalForm); else Reflect.deleteProperty(globalThis, "HTMLFormElement");
+    if (originalData) Object.defineProperty(globalThis, "FormData", originalData);
   }
 });

@@ -557,7 +557,7 @@ export function createCloudflareDiscoveryWorker(environment, platform) {
       bucket: isMediaBucket(environment.SOURCE_CONTENT_BUCKET) ? environment.SOURCE_CONTENT_BUCKET : null,
       semanticGrader: async (command) => {
         const result = await jevGrader.grade(command);
-        return result.ok ? { ok: true, value: result.value.accepted } : { ok: false, error: result.error };
+        return result.ok ? { ok: true, value: result.value.probabilities } : { ok: false, error: result.error };
       },
       logger: (entry) => console.info(JSON.stringify(entry)),
     });

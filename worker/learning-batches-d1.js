@@ -13,7 +13,7 @@ import { selectKnowledgeBatch } from "../src/features/learning-generation/batche
 /** @typedef {{ readonly prepare: (query: string) => D1Statement, readonly batch: (statements: readonly D1Statement[]) => Promise<readonly D1Result[]> }} D1DatabasePort */
 /** @typedef {{ readonly delete: (key: string) => Promise<unknown> }} MediaBucket */
 /** @typedef {{ readonly event: string, readonly ownerId?: string, readonly batchId?: string, readonly knowledgeId?: string, readonly failureKind?: string, readonly itemCount?: number }} LearnerBatchLog */
-/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly sourceRevision: number, readonly questionId: string, readonly viewCount: number, readonly lastAnswerCorrect: boolean | null, readonly scheduledDays: number, readonly preference: number, readonly dueAt: string | null, readonly studiedAt: string | null, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly sourceClassification: { readonly mainSubject: string, readonly topic: string } | null, readonly sourceClassificationRevision: number, readonly question: PublicQuestion, readonly media: PublicMedia | null }} LearnerCandidate */
+/** @typedef {{ readonly knowledgeId: string, readonly sourceId: string, readonly sourceRevision: number, readonly questionId: string, readonly pairedQuestionId?: string, readonly viewCount: number, readonly lastAnswerCorrect: boolean | null, readonly scheduledDays: number, readonly preference: number, readonly dueAt: string | null, readonly studiedAt: string | null, readonly title: string, readonly summary: string, readonly sourceUrl: string, readonly evidenceAnchorIds: readonly string[], readonly sourceClassification: { readonly mainSubject: string, readonly topic: string } | null, readonly sourceClassificationRevision: number, readonly question: PublicQuestion, readonly media: PublicMedia | null }} LearnerCandidate */
 /** @typedef {{ readonly id:string, readonly kind:"single-choice"|"multiple-choice"|"fill-blank", readonly prompt:string, readonly explanation:string, readonly choices:readonly {readonly id:string,readonly label:string}[]|null, readonly correctChoiceIds:readonly string[]|null, readonly blanks:readonly {readonly id:string,readonly acceptedAnswers:readonly string[]}[]|null }} PairedVariant */
 /** @typedef {{ readonly id: string, readonly kind: string, readonly prompt: string, readonly explanation: string, readonly sourceAnchorIds: readonly string[], readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly correctChoiceIds: readonly string[] | null, readonly acceptedAnswers: readonly string[] | null, readonly blankId: string | null, readonly blanks: readonly { readonly id: string, readonly acceptedAnswers: readonly string[] }[] | null, readonly pairedVariants: readonly PairedVariant[] | null, readonly revision: number }} PublicQuestion */
 /** @typedef {{ readonly assetId: string, readonly kind: string, readonly url: string, readonly attribution: string, readonly purpose?: "illustration" | "evidence" }} PublicMedia */
@@ -117,7 +117,7 @@ function correctAnswer(question) {
   return labels.length === question.correctChoiceIds.length && labels.every(text) ? labels.join(", ") : null;
 }
 
-/** @param {{ readonly database: D1DatabasePort, readonly now: () => string, readonly random?: () => number, readonly logger: (entry: LearnerBatchLog) => void, readonly semanticGrader?: (command: { readonly prompt: string, readonly answers: readonly { readonly id: string, readonly response: string, readonly canonicalAnswers: readonly string[] }[] }) => Promise<Result<readonly boolean[]>>, readonly bucket?: MediaBucket | null, readonly fallbackPack?: readonly { readonly id: string, readonly path: string, readonly alt: string, readonly creator: string, readonly sourceUrl: string, readonly licence: string, readonly attribution: string }[] }} dependencies */
+/** @param {{ readonly database: D1DatabasePort, readonly now: () => string, readonly random?: () => number, readonly logger: (entry: LearnerBatchLog) => void, readonly semanticGrader?: (command: { readonly prompt: string, readonly answers: readonly { readonly id: string, readonly response: string, readonly canonicalAnswers: readonly string[] }[] }) => Promise<Result<readonly number[]>>, readonly bucket?: MediaBucket | null, readonly fallbackPack?: readonly { readonly id: string, readonly path: string, readonly alt: string, readonly creator: string, readonly sourceUrl: string, readonly licence: string, readonly attribution: string }[] }} dependencies */
 export function createLearningBatchService(dependencies) {
   if (typeof dependencies?.database?.prepare !== "function" || typeof dependencies.database.batch !== "function" || typeof dependencies.now !== "function" || typeof dependencies.logger !== "function" || (dependencies.semanticGrader !== undefined && typeof dependencies.semanticGrader !== "function") || (dependencies.bucket !== undefined && dependencies.bucket !== null && typeof dependencies.bucket.delete !== "function")) throw new TypeError("Learning batch dependencies are invalid.");
   const random = dependencies.random ?? Math.random;
@@ -170,7 +170,7 @@ export function createLearningBatchService(dependencies) {
   async function feedRow(ownerId) {
     try {
       const row = await database.prepare("SELECT batch_id, learning_day, status, item_ids_json, revision, created_at, completed_at FROM learner_feed_batches WHERE owner_id = ? ORDER BY created_at DESC, batch_id DESC LIMIT 1").bind(ownerId).first();
-      return { ok: true, value: row === null ? null : parseBatch(row) };
+      return { ok: true, value: row === null ? null : parseBatch(row, true) };
     } catch (error) {
       dependencies.logger({ event: "learning-feed-row-failure", ownerId, failureKind: "LearningBatchPersistenceFailed" });
       return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
@@ -224,10 +224,23 @@ export function createLearningBatchService(dependencies) {
     if (!all.ok) return all;
     const current = await feedRow(ownerId);
     if (!current.ok) return current;
-    if (!force && current.value !== null && current.value.learningDay === day) {
-      const hydrated = hydrate(current.value.itemIds, all.value);
+    if (!force && current.value !== null && current.value.learningDay === day && current.value.status === "open") {
+      let batch = current.value;
+      const missing = batch.itemIds.filter(id => !all.value.some(candidate => candidate.knowledgeId === id));
+      if (missing.length > 0) {
+        const available = all.value.filter(candidate => !batch.itemIds.includes(candidate.knowledgeId));
+        const replacement = available.length === 0 ? { ok: /** @type {const} */ (true), value: [] } : selectKnowledgeBatch(available, { count: Math.min(missing.length, available.length), random, now });
+        if (!replacement.ok) return replacement;
+        const replacements = replacement.value.map(candidate => candidate.knowledgeId);
+        const itemIds = batch.itemIds.flatMap(id => missing.includes(id) ? replacements.splice(0, 1) : [id]);
+        if (itemIds.length === 0) return { ok: true, value: { batch: null, items: [] } };
+        const written = await database.prepare("UPDATE learner_feed_batches SET item_ids_json = ?, revision = revision + 1 WHERE owner_id = ? AND batch_id = ? AND revision = ? AND status = 'open'").bind(JSON.stringify(itemIds), ownerId, batch.batchId, batch.revision).run();
+        if (!changed(written)) return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+        batch = { ...batch, itemIds, revision: batch.revision + 1 };
+      }
+      const hydrated = hydrate(batch.itemIds, all.value);
       if (!hydrated.ok) return hydrated;
-      return { ok: true, value: Object.freeze({ batch: current.value, items: Object.freeze(hydrated.value.map(publicCandidate)) }) };
+      return { ok: true, value: Object.freeze({ batch, items: Object.freeze(hydrated.value.map(publicCandidate)) }) };
     }
     if (!force && current.value !== null && current.value.status === "open" && current.value.learningDay !== day) {
       dependencies.logger({ event: "learning-feed-incomplete-day-expired", ownerId, batchId: current.value.batchId });
@@ -236,7 +249,7 @@ export function createLearningBatchService(dependencies) {
       dependencies.logger({ event: "learning-feed-batch-deferred", ownerId, itemCount: all.value.length, failureKind: "LearningBatchInsufficientCandidates" });
       return { ok: true, value: Object.freeze({ batch: null, items: Object.freeze([]) }) };
     }
-    return createFeed(ownerId, day, all.value, `feed:${ownerId}:${day}:${force ? crypto.randomUUID() : "daily"}`);
+    return createFeed(ownerId, day, all.value, `feed:${ownerId}:${day}:${force || current.value !== null ? crypto.randomUUID() : "daily"}`);
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
@@ -247,7 +260,7 @@ export function createLearningBatchService(dependencies) {
     if (!replay.ok) return replay;
     if (replay.value !== null) return replay.value;
     const current = await database.prepare("SELECT batch_id, learning_day, status, item_ids_json, revision, created_at, completed_at FROM learner_feed_batches WHERE owner_id = ? AND batch_id = ? LIMIT 1").bind(input.ownerId, input.batchId).first();
-    const batch = parseBatch(current);
+    const batch = parseBatch(current, true);
     if (batch === null) return { ok: false, error: { kind: "KnowledgePairNotFound" } };
     if (batch.status === "completed") return { ok: false, error: { kind: "LearningBatchAlreadyClosed" } };
     const now = dependencies.now();
@@ -274,27 +287,59 @@ export function createLearningBatchService(dependencies) {
     }
   }
 
+  /** @param {readonly LearnerCandidate[]} all @returns {readonly LearnerCandidate[]} */
+  function separateQuestions(all) {
+    return all.flatMap(candidate => candidate.question.pairedVariants?.map(variant => ({
+      ...candidate, pairedQuestionId: candidate.questionId, questionId: `${candidate.questionId}:${variant.id}`,
+      question: { ...candidate.question, ...variant, id: `${candidate.questionId}:${variant.id}`, acceptedAnswers: null, blankId: null, pairedVariants: null },
+    })) ?? [candidate]);
+  }
+
+  /** @param {string} ownerId @param {readonly LearnerCandidate[]} all @returns {Promise<Result<readonly LearnerCandidate[]>>} */
+  async function reviewCandidates(ownerId, all) {
+    const separated = separateQuestions(all);
+    if (!separated.some(candidate => candidate.pairedQuestionId !== undefined)) return { ok: true, value: separated };
+    try {
+      const saved = await database.prepare("SELECT question_id, last_answer_correct, scheduled_days, due_at FROM learner_question_state WHERE owner_id = ?").bind(ownerId).all();
+      if (!saved.success || !Array.isArray(saved.results)) throw new Error("Question schedules unavailable");
+      const states = new Map();
+      for (const state of saved.results) {
+        if (!record(state) || !text(state.question_id) || !nonNegativeInteger(state.scheduled_days) || !iso(state.due_at) || state.last_answer_correct !== null && state.last_answer_correct !== 0 && state.last_answer_correct !== 1) throw new Error("Question schedule invalid");
+        states.set(state.question_id, state);
+      }
+      return { ok: true, value: separated.map(candidate => {
+        const state = states.get(candidate.questionId);
+        return state === undefined ? candidate : { ...candidate, scheduledDays: state.scheduled_days, dueAt: state.due_at, lastAnswerCorrect: state.last_answer_correct === null ? null : state.last_answer_correct === 1 };
+      }) };
+    } catch (error) {
+      dependencies.logger({ event: "learning-review-schedules-failure", ownerId, failureKind: "LearningBatchPersistenceFailed" });
+      return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+    }
+  }
+
   /** @param {string} ownerId @param {string} day @param {boolean} [force] @returns {Promise<Result<unknown>>} */
   async function loadReview(ownerId, day, force = false) {
     if (!text(ownerId) || !text(day)) return { ok: false, error: { kind: "LearningBatchCommandInvalid" } };
-    const all = await candidates(ownerId, dependencies.now());
+    const knowledge = await candidates(ownerId, dependencies.now());
+    if (!knowledge.ok) return knowledge;
+    const all = await reviewCandidates(ownerId, knowledge.value);
     if (!all.ok) return all;
     const current = await reviewRow(ownerId);
     if (!current.ok) return current;
-    if (!force && current.value !== null && current.value.learningDay === day) {
+    if (!force && current.value !== null && current.value.learningDay === day && current.value.itemIds.every(id => all.value.some(candidate => candidate.questionId === id))) {
       return hydrateReview(ownerId, current.value, all.value);
     }
-    if (force && current.value !== null && current.value.status !== "completed") return { ok: false, error: { kind: "ReviewRefreshLocked" } };
+    if (force && current.value !== null && current.value.learningDay === day && current.value.status !== "completed") return { ok: false, error: { kind: "ReviewRefreshLocked" } };
     const due = all.value.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now()));
     if (due.length < 1) return { ok: true, value: Object.freeze({ batch: null, questions: Object.freeze([]), dueCount: 0 }) };
-    const selection = selectKnowledgeBatch(due.map((candidate) => ({ knowledgeId: candidate.knowledgeId, sourceId: candidate.sourceId, questionId: candidate.questionId, viewCount: candidate.viewCount, lastAnswerCorrect: candidate.lastAnswerCorrect, scheduledDays: candidate.scheduledDays, preference: candidate.preference })), { count: Math.min(MAX_BATCH_SIZE, due.length), random, now: dependencies.now() });
+    const selection = selectKnowledgeBatch(due.map((candidate) => ({ knowledgeId: candidate.questionId, sourceId: candidate.sourceId, questionId: candidate.questionId, viewCount: candidate.viewCount, lastAnswerCorrect: candidate.lastAnswerCorrect, scheduledDays: candidate.scheduledDays, preference: candidate.preference })), { count: Math.min(MAX_BATCH_SIZE, due.length), random, now: dependencies.now() });
     if (!selection.ok) return selection;
-    const byId = new Map(all.value.map((candidate) => [candidate.knowledgeId, candidate]));
+    const byId = new Map(all.value.map((candidate) => [candidate.questionId, candidate]));
     const selected = selection.value.map((candidate) => byId.get(candidate.knowledgeId)).filter((candidate) => candidate !== undefined);
     if (selected.length !== selection.value.length) return { ok: false, error: { kind: "KnowledgePairNotFound" } };
     const batchId = `review:${ownerId}:${day}:${crypto.randomUUID()}`;
     const createdAt = dependencies.now();
-    const inserted = await database.prepare("INSERT INTO learner_review_batches (owner_id, batch_id, learning_day, status, question_ids_json, revision, idempotency_key, created_at, completed_at) VALUES (?, ?, ?, 'open', ?, 1, ?, ?, NULL)").bind(ownerId, batchId, day, JSON.stringify(selected.map((candidate) => candidate.questionId)), `review:${ownerId}:${day}:${force ? crypto.randomUUID() : "daily"}`, createdAt).run();
+    const inserted = await database.prepare("INSERT INTO learner_review_batches (owner_id, batch_id, learning_day, status, question_ids_json, revision, idempotency_key, created_at, completed_at) VALUES (?, ?, ?, 'open', ?, 1, ?, ?, NULL)").bind(ownerId, batchId, day, JSON.stringify(selected.map((candidate) => candidate.questionId)), `review:${ownerId}:${day}:${force || current.value !== null ? crypto.randomUUID() : "daily"}`, createdAt).run();
     if (!changed(inserted)) return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
     return { ok: true, value: Object.freeze({ batch: Object.freeze({ batchId, learningDay: day, status: "open", itemIds: Object.freeze(selected.map((candidate) => candidate.questionId)), revision: 1, createdAt, completedAt: null }), questions: Object.freeze(selected.map(publicQuestion)), dueCount: due.length }) };
   }
@@ -346,10 +391,13 @@ export function createLearningBatchService(dependencies) {
     const batchRowValue = await database.prepare("SELECT batch_id, learning_day, status, question_ids_json AS item_ids_json, revision, created_at, completed_at FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? LIMIT 1").bind(command.ownerId, command.batchId).first();
     const batch = parseBatch(batchRowValue, true);
     if (batch === null || batch.status !== "open" || !batch.itemIds.includes(command.questionId)) return fail("ReviewAnswerNotAllowed");
-    const all = await candidates(command.ownerId, dependencies.now());
+    const knowledge = await candidates(command.ownerId, dependencies.now());
+    if (!knowledge.ok) return fail(knowledge.error.kind);
+    const all = await reviewCandidates(command.ownerId, knowledge.value);
     if (!all.ok) return fail(all.error.kind);
-    const candidate = all.value.find((item) => item.questionId === command.questionId);
+    const candidate = all.value.find((item) => item.questionId === command.questionId) ?? knowledge.value.find(item => item.questionId === command.questionId);
     if (candidate === undefined || candidate.studiedAt === null) return fail("KnowledgePairNotFound");
+    if (candidate.pairedQuestionId !== undefined && command.questionRevision !== candidate.question.revision) return fail("ReviewAnswerNotAllowed");
     if (candidate.question.pairedVariants !== null) {
       if (candidate.question.pairedVariants.length !== 2 || command.questionRevision !== candidate.question.revision || command.selectedChoiceIds.length === 0 || command.pairedBlankAnswers === undefined || command.pairedBlankAnswers === null || command.answerText !== undefined && command.answerText !== null || command.blankAnswers !== undefined && command.blankAnswers !== null) return fail("ReviewAnswerNotAllowed");
       const choiceVariant = candidate.question.pairedVariants.find((variant) => variant.kind === "single-choice" || variant.kind === "multiple-choice");
@@ -367,9 +415,9 @@ export function createLearningBatchService(dependencies) {
         let judged;
         const unresolved = fillBlanks.flatMap((blank, index) => blankCorrect[index] ? [] : [{ id: blank.id, response: pairedBlankAnswers[index].text, canonicalAnswers: blank.acceptedAnswers }]);
         try { judged = await dependencies.semanticGrader({ prompt: blankVariant.prompt, answers: unresolved }); } catch (error) { return fail("ReviewGradingUnavailable"); }
-        if (!judged.ok || judged.value.length !== unresolved.length || judged.value.some((value) => typeof value !== "boolean")) return fail("ReviewGradingUnavailable");
+        if (!judged.ok || judged.value.length !== unresolved.length || judged.value.some((value) => typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1)) return fail("ReviewGradingUnavailable");
         let gradedIndex = 0;
-        for (let index = 0; index < blankCorrect.length; index += 1) if (!blankCorrect[index]) blankCorrect[index] = judged.value[gradedIndex++];
+        for (let index = 0; index < blankCorrect.length; index += 1) if (!blankCorrect[index]) blankCorrect[index] = judged.value[gradedIndex++] >= 0.7;
       }
       const fillCorrect = blankCorrect.every(Boolean);
       const correct = choiceCorrect && fillCorrect;
@@ -398,38 +446,16 @@ export function createLearningBatchService(dependencies) {
     /** @type {{ id: string, correct: boolean, correctAnswer: string }[]} */
     const components = [];
     if (candidate.question.kind === "fill-blank") {
-      if (candidate.question.blanks !== null) {
-        const submitted = command.blankAnswers;
-        const blanks = candidate.question.blanks;
-        if (!Array.isArray(submitted) || submitted.length !== blanks.length || new Set(submitted.map((answer) => answer.id)).size !== blanks.length || submitted.some((answer, index) => answer.id !== blanks[index].id)) return fail("ReviewAnswerNotAllowed");
-        /** @param {string} value */
-        const normalized = (value) => value.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ");
-        const exact = blanks.map((blank, index) => blank.acceptedAnswers.some((answer) => normalized(answer) === normalized(submitted[index].text)));
-        if (exact.some((value) => !value)) {
-          if (dependencies.semanticGrader === undefined) return fail("ReviewGradingUnavailable");
-          let judged;
-          try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: blanks.filter((_, index) => !exact[index]).map((blank) => ({ id: blank.id, response: submitted[blanks.indexOf(blank)].text, canonicalAnswers: blank.acceptedAnswers })) }); } catch (error) { return fail("ReviewGradingUnavailable"); }
-          if (!judged.ok || judged.value.length !== exact.filter((value) => !value).length || judged.value.some((value) => typeof value !== "boolean")) return fail("ReviewGradingUnavailable");
-          let cursor = 0;
-          for (let index = 0; index < exact.length; index += 1) if (!exact[index]) exact[index] = judged.value[cursor++];
-        }
-        blanks.forEach((blank, index) => components.push({ id: blank.id, correct: exact[index], correctAnswer: blank.acceptedAnswers[0] }));
-        score = exact.filter(Boolean).length / blanks.length;
-      } else {
-      const answerText = typeof command.answerText === "string" ? command.answerText : null;
-      const acceptedAnswers = candidate.question.acceptedAnswers;
-      if (answerText === null || acceptedAnswers === null) return fail("ReviewAnswerNotAllowed");
-      const normalized = answerText.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ");
-      const exact = normalized !== "" && acceptedAnswers.some((answer) => answer.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/gu, " ") === normalized);
-      if (!exact) {
-        if (dependencies.semanticGrader === undefined) return fail("ReviewGradingUnavailable");
-        let judged;
-        try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: [{ id: /** @type {string} */ (candidate.question.blankId), response: answerText, canonicalAnswers: acceptedAnswers }] }); } catch (error) { return fail("ReviewGradingUnavailable"); }
-        if (!judged.ok || judged.value.length !== 1 || typeof judged.value[0] !== "boolean") return fail("ReviewGradingUnavailable");
-        score = judged.value[0] ? 1 : 0;
-      } else score = 1;
-      components.push({ id: /** @type {string} */ (candidate.question.blankId), correct: score === 1, correctAnswer: acceptedAnswers[0] });
-      }
+      const blanks = candidate.question.blanks ?? (candidate.question.acceptedAnswers !== null && candidate.question.blankId !== null ? [{ id: candidate.question.blankId, acceptedAnswers: candidate.question.acceptedAnswers }] : []);
+      const submitted = candidate.question.blanks === null ? [{ id: candidate.question.blankId, text: command.answerText }] : command.blankAnswers;
+      if (blanks.length === 0 || !Array.isArray(submitted) || submitted.length !== blanks.length || new Set(submitted.map(answer => answer.id)).size !== blanks.length || submitted.some((answer, index) => answer.id !== blanks[index].id || !text(answer.text))) return fail("ReviewAnswerNotAllowed");
+      if (dependencies.semanticGrader === undefined) return fail("ReviewGradingUnavailable");
+      let judged;
+      try { judged = await dependencies.semanticGrader({ prompt: candidate.question.prompt, answers: blanks.map((blank, index) => ({ id: blank.id, response: /** @type {string} */ (submitted[index].text), canonicalAnswers: blank.acceptedAnswers })) }); } catch (error) { return fail("ReviewGradingUnavailable"); }
+      if (!judged.ok || judged.value.length !== blanks.length || judged.value.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1)) return fail("ReviewGradingUnavailable");
+      const scores = judged.value;
+      blanks.forEach((blank, index) => components.push({ id: blank.id, correct: scores[index] >= 0.7, correctAnswer: blank.acceptedAnswers[0] }));
+      score = scores.reduce((sum, value) => sum + value, 0) / scores.length;
     } else {
       const expected = candidate.question.correctChoiceIds;
       const choices = candidate.question.choices;
@@ -441,7 +467,7 @@ export function createLearningBatchService(dependencies) {
       choices.forEach((choice) => components.push({ id: choice.id, correct: expected.includes(choice.id) === selected.includes(choice.id), correctAnswer: expected.includes(choice.id) ? choice.label : "" }));
     }
     const now = dependencies.now();
-    const correct = score === 1;
+    const correct = score >= 0.7;
     const nextDays = correct ? Math.min(365, Math.max(1, candidate.scheduledDays === 0 ? 1 : candidate.scheduledDays * 2)) : 1;
     const dueAt = new Date(Date.parse(now) + nextDays * 86_400_000).toISOString();
     const answerText = correctAnswer(candidate.question);
@@ -457,6 +483,13 @@ export function createLearningBatchService(dependencies) {
       database.prepare("UPDATE learner_knowledge_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ?, review_count = review_count + 1, updated_at = ? WHERE owner_id = ? AND knowledge_id = ? AND studied_at IS NOT NULL").bind(correct ? 1 : 0, nextDays, dueAt, now, command.ownerId, candidate.knowledgeId),
       database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) VALUES (?, ?, 'review-answer', ?, ?)").bind(command.ownerId, command.idempotencyKey, JSON.stringify(answer), now),
     ];
+    if (candidate.pairedQuestionId !== undefined) {
+      for (const sibling of separateQuestions(knowledge.value).filter(item => item.pairedQuestionId === candidate.pairedQuestionId)) {
+        if (sibling.dueAt === null) return fail("ProgressDataInvalid");
+        statements.push(database.prepare("INSERT INTO learner_question_state (owner_id, question_id, knowledge_id, last_answer_correct, scheduled_days, due_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id, question_id) DO NOTHING").bind(command.ownerId, sibling.questionId, sibling.knowledgeId, sibling.lastAnswerCorrect === null ? null : sibling.lastAnswerCorrect ? 1 : 0, sibling.scheduledDays, sibling.dueAt));
+      }
+      statements.push(database.prepare("UPDATE learner_question_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ? WHERE owner_id = ? AND question_id = ?").bind(correct ? 1 : 0, nextDays, dueAt, command.ownerId, command.questionId));
+    }
     const written = await database.batch(statements);
     if (written.length !== statements.length || written.some((entry) => !entry.success)) return fail("LearningBatchPersistenceFailed");
     const count = await database.prepare("SELECT COUNT(*) AS count FROM learner_review_answers WHERE owner_id = ? AND batch_id = ?").bind(command.ownerId, command.batchId).first();
@@ -478,6 +511,7 @@ export function createLearningBatchService(dependencies) {
   async function setPreference(command) {
     if (!record(command) || !text(command.ownerId) || !text(command.knowledgeId) || (command.choice !== "more" && command.choice !== "less") || !text(command.idempotencyKey)) return { ok: false, error: { kind: "LearningPreferenceInvalid" } };
     const preference = command.choice === "more" ? 1 : -1;
+    const { ownerId, knowledgeId } = command;
     const now = dependencies.now();
     if (!iso(now)) return {ok:false,error:{kind:'LearningBatchClockInvalid'}};
     const replay = await commandResult(command.ownerId, command.idempotencyKey);
@@ -496,11 +530,11 @@ export function createLearningBatchService(dependencies) {
         database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) VALUES (?, ?, 'preference', ?, ?)").bind(command.ownerId,command.idempotencyKey,JSON.stringify(value),now),
         database.prepare("INSERT INTO learner_preference_feedback (owner_id, knowledge_id, preference, choice, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(owner_id, knowledge_id) DO UPDATE SET preference = excluded.preference, choice = excluded.choice, created_at = excluded.created_at").bind(command.ownerId, command.knowledgeId, preference, command.choice, now),
         database.prepare("INSERT INTO learner_knowledge_state (owner_id, knowledge_id, source_id, view_count, last_answer_correct, scheduled_days, due_at, studied_at, review_count, preference, updated_at) VALUES (?, ?, ?, 0, NULL, 0, NULL, NULL, 0, ?, ?) ON CONFLICT(owner_id, knowledge_id) DO UPDATE SET preference = excluded.preference, updated_at = excluded.updated_at").bind(command.ownerId,command.knowledgeId,owned.source_id,preference,now),
-        database.prepare(`WITH RECURSIVE intervals(days) AS (VALUES(1) UNION ALL SELECT MIN(365, days * 2) FROM intervals WHERE days < 365)
-          UPDATE learner_knowledge_state SET
+        ...["learner_knowledge_state", "learner_question_state"].map(table => database.prepare(`WITH RECURSIVE intervals(days) AS (VALUES(1) UNION ALL SELECT MIN(365, days * 2) FROM intervals WHERE days < 365)
+          UPDATE ${table} SET
             due_at = CASE WHEN ${nextInterval} = scheduled_days THEN due_at ELSE strftime('%Y-%m-%dT%H:%M:%fZ', MAX(julianday(?), julianday(due_at)) + (${nextInterval} - scheduled_days)) END,
             scheduled_days = ${nextInterval}
-          WHERE owner_id = ? AND knowledge_id = ? AND studied_at IS NOT NULL AND due_at IS NOT NULL`).bind(now,command.ownerId,command.knowledgeId),
+          WHERE owner_id = ? AND knowledge_id = ? ${table === "learner_knowledge_state" ? "AND studied_at IS NOT NULL" : ""} AND due_at IS NOT NULL`).bind(now,ownerId,knowledgeId)),
       ]);
       return result.every(entry=>entry.success) ? {ok:true,value} : {ok:false,error:{kind:'LearningPreferencePersistenceFailed'}};
     } catch (error) {
@@ -540,9 +574,7 @@ export function createLearningBatchService(dependencies) {
       }
     }
     const statements = [
-      database.prepare("DELETE FROM learner_review_answers WHERE owner_id = ? AND question_id IN (SELECT task_id FROM learning_generation_tasks WHERE owner_id = ? AND item_id = ?)").bind(command.ownerId, command.ownerId, command.knowledgeId),
-      database.prepare("DELETE FROM learner_feed_batches WHERE owner_id = ? AND EXISTS (SELECT 1 FROM json_each(learner_feed_batches.item_ids_json) WHERE value = ?)").bind(command.ownerId, command.knowledgeId),
-      database.prepare("DELETE FROM learner_review_batches WHERE owner_id = ? AND EXISTS (SELECT 1 FROM json_each(learner_review_batches.question_ids_json) WHERE value IN (SELECT task_id FROM learning_generation_tasks WHERE owner_id = ? AND item_id = ?))").bind(command.ownerId, command.ownerId, command.knowledgeId),
+      database.prepare("DELETE FROM learner_question_state WHERE owner_id = ? AND knowledge_id = ?").bind(command.ownerId, command.knowledgeId),
       database.prepare("DELETE FROM learner_knowledge_state WHERE owner_id = ? AND knowledge_id = ?").bind(command.ownerId, command.knowledgeId),
       database.prepare("DELETE FROM learner_preference_feedback WHERE owner_id = ? AND knowledge_id = ?").bind(command.ownerId, command.knowledgeId),
       database.prepare("DELETE FROM knowledge_workflow_media_derivatives WHERE owner_id = ? AND asset_id IN (SELECT asset_id FROM knowledge_workflow_media_assets WHERE owner_id = ? AND knowledge_id = ?)").bind(command.ownerId, command.ownerId, command.knowledgeId),
@@ -607,6 +639,7 @@ export function createLearningBatchService(dependencies) {
       database.prepare("DELETE FROM learner_review_answers WHERE owner_id = ?").bind(ownerId),
       database.prepare("DELETE FROM learner_review_batches WHERE owner_id = ?").bind(ownerId),
       database.prepare("DELETE FROM learner_feed_batches WHERE owner_id = ?").bind(ownerId),
+      database.prepare("DELETE FROM learner_question_state WHERE owner_id = ?").bind(ownerId),
       database.prepare("DELETE FROM learner_knowledge_state WHERE owner_id = ?").bind(ownerId),
       database.prepare("DELETE FROM learner_batch_commands WHERE owner_id = ?").bind(ownerId),
       database.prepare("DELETE FROM knowledge_workflow_media_derivatives WHERE owner_id = ?").bind(ownerId),

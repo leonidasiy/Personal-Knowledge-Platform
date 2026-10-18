@@ -82,7 +82,8 @@ Deno.test("native paired Review projection passes the gateway without pre-answer
   if (!loaded.ok) return;
   assertEquals(loaded.value.questions.length, 5);
   for (const question of loaded.value.questions) {
-    assertEquals(question.pairedVariants?.length, 2);
+    assertEquals(question.pairedVariants, null);
+    assertEquals(question.questionId.includes(":choice-v1") || question.questionId.includes(":fill-v1"), true);
     for (const variant of question.pairedVariants ?? []) for (const field of ["explanation", "correctChoiceIds", "acceptedAnswers"]) assertEquals(Object.hasOwn(variant, field), false);
   }
 });
@@ -238,7 +239,7 @@ Deno.test("multi-blank review scores each part, keeps partial review short, and 
   const database = new Database(due);
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
   database.answerCount = 1;
-  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", semanticGrader: async () => ({ ok: true, value: [false] }), logger: () => {} });
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", semanticGrader: async () => ({ ok: true, value: [1, 0] }), logger: () => {} });
   const review = await service.loadReview("owner-a", "2026-08-19");
   assertEquals(review.ok, true);
   if (!review.ok) return;
@@ -280,7 +281,7 @@ Deno.test("legacy single-blank answers and semantic equivalents remain gradeable
   const database = new Database(due);
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
   database.answerCount = 1;
-  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", semanticGrader: async () => ({ ok: true, value: [true] }), logger: () => {} });
+  const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", semanticGrader: async () => ({ ok: true, value: [1] }), logger: () => {} });
   const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: [], answerText: "home pitch", idempotencyKey: "answer-1" });
   assertEquals(result.ok, true);
   if (!result.ok) return;
@@ -306,12 +307,13 @@ Deno.test("multi-select requires exact set equality and wrong selections do not 
   assertEquals(answer.nextDueAt, "2026-08-20T00:00:00.000Z");
 });
 
-Deno.test("learner D1 deletion contract removes current batches and every paired descendant", async () => {
+Deno.test("learner D1 deletion preserves batch and answer history while removing paired descendants", async () => {
   const database = new Database([]);
   const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", logger: () => {} });
   const result = await service.removeKnowledge({ ownerId: "owner-a", knowledgeId: "knowledge-a", idempotencyKey: "remove-a" });
   assertEquals(result.ok, true);
-  for (const table of ["learner_feed_batches", "learner_review_batches", "learner_knowledge_state", "knowledge_workflow_quizzes", "extraction_knowledge_points"]) assertEquals(database.queries.some((query) => query.includes(`DELETE FROM ${table}`)), true);
+  for (const table of ["learner_question_state", "learner_knowledge_state", "knowledge_workflow_quizzes", "extraction_knowledge_points"]) assertEquals(database.queries.some((query) => query.includes(`DELETE FROM ${table}`)), true);
+  for (const table of ["learner_feed_batches", "learner_review_batches", "learner_review_answers"]) assertEquals(database.queries.some(query => query.includes(`DELETE FROM ${table}`)), false);
 });
 
 Deno.test("learner D1 answer contract supports fill-blank answers without exposing them in the question projection", async () => {

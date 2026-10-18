@@ -34,7 +34,7 @@ export function createLearnerController(dependencies) {
   const gateway = new LearningBatchGatewayClient({ fetch: dependencies.fetch, baseUrl: dependencies.baseUrl, timeoutMs: dependencies.timeoutMs });
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: FeedBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let feed = { state: "idle", value: null, error: null };
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: ReviewBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let review = { state: "idle", value: null, error: null };
-  /** @type {Map<string, { readonly correct: boolean, readonly score: number, readonly explanation: string, readonly correctAnswer: string, readonly components: readonly { readonly id: string, readonly correct: boolean, readonly correctAnswer: string }[] }> } */ const answers = new Map();
+  /** @type {Map<string, { readonly correct: boolean, readonly score: number, readonly explanation: string, readonly correctAnswer: string }> } */ const answers = new Map();
   /** @type {Map<string, { readonly selectedChoiceIds: readonly string[], readonly answerText: string, readonly blanks: Readonly<Record<string, string>> }> } */ const attempts = new Map();
 
   const pending = new Set();
@@ -135,7 +135,7 @@ export function createLearnerController(dependencies) {
       onChange();
       return;
     }
-    await Promise.all([loadFeed(), loadReview()]);
+    await Promise.all([loadFeed(), ...(review.value?.batch == null ? [loadReview()] : [])]);
     const targets = dependencies.getDailyTargets?.();
     if (targets && studiedBefore !== undefined && studiedBefore < targets.learning && dailyProgress !== null && dailyProgress.studyItems >= targets.learning) {
       showLearningCelebration(dailyProgress.studyItems, Math.max(0, targets.review - dailyProgress.reviewAttempts));
@@ -182,7 +182,7 @@ export function createLearnerController(dependencies) {
     attempts.delete(questionId);
     const alreadyAnswered = answers.has(questionId);
     if (correct && !alreadyAnswered) celebrations.add(`review-feedback:${questionId}`);
-    answers.set(questionId, { correct, score: result.value.score, explanation: result.value.feedback.explanation, correctAnswer: result.value.feedback.correctAnswer, components: result.value.feedback.components });
+    answers.set(questionId, { correct, score: result.value.score, explanation: result.value.feedback.explanation, correctAnswer: result.value.feedback.correctAnswer });
     if (review.value !== null) {
       const batch = result.value.completed === true && review.value.batch !== null
         ? { ...review.value.batch, status: /** @type {const} */ ("completed"), completedAt: now() }
@@ -322,9 +322,9 @@ export function createLearnerController(dependencies) {
     const actionKey = `review-submit:${question.questionId}`;
     const feedbackKey = `review-feedback:${question.questionId}`;
     const body = answer === undefined && !completed
-      ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${pending.has(actionKey) ? 'aria-busy="true"' : ""}>${pending.has(actionKey) ? input.replaceAll("<input ", "<input disabled ") : input}<button class="button primary" ${actionState(actionKey)} type="submit" ${question.choices === null && question.kind !== "fill-blank" && question.pairedVariants === null ? "disabled" : ""}>${actionLabel(actionKey, "Check both answers", "Checking your answer…")}</button></form>`
-      : `<p class="answer-feedback ${answer === undefined ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="${escapeHtml(feedbackKey)}" ${celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : ""}>${answer?.correct ? sparkIcon() : ""}${answer === undefined ? "Completed. This question has been scheduled for its next interval." : answer.correct ? "Correct." : question.pairedVariants !== null ? "Not quite." : answer.score > 0 ? `Partly correct (${Math.round(answer.score * 100)}%).` : "Not quite."}</p>`;
-    const feedback = answer === undefined ? "" : `<details class="source-details" open><summary>Answer and source explanation</summary><p><strong>Correct answer:</strong> ${escapeHtml(answer.correctAnswer)}</p>${answer.components.length > 1 ? `<ul>${answer.components.map((component, index) => `<li>${question.pairedVariants !== null ? index === 0 ? "Choice question" : `Blank ${index}` : question.kind === "fill-blank" ? `Blank ${index + 1}` : escapeHtml(question.choices?.find((choice) => choice.id === component.id)?.label ?? `Answer ${index + 1}`)}: ${component.correct ? "correct" : "review"}${component.correctAnswer === "" ? "" : ` · ${escapeHtml(component.correctAnswer)}`}</li>`).join("")}</ul>` : ""}<p>${escapeHtml(answer.explanation)}</p><p>Evidence anchors: ${escapeHtml(question.sourceAnchorIds.join(", "))}</p></details>`;
+      ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${pending.has(actionKey) ? 'aria-busy="true"' : ""}>${pending.has(actionKey) ? input.replaceAll("<input ", "<input disabled ") : input}<button class="button primary" ${actionState(actionKey)} type="submit" ${question.choices === null && question.kind !== "fill-blank" && question.pairedVariants === null ? "disabled" : ""}>${actionLabel(actionKey, question.pairedVariants === null ? "Check answer" : "Check both answers", "Checking your answer…")}</button></form>`
+      : `<p class="answer-feedback ${answer === undefined ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="${escapeHtml(feedbackKey)}" ${celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : ""}>${answer?.correct ? sparkIcon() : ""}${answer === undefined ? "Completed. This question has been scheduled for its next interval." : answer.correct ? question.kind === "fill-blank" ? `Correct (${Math.round(answer.score * 100)}%).` : "Correct." : question.pairedVariants !== null ? "Not quite." : answer.score > 0 ? `Partly correct (${Math.floor(answer.score * 100)}%).` : "Not quite."}</p>`;
+    const feedback = answer === undefined || answer.correct ? "" : `<p class="correct-answer"><strong>Correct answer:</strong> ${escapeHtml(answer.correctAnswer)}</p><details class="source-details"><summary>Source explanation</summary><p>${escapeHtml(answer.explanation)}</p><p>Evidence anchors: ${escapeHtml(question.sourceAnchorIds.join(", "))}</p></details>`;
     return `<article class="review-card" data-review-question="${escapeHtml(question.questionId)}"><p class="review-question-meta">Paired with ${escapeHtml(question.title)}</p>${question.pairedVariants === null ? `<h2>${escapeHtml(question.prompt)}</h2>` : ""}${body}${feedback}</article>`;
   }
 
