@@ -17,7 +17,7 @@
 .progress-chart p { margin: 12px 0 0; }
 .progress-chart [data-chart-value] { cursor: pointer; }
 .progress-chart [data-chart-value]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.progress-tooltip { position: absolute; inset: auto 0 0; z-index: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface); color: var(--text); font-size: 12px; pointer-events: none; }
+.progress-tooltip { position: absolute; max-width: 100%; box-sizing: border-box; z-index: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface); color: var(--text); font-size: 12px; pointer-events: none; }
 .progress-subject-bars { display: grid; gap: 14px; }
 .progress-subject-bars > div { display: grid; gap: 6px; font-size: 13px; }
 .progress-subject-bar { width: var(--bar-width); height: 10px; background: var(--signal-one); }

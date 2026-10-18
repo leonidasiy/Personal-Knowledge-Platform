@@ -10,7 +10,7 @@ import { createProgressPage } from "../src/features/progress/page.js";
 const now = "2026-09-19T12:00:00.000Z";
 const attempt = Object.freeze({ batchId: "b", questionId: "q", knowledgeId: null, answeredAt: now, correct: true, score: 1, elapsedDays: 2, previousCorrect: false, primarySubject: "music" });
 /** @param {Partial<Record<string,unknown>>} overrides */ const input = overrides => ({ days: 7, now, subject: null, attempts: [attempt], studies: [{ completedAt: now, itemCount: 5 }], subjectCounts: [{ id: "music", count: 1 }], ...overrides });
-Deno.test("progress aggregates current UTC day, fractions, recovery, and primary subjects", () => { const result = buildProgress(input({ attempts: [attempt, { ...attempt, batchId: "b2", questionId: "q2", correct: false, score: null, elapsedDays: null, previousCorrect: null, primarySubject: null }] })); assert(result.ok, "valid input"); if (!result.ok) return; assert(result.value.attempts.accuracy === .5 && result.value.attempts.averageScore === 1 && result.value.attempts.scoredCount === 1, "separate score"); assert(result.value.daily.at(-1)?.date === "2026-09-19", "current day"); assert(result.value.recovery.accuracy === 1, "recovery"); assert(result.value.subjects.find(s => s.id === "music")?.count === 1, "primary only"); assert(result.value.intervals.at(-1)?.count === 1, "missing interval"); });
+Deno.test("progress aggregates current UTC day, fractions, recovery, and primary subjects", () => { const result = buildProgress(input({ attempts: [attempt, { ...attempt, batchId: "b2", questionId: "q2", correct: false, score: null, elapsedDays: null, previousCorrect: null, primarySubject: null }] })); assert(result.ok, "valid input"); if (!result.ok) return; assert(result.value.attempts.accuracy === .5 && result.value.attempts.averageScore === 1 && result.value.attempts.scoredCount === 1, "separate score"); assert(result.value.daily.at(-1)?.date === "2026-09-19", "current day"); assert(result.value.recovery.accuracy === 1, "recovery"); assert(result.value.subjects.find(s => s.id === "music")?.accuracy === 1, "primary only"); assert(result.value.intervals.at(-1)?.count === 1, "missing interval"); });
 Deno.test("progress distinguishes empty denominators and rejects invalid data", () => { const empty = buildProgress(input({ attempts: [], studies: [] })); assert(empty.ok && empty.value.attempts.accuracy === null && empty.value.daily[0].accuracy === null, "empty nulls"); for (const bad of [input({ days: 8 }), input({ attempts: [{ ...attempt, confidence: 80 }] }), input({ attempts: [{ ...attempt, primarySubject: "nope" }] }), input({ studies: [{ completedAt: now, itemCount: 6 }] })]) assert(!buildProgress(bad).ok, "invalid rejected"); });
 Deno.test("progress deduplicates identical attempts and rejects same batch/question conflicts", () => { const duplicate = buildProgress(input({ attempts: [attempt, { ...attempt }] })); assert(duplicate.ok && duplicate.value.attempts.count === 1, "identical dedupe"); const conflict = buildProgress(input({ attempts: [attempt, { ...attempt, answeredAt: "2026-09-19T11:00:00.000Z" }] })); assert(!conflict.ok && conflict.error.field.endsWith("duplicate"), "timestamp conflict"); });
 Deno.test("progress rejects invalid scores and excludes future records", () => { assert(!buildProgress(input({ attempts: [{ ...attempt, score: .5, correct: true }] })).ok, "score consistency"); const future = buildProgress(input({ attempts: [{ ...attempt, answeredAt: "2026-09-19T23:00:00.000Z" }] })); assert(future.ok && future.value.attempts.count === 0, "future excluded"); });
@@ -84,13 +84,13 @@ Deno.test("primary subjects rank library knowledge counts, cap at five and never
   const result = buildProgress(input({ subjectCounts, attempts: Array.from({ length: 30 }, (_, i) => ({ ...attempt, batchId: `b${i}` })) }));
   assert(result.ok, "valid counts"); if (!result.ok) return;
   assert(result.value.subjects.map(s => s.id).join() === "computing,mathematics,physics,biology,music", "largest five in descending knowledge count");
-  assert(result.value.subjects.at(-1)?.count === 4, "30 quiz attempts do not increase the four music points");
+  assert(result.value.subjects.at(-1)?.accuracy === 1, "30 quiz attempts affect accuracy but not subject ordering");
   const filtered = buildProgress(input({ subject: "music", subjectCounts }));
-  assert(filtered.ok && filtered.value.subjects.length === 1 && filtered.value.subjects[0].count === 4, "subject filter respected");
+  assert(filtered.ok && filtered.value.subjects.length === 1 && filtered.value.subjects[0].accuracy === 1, "subject filter respected");
   for (const bad of [null, [{ id: "music", count: -1 }], [{ id: "music", count: 1.5 }], [{ id: "invented", count: 1 }], [{ id: "music", count: 1 }, { id: "music", count: 2 }]]) assert(!buildProgress(input({ subjectCounts: bad })).ok, "invalid knowledge counts rejected");
 });
 
-Deno.test("Progress has only interactive accuracy, activity and knowledge-count charts without tables or recovery", async () => {
+Deno.test("Progress has only interactive daily and subject accuracy charts plus activity without tables or recovery", async () => {
   const result = buildProgress(input({ attempts: [attempt, { ...attempt, batchId: "wrong", correct: false, score: 0 }] })); if (!result.ok) throw new Error("fixture invalid");
   const page = createProgressPage({ fetch: async () => Response.json({ result: result.value }), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
   await page.load(); const html = page.render();
@@ -98,7 +98,9 @@ Deno.test("Progress has only interactive accuracy, activity and knowledge-count 
   assert((html.match(/data-progress-chart/g) ?? []).length === 3, "three remaining charts");
   assert(html.includes('data-chart-value="2026-09-19: 50% accuracy, 1/2 correct answers"'), "exact daily accuracy on its point");
   assert(html.includes('data-chart-value="2026-09-19: 5 knowledge points studied in 1 batches, 2 quiz attempts"'), "activity details on its cell");
-  assert(html.includes('data-chart-value="Music & Performing Arts: 1 knowledge points"'), "knowledge count on subject bar");
+  assert(html.includes('data-chart-value="Music & Performing Arts: 50% accuracy"'), "accuracy on subject bar");
+  assert(html.includes("Review accuracy by subject") && !html.includes("Primary subjects") && !html.includes("1 knowledge points"), "subject purpose and accuracy replace displayed inventory counts");
+  assert(html.includes('--bar-width:50%'), "bar uses absolute accuracy rather than inventory count");
   assert((html.match(/role="tooltip" hidden/g) ?? []).length === 3, "data readouts start hidden");
   assert(html.includes('tabindex="0" role="img"'), "chart data is keyboard and screen-reader accessible");
 });
@@ -109,12 +111,13 @@ Deno.test("chart values respond to hover, tap and focus, dismiss on exit, outsid
     /** @param {string} value */ constructor(value) { this.value = value; }
     closest() { return this; }
     getAttribute() { return this.value; }
+    getBoundingClientRect() { return { left: 290, top: 200, bottom: 220, width: 10 }; }
   }
   Object.defineProperty(globalThis, "Element", { configurable: true, value: Point });
   try {
     const handlers = new Map(), rootHandlers = new Map();
-    const tooltip = { hidden: true, textContent: "" };
-    const plot = { querySelector: () => tooltip, addEventListener: (/** @type {string} */ name, /** @type {(e:any)=>void} */ handler) => handlers.set(name, handler) };
+    const tooltip = { hidden: true, textContent: "", style: { left: "", top: "" }, offsetWidth: 100, offsetHeight: 40 };
+    const plot = { querySelector: () => tooltip, getBoundingClientRect: () => ({ left: 0, top: 100, width: 300 }), addEventListener: (/** @type {string} */ name, /** @type {(e:any)=>void} */ handler) => handlers.set(name, handler) };
     const root = { querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-progress-chart]" ? [plot] : [tooltip], addEventListener: (/** @type {string} */ name, /** @type {(e:any)=>void} */ handler) => rootHandlers.set(name, handler) };
     const page = createProgressPage({ fetch: async () => Response.json({}), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
     page.bind(/** @type {HTMLElement} */(/** @type {unknown} */(root)));
@@ -122,14 +125,28 @@ Deno.test("chart values respond to hover, tap and focus, dismiss on exit, outsid
     for (const name of ["pointerover", "click", "focusin"]) {
       handlers.get(name)({ target: point });
       assert(!tooltip.hidden && tooltip.textContent === point.value, `${name} reveals the data value`);
+      assert(tooltip.style.left === "200px" && tooltip.style.top === "52px", "readout stays near the point and within the chart width");
       handlers.get("pointerout")({ pointerType: "touch" }); assert(!tooltip.hidden, "touch readout persists after lifting finger");
       handlers.get("pointerout")({ pointerType: "mouse" }); assert(tooltip.hidden, "mouse exit dismisses");
     }
     handlers.get("click")({ target: point }); rootHandlers.get("pointerdown")({ target: {} }); assert(tooltip.hidden, "outside tap dismisses");
     handlers.get("focusin")({ target: point }); rootHandlers.get("keydown")({ key: "Escape" }); assert(tooltip.hidden, "Escape dismisses");
     handlers.get("focusin")({ target: point }); handlers.get("focusout")({}); assert(tooltip.hidden, "blur dismisses");
+    handlers.get("click")({ target: point }); handlers.get("scroll")({}); assert(tooltip.hidden, "scroll dismisses a readout whose anchor moved");
   } finally {
     if (originalElement) Object.defineProperty(globalThis, "Element", originalElement);
     else Reflect.deleteProperty(globalThis, "Element");
   }
+});
+
+Deno.test("subject accuracy uses selected-period attempts and distinguishes no attempts from zero accuracy", async () => {
+  const result = buildProgress(input({ subjectCounts: [{ id: "computing", count: 20 }, { id: "music", count: 4 }, { id: "physics", count: 3 }], attempts: [attempt, { ...attempt, batchId: "wrong", correct: false, score: 0 }, { ...attempt, batchId: "physics-wrong", primarySubject: "physics", correct: false, score: 0 }, { ...attempt, batchId: "old", answeredAt: "2026-08-01T10:00:00.000Z" }] }));
+  assert(result.ok, "valid subject accuracy input"); if (!result.ok) return;
+  assert(JSON.stringify(result.value.subjects.map(row => [row.id, row.accuracy])) === JSON.stringify([["computing", null], ["music", .5], ["physics", 0]]), "inventory orders subjects while in-period answers determine accuracy");
+  assert(result.value.subjects.every(row => !Object.hasOwn(row, "count")), "inventory counts are not part of displayed chart data");
+  assert(isProgressSummary(result.value), "new summary contract is valid");
+  assert(!isProgressSummary({ ...result.value, subjects: [{ id: "music", label: "Music", accuracy: 2 }] }), "invalid subject accuracy rejected");
+  const page = createProgressPage({ fetch: async () => Response.json({ result: result.value }), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
+  await page.load(); const html = page.render();
+  assert(html.includes('data-chart-value="Computer Science & AI: No review attempts"') && html.includes('data-chart-value="Physics & Astronomy: 0% accuracy"'), "no data and genuine zero remain distinct");
 });

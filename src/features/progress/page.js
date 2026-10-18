@@ -31,7 +31,7 @@ export function createProgressPage(dependencies) {
     const empty = s.attempts.count === 0 ? progressMarkup(0) : "";
     const heading = progressMarkup(1);
     const metrics = `<div class="progress-summary"><div><span>Answer accuracy</span><strong>${accuracy}</strong><small>${s.attempts.correct}/${s.attempts.count} attempts</small></div><div><span>Average score</span><strong>${score}</strong><small>${s.attempts.scoredCount} scored attempts</small></div><div><span>Review attempts</span><strong>${s.attempts.count}</strong><small>One per question per batch</small></div></div>`;
-    return `<section class="wide-view progress-page" aria-labelledby="progress-title">${heading}<div class="progress-toolbar"><p class="progress-note">${e(s.period.startedOn)} — ${e(s.period.endedOn)} · UTC</p>${controls}</div>${metrics}${empty}<div class="progress-charts"><div class="progress-timeline">${chart(e,"Daily accuracy",s.daily,"line")}</div><div>${chart(e,"Activity calendar",s.activity,"activity")}</div><div>${chart(e,"Primary subjects",s.subjects,"subjects")}</div></div></section>`;
+    return `<section class="wide-view progress-page" aria-labelledby="progress-title">${heading}<div class="progress-toolbar"><p class="progress-note">${e(s.period.startedOn)} — ${e(s.period.endedOn)} · UTC</p>${controls}</div>${metrics}${empty}<div class="progress-charts"><div class="progress-timeline">${chart(e,"Daily accuracy",s.daily,"line")}</div><div>${chart(e,"Activity calendar",s.activity,"activity")}</div><div>${chart(e,"Review accuracy by subject",s.subjects,"subjects")}</div></div></section>`;
   }
   /** @param {HTMLElement} root */
   function bind(root) {
@@ -46,12 +46,16 @@ export function createProgressPage(dependencies) {
         if (!point) return;
         for (const other of root.querySelectorAll("[role=tooltip]")) /** @type {HTMLElement} */(other).hidden = true;
         tooltip.textContent = point.getAttribute("data-chart-value"); tooltip.hidden = false;
+        const anchor = point.getBoundingClientRect(), bounds = plot.getBoundingClientRect();
+        tooltip.style.left = `${Math.max(0, Math.min(anchor.left + anchor.width / 2 - bounds.left - tooltip.offsetWidth / 2, bounds.width - tooltip.offsetWidth))}px`;
+        tooltip.style.top = `${Math.max(0, (anchor.top >= tooltip.offsetHeight + 8 ? anchor.top - tooltip.offsetHeight - 8 : anchor.bottom + 8) - bounds.top)}px`;
       };
       plot.addEventListener("pointerover", show);
       plot.addEventListener("focusin", show);
       plot.addEventListener("click", show);
       plot.addEventListener("pointerout", event => { if (/** @type {PointerEvent} */(event).pointerType !== "touch") tooltip.hidden = true; });
       plot.addEventListener("focusout", () => { tooltip.hidden = true; });
+      plot.addEventListener("scroll", () => { tooltip.hidden = true; }, true);
     }
     root.addEventListener("pointerdown", event => {
       if (event.target instanceof Element && event.target.closest("[data-chart-value]")) return;
@@ -70,9 +74,8 @@ function chart(e, title, rows, kind) {
   const point = value => `tabindex="0" role="img" aria-label="${e(value)}" data-chart-value="${e(value)}"`;
   let marks = "", caption = "", plot = "";
   if (kind === "subjects") {
-    const max = Math.max(1, ...rows.map(r => r.count));
-    plot = rows.length ? `<div class="progress-subject-bars">${rows.map(r => `<div ${point(`${r.label}: ${r.count} knowledge points`)}><span>${e(r.label)}</span><span class="progress-subject-bar" style="--bar-width:${r.count/max*100}%" aria-hidden="true"></span></div>`).join("")}</div>` : '<p>No classified knowledge points yet.</p>';
-    caption = "Top five subjects by knowledge points in your library.";
+    plot = rows.length ? `<div class="progress-subject-bars">${rows.map(r => `<div ${point(`${r.label}: ${r.accuracy === null ? "No review attempts" : `${percent(r.accuracy)} accuracy`}`)}><span>${e(r.label)}</span>${r.accuracy === null ? '<small>No review attempts</small>' : `<span class="progress-subject-bar" style="--bar-width:${r.accuracy*100}%" aria-hidden="true"></span>`}</div>`).join("")}</div>` : '<p>No classified knowledge points for this selection.</p>';
+    caption = "Accuracy for the selected period. The five largest subject areas, ordered by knowledge points.";
   } else if (kind === "activity") {
     const max = Math.max(1, ...rows.map(r => r.studyBatches + r.reviewAttempts)), columns = Math.ceil(rows.length / 7), width = 600 / columns;
     marks = rows.map((r,i) => {
@@ -81,7 +84,7 @@ function chart(e, title, rows, kind) {
       return `<g ${point(value)}><rect x="${10+Math.floor(i/7)*width}" y="${8+i%7*26}" width="${width-4}" height="22" fill="currentColor" opacity="${total === 0 ? .1 : .25+.75*total/max}"/></g>`;
     }).join("");
     plot = `<svg viewBox="0 0 620 196" aria-label="${e(title)} chart">${marks}</svg>`;
-    caption = "Darker cells mean more study and review activity.";
+    caption = "Stronger shading means more study and review activity.";
   } else {
     if (!rows.some(r => r.count > 0)) return progressMarkup(5, e(title), progressMarkup(6));
     const x = (/** @type {number} */ i) => `${10+i*85/Math.max(1,rows.length-1)}%`, y = (/** @type {number} */ n) => 135-n*120;

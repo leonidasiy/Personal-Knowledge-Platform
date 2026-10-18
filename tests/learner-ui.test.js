@@ -513,3 +513,34 @@ Deno.test("Skip reveals feedback without an answer or progress request, handles 
     if (originalElement) Object.defineProperty(globalThis, "HTMLElement", originalElement); else Reflect.deleteProperty(globalThis, "HTMLElement");
   }
 });
+
+Deno.test("empty quiz answers show an inline prompt without submitting or losing other inputs", async () => {
+  const originals = Object.fromEntries(["HTMLFormElement", "FormData"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  class Form {
+    dataset = { learnerReviewBatch: "review:music", learnerReviewQuestion: "question-1" };
+    prompt = { hidden: true };
+    /** @type {((event: { preventDefault: () => void, currentTarget: Form }) => void) | null} */ submit = null;
+    /** @param {string} _name @param {(event: { preventDefault: () => void, currentTarget: Form }) => void} listener */
+    addEventListener(_name, listener) { this.submit = listener; }
+    querySelector() { return this.prompt; }
+  }
+  class Values {
+    getAll() { return []; }
+    /** @param {string} name */ get(name) { return name === "blank:blank-1" ? "saved partial response" : "   "; }
+  }
+  Object.defineProperty(globalThis, "HTMLFormElement", { configurable: true, value: Form });
+  Object.defineProperty(globalThis, "FormData", { configurable: true, value: Values });
+  try {
+    for (const question of [review.questions[0], { ...review.questions[0], kind: "multiple-choice" }, { ...review.questions[0], kind: "fill-blank", choices: null, blanks: null }, { ...review.questions[0], kind: "fill-blank", choices: null, blanks: [{ id: "blank-1" }, { id: "blank-2" }] }]) {
+      let requests = 0, renders = 0;
+      const controller = createLearnerController({ fetch: async () => { requests++; return response({ result: { ...review, questions: [question] } }); }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", onChange: () => { renders++; } });
+      await controller.loadReview(); const before = renders, form = new Form();
+      controller.bind(/** @type {HTMLElement} */(/** @type {unknown} */({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-learner-review]" ? [form] : [] })));
+      assert(controller.renderReview().includes(question.kind === "fill-blank" ? "Fill in every blank before checking." : "Choose an answer before checking."), "prompt matches the answer format");
+      form.submit?.({ preventDefault: () => {}, currentTarget: form });
+      assert(!form.prompt.hidden && requests === 1 && renders === before, "empty submission reveals its inline prompt without a request or rerender that clears inputs");
+    }
+  } finally {
+    for (const [key, descriptor] of Object.entries(originals)) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
+  }
+});

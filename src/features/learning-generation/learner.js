@@ -169,7 +169,12 @@ export function createLearnerController(dependencies) {
     const answerText = formData.get("answerText");
     const question = review.value?.questions.find((candidate) => candidate.questionId === questionId);
     const blankAnswers = question?.blanks?.map((blank) => ({ id: blank.id, text: formData.get(`blank:${blank.id}`) })) ?? null;
-    if (batchId === "" || questionId === "" || question === undefined || (question.kind === "fill-blank" ? blankAnswers === null ? typeof answerText !== "string" || answerText.trim() === "" : blankAnswers.some(answer => typeof answer.text !== "string" || answer.text.trim() === "") : selectedChoiceIds.length === 0)) return;
+    if (batchId === "" || questionId === "" || question === undefined) return;
+    if (question.kind === "fill-blank" ? blankAnswers === null ? typeof answerText !== "string" || answerText.trim() === "" : blankAnswers.some(answer => typeof answer.text !== "string" || answer.text.trim() === "") : selectedChoiceIds.length === 0) {
+      const prompt = /** @type {HTMLElement|null} */(form.querySelector("[data-answer-prompt]"));
+      if (prompt) prompt.hidden = false;
+      return;
+    }
     const actionKey = `review-submit:${questionId}`;
     if (questionPending(questionId) || answers.has(questionId)) return;
     const reviewedBefore = dailyProgress?.reviewAttempts;
@@ -346,7 +351,7 @@ export function createLearnerController(dependencies) {
     const skipKey = `review-skip:${question.questionId}`;
     const busy = questionPending(question.questionId);
     const body = answer === undefined && !completed
-      ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${busy ? 'aria-busy="true"' : ""}>${busy ? input.replaceAll("<input ", "<input disabled ") : input}<button class="button primary" ${actionState(actionKey)} type="submit" ${busy ? "disabled" : ""}>${actionLabel(actionKey, "Check answer", "Checking…")}</button><button class="button quiet" type="button" data-action="skip-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(skipKey)} ${busy ? "disabled" : ""}>${actionLabel(skipKey, "Skip", "Loading…")}</button></form>`
+      ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${busy ? 'aria-busy="true"' : ""}>${busy ? input.replaceAll("<input ", "<input disabled ") : input}<p data-answer-prompt role="alert" hidden>${question.kind === "fill-blank" ? "Fill in every blank before checking." : "Choose an answer before checking."}</p><button class="button primary" ${actionState(actionKey)} type="submit" ${busy ? "disabled" : ""}>${actionLabel(actionKey, "Check answer", "Checking…")}</button><button class="button quiet" type="button" data-action="skip-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(skipKey)} ${busy ? "disabled" : ""}>${actionLabel(skipKey, "Skip", "Loading…")}</button></form>`
       : `<p class="answer-feedback ${answer === undefined || answer.skipped ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="${escapeHtml(feedbackKey)}" ${celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : ""}>${answer?.correct ? sparkIcon() : ""}${answer === undefined ? "Answered." : answer.skipped ? "Skipped." : answer.correct ? question.kind === "fill-blank" ? `Correct (${Math.round(answer.score * 100)}%).` : "Correct." : answer.score > 0 ? `Partly correct (${Math.floor(answer.score * 100)}%).` : "Not quite."}</p>`;
     const feedback = answer === undefined || answer.correct ? "" : feedMarkup(27, escapeHtml(answer.correctAnswer), escapeHtml(answer.explanation), escapeHtml(question.sourceAnchorIds.join(", ")));
     return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body, feedback);
