@@ -43,6 +43,50 @@ function fixture(count = 8) {
   return { db, service, value, complete, answer, skip, setBeforeGrade: value => { beforeGrade = value; }, setSkipUnavailable: value => { skipUnavailable = value; }, gradingRequests, day: () => clock.slice(0, 10), setClock: value => { clock = value; }, setProbability: value => { probability = value; }, setUnavailable: value => { unavailable = value; } };
 }
 
+test('Review shuffles all choice labels together per batch, keeps reload order and grades stable IDs', async () => {
+  for (const kind of ['single-choice', 'multiple-choice']) {
+    const f = fixture(5);
+    try {
+      const correctIds = kind === 'single-choice' ? ['a'] : ['a', 'c', 'e'];
+      const original = ['a', 'c', 'e', 'b', 'd'].map(id => ({ id, label: `Option ${id}` }));
+      for (const row of f.db.prepare('SELECT task_id, task_json FROM learning_generation_tasks').all()) {
+        const task = JSON.parse(row.task_json);
+        Object.assign(task.pairedVariants[0], { kind, choices: original, correctChoiceIds: correctIds });
+        f.db.prepare('UPDATE learning_generation_tasks SET task_json = ? WHERE task_id = ?').run(JSON.stringify(task), row.task_id);
+      }
+      const stored = f.db.prepare('SELECT task_json FROM learning_generation_tasks ORDER BY task_id').all();
+      await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+      const initial = f.value(await f.service.loadReview('owner', f.day()));
+      assert.deepEqual(f.value(await f.service.loadReview('owner', f.day())).questions, initial.questions);
+      const choiceIds = initial.questions.filter(q => q.choices !== null).map(q => q.questionId);
+      assert(choiceIds.length > 0);
+      const orders = new Set(), correctPositions = new Set();
+      let batchId = initial.batch.batchId, latest;
+      for (let index = 0; index < 32; index++) {
+        const nextId = `review:shuffle-fixture:${index}`;
+        f.db.prepare('UPDATE learner_review_batches SET batch_id = ? WHERE batch_id = ?').run(nextId, batchId);
+        batchId = nextId;
+        latest = f.value(await f.service.loadReview('owner', f.day()));
+        const question = latest.questions.find(q => q.questionId === choiceIds[0]);
+        assert.deepEqual([...question.choices].sort((a, b) => a.id.localeCompare(b.id)), [...original].sort((a, b) => a.id.localeCompare(b.id)));
+        orders.add(question.choices.map(c => c.id).join(','));
+        correctPositions.add(question.choices.findIndex(c => c.id === 'a'));
+        assert.equal(Object.hasOwn(question, 'correctChoiceIds'), false);
+        assert.deepEqual(f.value(await f.service.loadReview('owner', f.day())).questions, latest.questions);
+      }
+      assert(orders.size > 1, 'New batches use different choice permutations');
+      assert.equal(correctPositions.size, 5, 'Correct answers can occupy every position');
+      if (kind === 'multiple-choice') assert([...orders].some(order => {
+        const flags = order.split(',').map(id => correctIds.includes(id));
+        return flags.some((correct, index) => correct && flags.slice(index + 1).includes(false) && flags.slice(index + 2).includes(true));
+      }), 'Correct choices are interspersed with distractors');
+      assert.deepEqual(f.db.prepare('SELECT task_json FROM learning_generation_tasks ORDER BY task_id').all(), stored);
+      const question = latest.questions.find(q => q.questionId === choiceIds[0]);
+      assert.equal(f.value(await f.answer(latest.batch, question, { selectedChoiceIds: correctIds })).correct, true);
+    } finally { f.db.close(); }
+  }
+});
+
 test('Review refresh replaces an unfinished batch and preserves saved answers, schedules and progress', async () => {
   const f = fixture();
   try {

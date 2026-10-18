@@ -104,9 +104,18 @@ function parseCandidate(value) {
 function publicCandidate(candidate) {
   return { knowledgeId: candidate.knowledgeId, sourceId: candidate.sourceId, sourceRevision: candidate.sourceRevision, questionId: candidate.questionId, title: candidate.title, summary: candidate.summary, sourceUrl: candidate.sourceUrl, evidenceAnchorIds: candidate.evidenceAnchorIds, media: candidate.media, questionLocked: candidate.studiedAt === null, sourceClassification: candidate.sourceClassification, sourceClassificationRevision: candidate.sourceClassificationRevision };
 }
-/** @param {LearnerCandidate} candidate @returns {Record<string, unknown>} */
-function publicQuestion(candidate) {
-  return { questionId: candidate.questionId, knowledgeId: candidate.knowledgeId, title: candidate.title, prompt: candidate.question.prompt, kind: candidate.question.kind, choices: candidate.question.choices, blanks: candidate.question.blanks?.map((blank) => ({ id: blank.id })) ?? null, pairedVariants: candidate.question.pairedVariants?.map((variant) => ({ id: variant.id, kind: variant.kind, prompt: variant.prompt, choices: variant.choices, blanks: variant.blanks?.map((blank) => ({ id: blank.id })) ?? null })) ?? null, sourceAnchorIds: candidate.question.sourceAnchorIds, revision: candidate.question.revision };
+/** @param {LearnerCandidate} candidate @param {string} batchId @returns {Promise<Record<string, unknown>>} */
+async function publicQuestion(candidate, batchId) {
+  let choices = candidate.question.choices;
+  if (choices !== null) {
+    // The random batch identity mixes choices without moving them during retries or reloads.
+    const ranked = await Promise.all(choices.map(async choice => {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([batchId, candidate.questionId, choice.id])));
+      return { choice, rank: Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("") };
+    }));
+    choices = Object.freeze(ranked.sort((a, b) => a.rank.localeCompare(b.rank)).map(item => item.choice));
+  }
+  return { questionId: candidate.questionId, knowledgeId: candidate.knowledgeId, title: candidate.title, prompt: candidate.question.prompt, kind: candidate.question.kind, choices, blanks: candidate.question.blanks?.map((blank) => ({ id: blank.id })) ?? null, pairedVariants: candidate.question.pairedVariants?.map((variant) => ({ id: variant.id, kind: variant.kind, prompt: variant.prompt, choices: variant.choices, blanks: variant.blanks?.map((blank) => ({ id: blank.id })) ?? null })) ?? null, sourceAnchorIds: candidate.question.sourceAnchorIds, revision: candidate.question.revision };
 }
 
 /** @param {PublicQuestion} question @returns {string | null} */
@@ -403,7 +412,7 @@ export function createLearningBatchService(dependencies) {
     const createdAt = dependencies.now();
     const inserted = await database.prepare("INSERT INTO learner_review_batches (owner_id, batch_id, learning_day, status, question_ids_json, revision, idempotency_key, created_at, completed_at) VALUES (?, ?, ?, 'open', ?, 1, ?, ?, NULL)").bind(ownerId, batchId, day, JSON.stringify(selected.map((candidate) => candidate.questionId)), `review:${ownerId}:${day}:${force || current.value !== null ? crypto.randomUUID() : "daily"}`, createdAt).run();
     if (!changed(inserted)) return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
-    return { ok: true, value: Object.freeze({ batch: Object.freeze({ batchId, learningDay: day, status: "open", itemIds: Object.freeze(selected.map((candidate) => candidate.questionId)), revision: 1, createdAt, completedAt: null }), questions: Object.freeze(selected.map(publicQuestion)), dueCount: due.length }) };
+    return { ok: true, value: Object.freeze({ batch: Object.freeze({ batchId, learningDay: day, status: "open", itemIds: Object.freeze(selected.map((candidate) => candidate.questionId)), revision: 1, createdAt, completedAt: null }), questions: Object.freeze(await Promise.all(selected.map(candidate => publicQuestion(candidate, batchId)))), dueCount: due.length }) };
   }
 
   /** @param {string} ownerId @param {string | null} [sourceId] @returns {Promise<Result<unknown>>} */
@@ -435,7 +444,7 @@ export function createLearningBatchService(dependencies) {
         return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
       }
     }
-    return { ok: true, value: Object.freeze({ batch, skipped: Object.freeze([...skipped.values()]), questions: Object.freeze(selected.filter(candidate => !answeredIds.has(candidate.questionId)).map(publicQuestion)), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
+    return { ok: true, value: Object.freeze({ batch, skipped: Object.freeze([...skipped.values()]), questions: Object.freeze(await Promise.all(selected.filter(candidate => !answeredIds.has(candidate.questionId)).map(candidate => publicQuestion(candidate, batch.batchId)))), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
