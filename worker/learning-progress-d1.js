@@ -24,7 +24,8 @@ export function createLearningProgressService({ database, now, logger }) {
     try {
       const answers = await database.prepare("SELECT a.batch_id, a.question_id, COALESCE(a.knowledge_id, t.item_id) AS knowledge_id, a.answered_at, a.correct, a.score, a.elapsed_days, a.previous_correct, p.point_json, c.classification_json FROM learner_review_answers a LEFT JOIN learning_generation_tasks t ON t.owner_id = a.owner_id AND t.task_id = a.question_id LEFT JOIN extraction_knowledge_points p ON p.owner_id = a.owner_id AND p.knowledge_id = COALESCE(a.knowledge_id, t.item_id) LEFT JOIN knowledge_classifications c ON c.owner_id = a.owner_id AND c.knowledge_id = p.knowledge_id WHERE a.owner_id = ? AND a.answered_at >= ? AND a.answered_at <= ? ORDER BY a.answered_at, a.batch_id, a.question_id LIMIT 10001").bind(ownerId, start.toISOString(), timestamp).all();
       const study = await database.prepare("SELECT completed_at, json_array_length(item_ids_json) AS item_count FROM learner_feed_batches WHERE owner_id = ? AND status = 'completed' AND completed_at >= ? AND completed_at <= ? ORDER BY completed_at LIMIT 10001").bind(ownerId, start.toISOString(), timestamp).all();
-      if (!answers.success || !study.success) return fail("ProgressReadUnavailable");
+      const subjects = await database.prepare("SELECT CASE WHEN c.classification_json IS NOT NULL THEN json_extract(c.classification_json, '$.primarySubject') ELSE json_extract(p.point_json, '$.classification.primarySubject') END AS id, COUNT(*) AS count FROM extraction_knowledge_points p JOIN library_sources s ON s.owner_id = p.owner_id AND s.source_id = p.source_id AND s.state = 'active' AND s.revision = p.source_revision LEFT JOIN knowledge_classifications c ON c.owner_id = p.owner_id AND c.knowledge_id = p.knowledge_id WHERE p.owner_id = ? GROUP BY id HAVING id IS NOT NULL").bind(ownerId).all();
+      if (!answers.success || !study.success || !subjects.success) return fail("ProgressReadUnavailable");
       if (answers.results.length > 10000 || study.results.length > 10000) return fail("ProgressHistoryLimitExceeded");
       const attempts = [];
       for (const row of answers.results) {
@@ -52,7 +53,7 @@ export function createLearningProgressService({ database, now, logger }) {
         if (!record(row)) return fail("ProgressDataInvalid");
         studies.push({ completedAt: row.completed_at, itemCount: row.item_count });
       }
-      const result = buildProgress({ days, now: timestamp, subject, attempts, studies });
+      const result = buildProgress({ days, now: timestamp, subject, attempts, studies, subjectCounts: subjects.results });
       if (!result.ok) return fail("ProgressDataInvalid");
       logger({ event: "learning-progress-success", itemCount: attempts.length });
       return { ok: true, value: result.value };

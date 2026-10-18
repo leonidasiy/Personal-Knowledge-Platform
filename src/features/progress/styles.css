@@ -1,27 +1,26 @@
 .progress-toolbar, .progress-controls { display: flex; gap: 16px; align-items: end; flex-wrap: wrap; }
 .progress-toolbar { justify-content: space-between; }
 .progress-controls label { display: grid; gap: 8px; font-size: 12px; }
-.progress-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 32px 0; border-block: 1px solid var(--border); }
+.progress-summary { display: grid; grid-template-columns: repeat(3, 1fr); margin: 24px 0; border-block: 1px solid var(--border); }
 .progress-summary > div { min-width: 0; display: grid; gap: 12px; padding: 24px; border-right: 1px solid var(--border); }
-.progress-summary > div:first-child { padding-left: 0; }
 .progress-summary > div:last-child { border: 0; }
 .progress-summary strong { font-family: var(--font-display); font-size: clamp(16px, 2vw, 28px); font-weight: 600; line-height: 1.15; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .progress-summary span, .progress-summary small { font-size: 12px; color: var(--text-muted); }
-.progress-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 24px; }
+.progress-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .progress-charts > div { min-width: 0; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--panel-radius); }
-.progress-chart h2 { font-size: 26px; }
-.progress-chart svg { display: block; width: 100%; margin: 24px 0 12px; color: var(--signal-one); }
+.progress-timeline { grid-column: 1 / -1; }
+.progress-chart { position: relative; }
+.progress-chart h2 { margin: 0 0 16px; font-size: 26px; }
+.progress-chart svg { display: block; width: 100%; color: var(--signal-one); }
+.progress-plot { overflow-x: auto; }
 .progress-chart p, .progress-note { color: var(--text-muted); font-size: 12px; }
-.progress-table { margin-top: 16px; overflow: auto; font-size: 12px; }
-.progress-table summary { color: var(--action); font-weight: 700; }
-.progress-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.progress-table th, .progress-table td { padding: 8px; border-bottom: 1px solid var(--border); text-align: left; }
-.progress-subjects { align-self: start; }
-.progress-observations { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 24px 0; }
-.progress-observations section { padding: 24px; border-radius: var(--panel-radius); background: var(--action-soft); }
-.progress-observations h2 { font-size: 23px; }
-.progress-observations p { font-size: 13px; color: var(--text-muted); }
+.progress-chart p { margin: 12px 0 0; }
+.progress-chart [data-chart-value] { cursor: pointer; }
+.progress-chart [data-chart-value]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.progress-tooltip { position: absolute; inset: auto 0 0; z-index: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface); color: var(--text); font-size: 12px; pointer-events: none; }
+.progress-subject-bars { display: grid; gap: 14px; }
+.progress-subject-bars > div { display: grid; gap: 6px; font-size: 13px; }
+.progress-subject-bar { width: var(--bar-width); height: 10px; background: var(--signal-one); }
 :root[data-theme="dark"] .progress-summary { border: 0; border-radius: var(--panel-radius); background: var(--surface); }
-:root[data-theme="dark"] .progress-summary > div:first-child { padding-left: 24px; }
-@media (max-width: 800px) { .progress-charts, .progress-observations { grid-template-columns: minmax(0, 1fr); } .progress-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .progress-summary > div { padding: 20px; border: 0; } .progress-summary > div:first-child { padding-left: 20px; } .progress-controls { width: 100%; } .progress-controls label { flex: 1; min-width: 0; } }
+@media (max-width: 800px) { .progress-charts { grid-template-columns: minmax(0, 1fr); } .progress-summary > div { padding: 16px; border: 0; } .progress-controls { width: 100%; } .progress-controls label { flex: 1; min-width: 0; } }
 @media (max-width: 380px) { .progress-charts > div { padding: 16px; } .progress-controls { flex-direction: column; align-items: stretch; } }

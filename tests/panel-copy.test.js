@@ -49,7 +49,7 @@ Deno.test("Progress describes recorded activity for the selected period", () => 
     "Progress purpose must be explicit before loading.",
   );
 });
-Deno.test("Progress observations use descriptive section headings", async () => {
+Deno.test("Progress omits recovery and recorded-activity explanation sections", async () => {
   const { buildProgress } = await import("../src/features/progress/public.js");
   const summary = buildProgress({
     days: 7,
@@ -66,14 +66,8 @@ Deno.test("Progress observations use descriptive section headings", async () => 
     onChange: () => {},
   });
   await page.load();
-  assert(
-    !page.render().includes("Your rhythm, not a streak.") &&
-      !page.render().includes("Correction that lasts."),
-    "Replace vague observations without deleting factual measurement instructions.",
-  );
-  assert(
-    page.render().includes("at least one elapsed day") &&
-      page.render().includes("They do not measure mastery or transfer."),
-    "Factual measurement boundaries remain.",
-  );
+  const html = page.render();
+  for (const removed of ["Recovery after error", "Recovery after an incorrect answer", "Recorded activity", "Spacing intervals", "progress-observations"]) {
+    assert(!html.includes(removed), `${removed} must not appear in learner Progress.`);
+  }
 });

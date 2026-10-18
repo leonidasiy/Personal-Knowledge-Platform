@@ -30,54 +30,74 @@ export function createProgressPage(dependencies) {
     const s = state.summary, accuracy = s.attempts.accuracy === null ? "Unavailable" : `${Math.round(s.attempts.accuracy * 100)}%`, score = s.attempts.averageScore === null ? "Unavailable" : `${Math.round(s.attempts.averageScore * 100)}%`;
     const empty = s.attempts.count === 0 ? progressMarkup(0) : "";
     const heading = progressMarkup(1);
-    const metrics = `<div class="progress-summary"><div><span>Answer accuracy</span><strong>${accuracy}</strong><small>${s.attempts.correct}/${s.attempts.count} attempts</small></div><div><span>Average score</span><strong>${score}</strong><small>${s.attempts.scoredCount} scored attempts</small></div><div><span>Review attempts</span><strong>${s.attempts.count}</strong><small>One per question per batch</small></div><div><span>Recovery after error</span><strong>${percent(s.recovery.accuracy)}</strong><small>${s.recovery.recovered}/${s.recovery.eligible} eligible revisits</small></div></div>`;
-    return `<section class="wide-view progress-page" aria-labelledby="progress-title">${heading}<div class="progress-toolbar"><p class="progress-note">${e(s.period.startedOn)} — ${e(s.period.endedOn)} · UTC</p>${controls}</div>${metrics}${empty}<div class="progress-charts"><div>${chart(e,"Daily accuracy",s.daily,"line")}${table(e,"Daily accuracy", ["Date","Correct","Attempts","Accuracy"], s.daily.map(r => [r.date,r.correct,r.count,percent(r.accuracy)]))}</div><div>${chart(e,"Spacing intervals",s.intervals,"bar")}${table(e,"Spacing intervals", ["Interval","Correct","Attempts","Accuracy"], s.intervals.map(r => [r.label,r.correct,r.count,percent(r.accuracy)]))}</div><div>${chart(e,"Activity calendar",s.activity,"activity")}${table(e,"Activity", ["Date","Study batches","Items studied","Review attempts"], s.activity.map(r => [r.date,r.studyBatches,r.studyItems,r.reviewAttempts]))}</div><div class="progress-subjects">${chart(e,"Primary subjects",s.subjects,"bar")}${table(e,"Primary subjects", ["Subject","Correct","Attempts","Accuracy"], s.subjects.map(r => [r.label,r.correct,r.count,percent(r.accuracy)]))}</div></div><div class="progress-observations"><section><h2>Recovery after an incorrect answer</h2><p>Recovery after a prior incorrect attempt and at least one elapsed day: ${s.recovery.recovered}/${s.recovery.eligible} (${percent(s.recovery.accuracy)}).</p></section><section><h2>Recorded activity</h2><p>Activity records show completed study batches and review attempts. They do not measure mastery or transfer.</p></section></div></section>`;
+    const metrics = `<div class="progress-summary"><div><span>Answer accuracy</span><strong>${accuracy}</strong><small>${s.attempts.correct}/${s.attempts.count} attempts</small></div><div><span>Average score</span><strong>${score}</strong><small>${s.attempts.scoredCount} scored attempts</small></div><div><span>Review attempts</span><strong>${s.attempts.count}</strong><small>One per question per batch</small></div></div>`;
+    return `<section class="wide-view progress-page" aria-labelledby="progress-title">${heading}<div class="progress-toolbar"><p class="progress-note">${e(s.period.startedOn)} — ${e(s.period.endedOn)} · UTC</p>${controls}</div>${metrics}${empty}<div class="progress-charts"><div class="progress-timeline">${chart(e,"Daily accuracy",s.daily,"line")}</div><div>${chart(e,"Activity calendar",s.activity,"activity")}</div><div>${chart(e,"Primary subjects",s.subjects,"subjects")}</div></div></section>`;
   }
   /** @param {HTMLElement} root */
-  function bind(root) { const form = /** @type {HTMLFormElement|null} */(root.querySelector("[data-progress-controls]")); form?.addEventListener("submit", event => { event.preventDefault(); const values = new FormData(form); days = Number(values.get("days")); subject = String(values.get("subject") ?? ""); void load(); }, { once: true }); root.querySelector("[data-action=retry-progress]")?.addEventListener("click", () => void load(), { once: true }); }
+  function bind(root) {
+    const form = /** @type {HTMLFormElement|null} */(root.querySelector("[data-progress-controls]"));
+    form?.addEventListener("submit", event => { event.preventDefault(); const values = new FormData(form); days = Number(values.get("days")); subject = String(values.get("subject") ?? ""); void load(); }, { once: true });
+    root.querySelector("[data-action=retry-progress]")?.addEventListener("click", () => void load(), { once: true });
+    for (const plot of root.querySelectorAll("[data-progress-chart]")) {
+      const tooltip = /** @type {HTMLElement} */(plot.querySelector("[role=tooltip]"));
+      /** @param {Event} event */
+      const show = event => {
+        const point = event.target instanceof Element ? event.target.closest("[data-chart-value]") : null;
+        if (!point) return;
+        for (const other of root.querySelectorAll("[role=tooltip]")) /** @type {HTMLElement} */(other).hidden = true;
+        tooltip.textContent = point.getAttribute("data-chart-value"); tooltip.hidden = false;
+      };
+      plot.addEventListener("pointerover", show);
+      plot.addEventListener("focusin", show);
+      plot.addEventListener("click", show);
+      plot.addEventListener("pointerout", event => { if (/** @type {PointerEvent} */(event).pointerType !== "touch") tooltip.hidden = true; });
+      plot.addEventListener("focusout", () => { tooltip.hidden = true; });
+    }
+    root.addEventListener("pointerdown", event => {
+      if (event.target instanceof Element && event.target.closest("[data-chart-value]")) return;
+      for (const tooltip of root.querySelectorAll("[role=tooltip]")) /** @type {HTMLElement} */(tooltip).hidden = true;
+    });
+    root.addEventListener("keydown", event => {
+      if (event.key === "Escape") for (const tooltip of root.querySelectorAll("[role=tooltip]")) /** @type {HTMLElement} */(tooltip).hidden = true;
+    });
+  }
   return freeze({ load, render, bind });
 }
-/** @param {(value:string)=>string} escapeHtml @param {string} title @param {string[]} headings @param {(string|number)[][]} rows */
-function table(escapeHtml, title, headings, rows) { return `<details class="progress-table"><summary>${escapeHtml(title)} data table</summary><table><thead><tr>${headings.map(h => `<th scope="col">${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(value => `<td>${escapeHtml(String(value))}</td>`).join("")}</tr>`).join("")}</tbody></table></details>`; }
-/** @param {(value:string)=>string} e @param {string} title @param {readonly any[]} rows @param {"line"|"bar"|"activity"} kind */
+/** @param {(value:string)=>string} e @param {string} title @param {readonly any[]} rows @param {"line"|"subjects"|"activity"} kind */
 function chart(e, title, rows, kind) {
-  const label = (/** @type {{label?:string,date?:string}} */ r) => r.label ?? r.date ?? "";
-  let marks = "", caption = "", dimensions = 'viewBox="0 0 620 170"';
-  if (kind !== "activity" && !rows.some(r => r.count > 0)) return progressMarkup(5, e(title), progressMarkup(kind === "line" ? 6 : title === "Spacing intervals" ? 7 : 8));
-  if (kind === "activity") {
-    const max = Math.max(1, ...rows.map(r => r.studyBatches + r.reviewAttempts));
-    const columns = Math.ceil(rows.length / 7), size = Math.min(19, 580 / columns);
-    dimensions = `viewBox="36 4 ${columns * size + 8} 140" style="max-width:${columns * size * 1.6 + 12}px"`;
+  const id = `progress-${kind}-value`;
+  /** @param {string} value */
+  const point = value => `tabindex="0" role="img" aria-label="${e(value)}" data-chart-value="${e(value)}"`;
+  let marks = "", caption = "", plot = "";
+  if (kind === "subjects") {
+    const max = Math.max(1, ...rows.map(r => r.count));
+    plot = rows.length ? `<div class="progress-subject-bars">${rows.map(r => `<div ${point(`${r.label}: ${r.count} knowledge points`)}><span>${e(r.label)}</span><span class="progress-subject-bar" style="--bar-width:${r.count/max*100}%" aria-hidden="true"></span></div>`).join("")}</div>` : '<p>No classified knowledge points yet.</p>';
+    caption = "Top five subjects by knowledge points in your library.";
+  } else if (kind === "activity") {
+    const max = Math.max(1, ...rows.map(r => r.studyBatches + r.reviewAttempts)), columns = Math.ceil(rows.length / 7), width = 600 / columns;
     marks = rows.map((r,i) => {
       const total = r.studyBatches + r.reviewAttempts;
-      return `<rect x="${40+Math.floor(i/7)*size}" y="${8+i%7*size}" width="${size-3}" height="${size-3}" fill="currentColor" opacity="${total === 0 ? .1 : .25+.75*total/max}"><title>${e(r.date)}: ${r.studyBatches} study batches, ${r.reviewAttempts} attempts</title></rect>`;
+      const value = `${r.date}: ${r.studyItems} knowledge points studied in ${r.studyBatches} batches, ${r.reviewAttempts} quiz attempts`;
+      return `<g ${point(value)}><rect x="${10+Math.floor(i/7)*width}" y="${8+i%7*26}" width="${width-4}" height="22" fill="currentColor" opacity="${total === 0 ? .1 : .25+.75*total/max}"/></g>`;
     }).join("");
-    caption = `${rows[0]?.date} – ${rows.at(-1)?.date} · darker cells mean more recorded activity, not better recall.`;
-  } else if (kind === "line") {
-    const x = (/** @type {number} */ i) => 40+i*550/Math.max(1,rows.length-1), y = (/** @type {number} */ n) => 135-n*120;
-    /** @type {string[]} */ let segment = [];
-    const flush = () => { if (segment.length > 1) marks += `<polyline points="${segment.join(" ")}" fill="none" stroke="currentColor" stroke-width="2"/>`; segment = []; };
-    for (let i=0;i<rows.length;i++) {
-      const r=rows[i];
-      if (r.accuracy === null) { flush(); continue; }
-      segment.push(`${x(i)},${y(r.accuracy)}`);
-      marks += `<circle cx="${x(i)}" cy="${y(r.accuracy)}" r="3" fill="currentColor"><title>${e(label(r))}: ${percent(r.accuracy)} · ${r.correct}/${r.count}</title></circle>`;
-    }
-    flush();
-    marks += `<g font-size="11" fill="currentColor"><text x="0" y="20">100%</text><text x="12" y="137">0%</text><text x="40" y="160">${e(rows[0]?.date ?? "")}</text><text x="590" y="160" text-anchor="end">${e(rows.at(-1)?.date ?? "")}</text></g>`;
-    caption = "Full-credit answers / recorded attempts. Gaps mean no attempts; they are not zero scores.";
+    plot = `<svg viewBox="0 0 620 196" aria-label="${e(title)} chart">${marks}</svg>`;
+    caption = "Darker cells mean more study and review activity.";
   } else {
-    const active = rows.filter(r => r.count > 0);
-    if (active.length === 0) return progressMarkup(5, e(title), "");
-    const step = 550 / active.length, width = Math.min(52,step*.7);
-    marks = active.map((r,i) => {
-      const x=40+i*step, short=String(label(r)).split(" ")[0].slice(0,12);
-      return `<rect x="${x}" y="${135-r.accuracy*110}" width="${width}" height="${r.accuracy*110}" fill="currentColor"><title>${e(label(r))}: ${percent(r.accuracy)} · ${r.correct}/${r.count}</title></rect><g font-size="10" fill="currentColor"><text x="${x}" y="${125-r.accuracy*110}">${percent(r.accuracy)}</text><text x="${x}" y="155">${e(short)}</text></g>`;
-    }).join("");
-    caption = "Answer accuracy by group. Empty groups are omitted; exact counts and full labels are in the data table.";
+    if (!rows.some(r => r.count > 0)) return progressMarkup(5, e(title), progressMarkup(6));
+    const x = (/** @type {number} */ i) => `${10+i*85/Math.max(1,rows.length-1)}%`, y = (/** @type {number} */ n) => 135-n*120;
+    for (let i=0;i<rows.length;i++) {
+      const r=rows[i], previous=rows[i-1];
+      if (r.accuracy === null) continue;
+      if (previous?.accuracy != null) marks += `<line x1="${x(i-1)}" y1="${y(previous.accuracy)}" x2="${x(i)}" y2="${y(r.accuracy)}" stroke="currentColor" stroke-width="2" pointer-events="none"/>`;
+      const value = `${r.date}: ${percent(r.accuracy)} accuracy, ${r.correct}/${r.count} correct answers`;
+      marks += `<g ${point(value)}><circle cx="${x(i)}" cy="${y(r.accuracy)}" r="12" fill="transparent"/><circle cx="${x(i)}" cy="${y(r.accuracy)}" r="4" fill="currentColor"/></g>`;
+    }
+    marks += `<g font-size="11" fill="currentColor"><text x="0" y="20">100%</text><text x="12" y="137">0%</text><text x="10%" y="160">${e(rows[0]?.date ?? "")}</text><text x="95%" y="160" text-anchor="end">${e(rows.at(-1)?.date ?? "")}</text></g>`;
+    plot = `<div class="progress-plot"><svg height="170" style="min-width:${rows.length*28}px" aria-label="${e(title)} chart">${marks}</svg></div>`;
+    caption = "Answer accuracy by day. Gaps mean no attempts.";
   }
-  return `<section class="progress-chart"><h2>${e(title)}</h2><svg ${dimensions} role="img" aria-label="${e(title)} chart">${marks}</svg><p>${e(caption)}</p></section>`;
+  return `<section class="progress-chart" data-progress-chart><h2>${e(title)}</h2>${plot}<p>${e(caption)}</p><div class="progress-tooltip" id="${id}" role="tooltip" hidden></div></section>`;
 }
 /** @param {number|null} value */
-function percent(value) { return value === null ? "Unavailable" : `${Math.round(value * 100)}%`; }
+function percent(value) { return value === null ? "Unavailable" : `${Math.round(value * 10000) / 100}%`; }
 const freeze = Object.freeze;
