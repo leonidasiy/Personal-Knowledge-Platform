@@ -5,7 +5,7 @@ import { pendingSpark, playSpark, sparkIcon } from "../experience/spark.js";
 import { SUBJECTS } from "../knowledge-subjects/public.js";
 import { subjectPresentation } from "../knowledge-subjects/presentation.js";
 
-import { showLearningCelebration } from "./celebration.js";
+import { showGoalCelebration } from "./celebration.js";
 
 import { LearningBatchGatewayClient } from "./batches-gateway.js";
 
@@ -44,6 +44,7 @@ export function createLearnerController(dependencies) {
   /** @type {{ readonly date: string, readonly studyItems: number, readonly reviewAttempts: number } | null} */ let dailyProgress = null;
   /** @type {Promise<void> | null} */ let progressLoad = null;
   let feedDay = "", reviewDay = "";
+  let reviewCelebrationDay = "";
 
   async function loadDailyProgress() {
     if (!dependencies.getDailyTargets) return;
@@ -139,7 +140,7 @@ export function createLearnerController(dependencies) {
     await Promise.all([loadFeed(), ...(review.value?.batch == null ? [loadReview()] : [])]);
     const targets = dependencies.getDailyTargets?.();
     if (targets && studiedBefore !== undefined && studiedBefore < targets.learning && dailyProgress !== null && dailyProgress.studyItems >= targets.learning) {
-      showLearningCelebration(dailyProgress.studyItems, Math.max(0, targets.review - dailyProgress.reviewAttempts));
+      showGoalCelebration("learning", dailyProgress.studyItems, Math.max(0, targets.review - dailyProgress.reviewAttempts));
     }
   }
 
@@ -171,6 +172,7 @@ export function createLearnerController(dependencies) {
     if (batchId === "" || questionId === "" || question === undefined || (question.kind === "fill-blank" ? blankAnswers === null ? typeof answerText !== "string" || answerText.trim() === "" : blankAnswers.some(answer => typeof answer.text !== "string" || answer.text.trim() === "") : selectedChoiceIds.length === 0)) return;
     const actionKey = `review-submit:${questionId}`;
     if (questionPending(questionId) || answers.has(questionId)) return;
+    const reviewedBefore = dailyProgress?.reviewAttempts;
     attempts.set(questionId, { selectedChoiceIds: freeze([...selectedChoiceIds]), answerText: String(answerText ?? ""), blanks: freeze(Object.fromEntries((question.blanks ?? []).map(blank => [blank.id, String(formData.get(`blank:${blank.id}`) ?? "")])))});
     begin(actionKey);
     const result = await gateway.answerReview(batchId, questionId, /** @type {string[]} */ (selectedChoiceIds), `review-answer:${batchId}:${questionId}`, typeof answerText === "string" ? answerText : null, blankAnswers === null ? null : blankAnswers.map((answer) => ({ id: answer.id, text: /** @type {string} */ (answer.text) })), question.revision);
@@ -183,6 +185,11 @@ export function createLearnerController(dependencies) {
     showFeedback(questionId, result.value);
     await loadDailyProgress();
     onChange(undefined, `review-feedback:${questionId}`, "review-title");
+    const target = dependencies.getDailyTargets?.().review;
+    if (target !== undefined && reviewedBefore !== undefined && reviewedBefore < target && dailyProgress !== null && dailyProgress.reviewAttempts >= target && reviewCelebrationDay !== day()) {
+      reviewCelebrationDay = day();
+      showGoalCelebration("review", dailyProgress.reviewAttempts);
+    }
   }
 
   /** @param {HTMLElement} button */
@@ -332,7 +339,7 @@ export function createLearnerController(dependencies) {
     const attempt = attempts.get(question.questionId);
     const input = question.kind === "fill-blank"
       ? question.blanks === null ? `<label>Answer<input type="text" name="answerText" autocomplete="off" required value="${escapeHtml(attempt?.answerText ?? "")}"></label>` : question.blanks.map((blank, index) => `<label>Blank ${index + 1}<input type="text" name="blank:${escapeHtml(blank.id)}" autocomplete="off" required value="${escapeHtml(attempt?.blanks[blank.id] ?? "")}"></label>`).join("")
-      : `<fieldset class="quiz-options"><legend class="sr-only">${escapeHtml(question.prompt)}</legend>${question.choices?.map(choice => `<label><input type="${question.kind === "multiple-choice" ? "checkbox" : "radio"}" name="selectedChoiceIds" value="${escapeHtml(choice.id)}" ${attempt?.selectedChoiceIds.includes(choice.id) ? "checked" : ""}><span>${escapeHtml(choice.label)}</span></label>`).join("") ?? ""}</fieldset>`;
+      : feedMarkup(29, escapeHtml(question.prompt), question.choices?.map(choice => `<label><input type="${question.kind === "multiple-choice" ? "checkbox" : "radio"}" name="selectedChoiceIds" value="${escapeHtml(choice.id)}" ${attempt?.selectedChoiceIds.includes(choice.id) ? "checked" : ""}><span>${escapeHtml(choice.label)}</span></label>`).join("") ?? "");
     const completed = review.value?.batch?.status === "completed";
     const actionKey = `review-submit:${question.questionId}`;
     const feedbackKey = `review-feedback:${question.questionId}`;
@@ -341,8 +348,8 @@ export function createLearnerController(dependencies) {
     const body = answer === undefined && !completed
       ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${busy ? 'aria-busy="true"' : ""}>${busy ? input.replaceAll("<input ", "<input disabled ") : input}<button class="button primary" ${actionState(actionKey)} type="submit" ${busy ? "disabled" : ""}>${actionLabel(actionKey, "Check answer", "Checking…")}</button><button class="button quiet" type="button" data-action="skip-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(skipKey)} ${busy ? "disabled" : ""}>${actionLabel(skipKey, "Skip", "Loading…")}</button></form>`
       : `<p class="answer-feedback ${answer === undefined || answer.skipped ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="${escapeHtml(feedbackKey)}" ${celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : ""}>${answer?.correct ? sparkIcon() : ""}${answer === undefined ? "Answered." : answer.skipped ? "Skipped." : answer.correct ? question.kind === "fill-blank" ? `Correct (${Math.round(answer.score * 100)}%).` : "Correct." : answer.score > 0 ? `Partly correct (${Math.floor(answer.score * 100)}%).` : "Not quite."}</p>`;
-    const feedback = answer === undefined || answer.correct ? "" : `<p class="correct-answer"><strong>Correct answer:</strong> ${escapeHtml(answer.correctAnswer)}</p><details class="source-details"><summary>Source explanation</summary><p>${escapeHtml(answer.explanation)}</p><p>Evidence anchors: ${escapeHtml(question.sourceAnchorIds.join(", "))}</p></details>`;
-    return `<article class="review-card" data-review-question="${escapeHtml(question.questionId)}"><p class="review-question-meta">From ${escapeHtml(question.title)}</p><h2>${escapeHtml(question.prompt)}</h2>${body}${feedback}</article>`;
+    const feedback = answer === undefined || answer.correct ? "" : feedMarkup(27, escapeHtml(answer.correctAnswer), escapeHtml(answer.explanation), escapeHtml(question.sourceAnchorIds.join(", ")));
+    return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body, feedback);
   }
 
   /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */

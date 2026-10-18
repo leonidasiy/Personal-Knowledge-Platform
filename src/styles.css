@@ -448,5 +448,13 @@ a.discover-result-action:is(:hover, :focus-visible){text-decoration:underline;ba
 @keyframes goal-enter { from { opacity: 0; transform: translateY(24px) scale(.96); } }
 @keyframes goal-veil { from { opacity: 0; } }
 @keyframes goal-burst { from { opacity: 0; transform: rotate(calc(var(--star) * 45deg)) translateX(20px) scale(.2); } }
+.review-achievement { position: relative; width: 180px; height: 180px; margin: 0 auto 20px; color: var(--signal-three); }
+.review-achievement svg { position: relative; width: 100%; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.review-achievement path { stroke-dasharray: 60; animation: review-check 700ms 150ms ease-out both; }
+.review-ripple { position: absolute; inset: 24px; border: 1px solid; border-radius: 50%; animation: review-ripple 900ms ease-out both; }
+.review-ripple:nth-child(2) { animation-delay: 180ms; }
+@keyframes review-check { from { stroke-dashoffset: 60; } to { stroke-dashoffset: 0; } }
+@keyframes review-ripple { from { opacity: .6; transform: scale(.6); } to { opacity: 0; transform: scale(1.4); } }
+@media (prefers-reduced-motion: reduce) { .review-achievement path, .review-ripple { animation: none; } .review-ripple { opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .learning-goal-dialog, .learning-goal-dialog::backdrop, .goal-star { animation: none; } }
 :root[data-motion="off"] .learning-goal-dialog, :root[data-motion="off"] .learning-goal-dialog::backdrop, :root[data-motion="off"] .goal-star { animation: none; }

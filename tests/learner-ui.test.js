@@ -9,7 +9,7 @@ Object.defineProperty(globalThis, "document", { configurable: true, value: {
 // @ts-check
 
 import { buildProgress } from "../src/features/progress/public.js";
-import { learningCelebrationMarkup } from "../src/features/learning-generation/celebration.js";
+import { learningCelebrationMarkup, reviewCelebrationMarkup } from "../src/features/learning-generation/celebration.js";
 
 import { createLearnerController } from "../src/features/learning-generation/learner.js";
 
@@ -318,6 +318,65 @@ Deno.test("learning celebration points to the remaining review goal", () => {
   const html = learningCelebrationMarkup(10, 5);
   assert(html.includes('href="#review"') && html.includes("5 quiz cards") && html.includes("<strong>10</strong>"), "Celebration shows actual activity and Review continuation.");
   assert(learningCelebrationMarkup(5, 0).includes("Your review goal is complete too"), "Completed Review is not described as outstanding.");
+});
+
+Deno.test("Review celebration has distinct artwork and celebrates completed practice", () => {
+  const html = reviewCelebrationMarkup(5);
+  assert(html.includes('class="review-achievement"') && html.includes("Daily review goal complete") && html.includes("<strong>5</strong> quiz cards"), "Review has its own checkmark and completion message.");
+  assert(!html.includes("goal-star") && !html.includes('href="#review"') && html.includes("data-goal-dismiss"), "Review stays in place with a dismiss action.");
+  assert(reviewCelebrationMarkup(1).includes("quiz card today"), "Singular count reads naturally.");
+});
+
+Deno.test("only submitted answers crossing the daily Review target open its popup", async () => {
+  const originals = Object.fromEntries(["document", "HTMLFormElement", "FormData", "HTMLElement"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  class Form {
+    dataset = { learnerReviewBatch: "review:music", learnerReviewQuestion: "question-1" };
+    /** @type {(() => void) | null} */ submit = null;
+    /** @param {string} _type @param {(event: { preventDefault: () => void, currentTarget: Form }) => void} listener */
+    addEventListener(_type, listener) { this.submit = () => listener({ preventDefault: () => {}, currentTarget: this }); }
+  }
+  class Element {
+    dataset = { questionId: "question-1" };
+    /** @type {(() => void) | null} */ click = null;
+    /** @param {string} _type @param {() => void} listener */
+    addEventListener(_type, listener) { this.click = listener; }
+  }
+  class Values { getAll() { return ["choice-1"]; } get() { return null; } }
+  Object.defineProperty(globalThis, "HTMLFormElement", { configurable: true, value: Form });
+  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: Element });
+  Object.defineProperty(globalThis, "FormData", { configurable: true, value: Values });
+  try {
+    for (const scenario of [{ before: 0, target: 2, show: false }, { before: 1, target: 2, show: true }, { before: 1, target: 2, correct: false, show: true }, { before: 2, target: 2, show: false }, { before: 0, target: 0, show: false }, { before: 1, target: 2, skip: true, show: false }, { before: 1, target: 2, fail: true, show: false }]) {
+      let count = scenario.before, shown = 0;
+      const dialog = { innerHTML: "", setAttribute: () => {}, querySelector: () => null, addEventListener: () => {}, showModal: () => { shown++; } };
+      Object.defineProperty(globalThis, "document", { configurable: true, value: { ...originals.document?.value, createElement: () => dialog, querySelector: () => null, body: { append: () => {} } } });
+      const controller = createLearnerController({ fetch: async input => {
+        if (String(input).endsWith("/answer")) {
+          if (scenario.fail) return new Response("unavailable", { status: 503 });
+          count++;
+          return response({ result: { correct: scenario.correct !== false, score: scenario.correct === false ? 0 : 1, completed: true, nextDueAt: "2026-09-02T12:00:00.000Z", feedback: { correctAnswer: "Tritone", explanation: "Six semitones.", components: [] } } });
+        }
+        if (String(input).endsWith("/skip")) return response({ result: { completed: true, feedback: { correctAnswer: "Tritone", explanation: "Six semitones." } } });
+        if (String(input).includes("/progress?")) {
+          const result = buildProgress({ days: 7, now: "2026-09-01T12:00:00.000Z", subject: null, studies: [], attempts: Array.from({ length: count }, (_, i) => ({ batchId: "b", questionId: `q-${i}`, knowledgeId: "k", answeredAt: "2026-09-01T10:00:00.000Z", correct: true, score: 1, elapsedDays: null, previousCorrect: null, primarySubject: null })) });
+          if (!result.ok) throw new Error(result.error.field);
+          return response({ result: result.value });
+        }
+        return response({ result: review });
+      }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", getDailyTargets: () => ({ learning: 5, review: scenario.target }), onChange: () => {} });
+      await controller.loadReview();
+      assert(shown === 0, "Loading Review never opens a popup.");
+      const form = new Form(), skip = new Element();
+      controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-learner-review]" ? [form] : selector === "[data-action='skip-review']" ? [skip] : [] })));
+      if (scenario.skip) skip.click?.(); else form.submit?.();
+      await new Promise(resolve => setTimeout(resolve, 10));
+      assert(shown === Number(scenario.show), `Unexpected popup for ${JSON.stringify(scenario)}.`);
+      await controller.loadReview();
+      assert(shown === Number(scenario.show), "Reloading progress never replays the celebration.");
+    }
+  } finally {
+    for (const [key, descriptor] of Object.entries(originals)) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
+  }
 });
 
 Deno.test("only crossing the learning target opens the Review celebration", async () => {

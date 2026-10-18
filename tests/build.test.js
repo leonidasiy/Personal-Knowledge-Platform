@@ -194,8 +194,8 @@ Deno.test("artifact budgets accept exact production boundaries", async () => {
   );
   assertEquals(javascript.ok, true);
   assertEquals(stylesheet.ok, true);
-  assertEquals(ARTIFACT_BUDGETS.stylesheet.rawBytes, 44_333);
-  assertEquals(ARTIFACT_BUDGETS.stylesheet.gzipBytes, 9_643);
+  assertEquals(ARTIFACT_BUDGETS.stylesheet.rawBytes, 45_082);
+  assertEquals(ARTIFACT_BUDGETS.stylesheet.gzipBytes, 9_784);
   const oversizedStylesheet = validateArtifactBudget(
     { path: "src/styles.css", rawBytes: ARTIFACT_BUDGETS.stylesheet.rawBytes + 1, gzipBytes: 1 },
     ARTIFACT_BUDGETS.stylesheet,
