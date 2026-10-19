@@ -188,7 +188,8 @@ export function createJevDecisionModel(dependencies) {
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let document;
       try {
-        const response = await request(configuration.endpoint, { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: configuration.requestedModel, state, questions }), signal: controller.signal });
+        // Workers support manual redirects; the status check below rejects them.
+        const response = await request(configuration.endpoint, { method: "POST", redirect: "manual", headers: { accept: "application/json", "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: configuration.requestedModel, state, questions }), signal: controller.signal });
         if (response.status === 429 || response.status === 529) return failure(logger, "JevRateLimited");
         if (response.status === 401 || response.status === 403) return failure(logger, "JevCredentialMissing");
         if (!response.ok) return failure(logger, response.status >= 500 ? "JevProviderUnavailable" : "JevProviderRejected");

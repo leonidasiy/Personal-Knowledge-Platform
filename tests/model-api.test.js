@@ -18,7 +18,7 @@ Deno.test('replacement API configuration isolates credentials and rejects unsafe
 Deno.test('compatible grader validates exact probabilities, bounds and malformed output',async()=>{
   for(const [index,output] of [{probabilities:{answer:0.8}},{probabilities:{answer:1.1}},{probabilities:{wrong:0.8}},{probabilities:{answer:'0.8'}},{probabilities:{answer:0.8},unexpected:true}].entries()){
     const grader=createJevAnswerGrader({apiKey:'own-key',configuration:JEV_GRADER_CONFIGURATION,chat:{endpoint:'https://models.example.test/v1/chat/completions',model:'different-grader',apiStyle:'openai-compatible'},timeoutMs:1000,logger:()=>{},fetch:async(url,init)=>{
-      assertEquals(String(url),'https://models.example.test/v1/chat/completions');assertEquals(new Headers(init?.headers).get('authorization'),'Bearer own-key');assertEquals(init?.redirect,'error');
+      assertEquals(String(url),'https://models.example.test/v1/chat/completions');assertEquals(new Headers(init?.headers).get('authorization'),'Bearer own-key');assertEquals(init?.redirect,'manual');
       const body=JSON.parse(String(init?.body));assertEquals(body.model,'different-grader');assertEquals(body.provider,undefined);assertEquals(body.reasoning,undefined);
       return Response.json({id:'synthetic-grading',choices:[{finish_reason:'stop',message:{content:JSON.stringify(output)}}]});
     }});

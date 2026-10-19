@@ -220,11 +220,12 @@ export function createOpenRouterKnowledgeModel(dependencies) {
       let responseReceived = false;
       let document;
       try {
+        // Workers support manual redirects; the status check below rejects them.
         response = await dependencies.fetch(endpoint, {
           method: "POST",
           headers: { accept: "application/json", "content-type": "application/json", authorization: `Bearer ${apiKey}` },
           body: JSON.stringify({ model: dependencies.model, messages: [{ role: "system", content: `${command.systemPrompt}${protocol?.responseFormat==="json_object"&&responseSchema?`\nRequired full local JSON schema (${responseSchema.name}); satisfy ALL fields, bounds, uniqueness and domain constraints: ${JSON.stringify(responseSchema.schema)}`:""}\nReturn only one JSON object. Do not include prose outside JSON.` }, { role: "user", content: command.attachments === undefined ? `<task_input>\n${serializedInput}\n</task_input>` : [{ type: "text", text: `<task_input>\n${serializedInput}\n</task_input>` }, ...imageBlocks(command.attachments)] }], response_format: protocol?.responseFormat === "json_object" || responseSchema === undefined ? { type: "json_object" } : { type: "json_schema", json_schema: { name: responseSchema.name, strict: true, schema: responseSchema.schema } }, ...(compatible ? {} : protocol?{provider:protocol.provider}:responseSchema === undefined ? {} : { provider: command.role === "question-evaluator" ? { require_parameters: true, allow_fallbacks: true } : { sort: command.providerSort ?? "throughput", require_parameters: true } }), ...(compatible || (protocol?.reasoningEffort ?? command.reasoningEffort) === undefined ? {} : { reasoning: { effort: protocol?.reasoningEffort ?? command.reasoningEffort } }), max_tokens: protocol?.maximumOutputTokens===undefined?command.maxOutputTokens:Math.min(command.maxOutputTokens,protocol.maximumOutputTokens), stream: false }),
-          redirect: "error",
+          redirect: "manual",
           signal: requestSignal,
         });
         if(requestSignal.aborted)return aborted("fetch");

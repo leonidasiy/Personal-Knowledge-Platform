@@ -30,6 +30,7 @@ Deno.test("live knowledge model adapter sends bounded JSON requests without a pr
   if (!result.ok) return;
   assertEquals(result.value.output.question, "What concept?");
   if (request === undefined || typeof request.body !== "string") throw new Error("Request body was not captured.");
+  assertEquals(request.redirect, "manual");
   const body = JSON.parse(request.body);
   assertEquals(body.model, "z-ai/glm-5.3-flash");
   assertEquals(body.max_tokens, 256);
@@ -259,4 +260,18 @@ Deno.test("MiMo evaluator uses automatic provider routing with strict schema and
   const responseSchema={name:"synthetic_review",schema:{type:"object",properties:{score:{type:"integer"}},required:["score"],additionalProperties:false}};
   assertEquals((await model.generate({...command(),role:"question-evaluator",reasoningEffort:"none",responseSchema})).ok,true);
   if(body===undefined)throw new Error("Model body was not captured.");assertEquals(body.model,"xiaomi/mimo-v2.6-pro");assertEquals(body.provider.sort,undefined);assertEquals(body.provider.only,undefined);assertEquals(body.provider.require_parameters,true);assertEquals(body.provider.allow_fallbacks,true);assertEquals(body.reasoning.effort,"none");assertEquals(body.response_format.type,"json_schema");assertEquals(body.response_format.json_schema.strict,true);
+});
+
+Deno.test("knowledge model rejects provider redirects without forwarding credentials", async () => {
+  let calls = 0;
+  const model = createOpenRouterKnowledgeModel({ apiKey: "secret", endpoint: "https://api.example.test/chat/completions", model: "synthetic-model", timeoutMs: 1_000, maximumInputCharacters: 10_000, now: Date.now, logger: () => {}, fetch: async (_input, init) => {
+    calls++;
+    assertEquals(init?.redirect, "manual");
+    return new Response(null, { status: 302, headers: { location: "https://other.example.test/" } });
+  } });
+  const result = await model.generate(command());
+  assertEquals(result.ok, false);
+  if (!result.ok && result.error.kind === "KnowledgeModelRejected") assertEquals(result.error.status, 302);
+  else throw new Error("Expected a rejected redirect response.");
+  assertEquals(calls, 1);
 });

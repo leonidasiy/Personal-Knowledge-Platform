@@ -24,6 +24,7 @@ Deno.test("Jev grader sends only the bounded answer state and uses the latest Je
   assertEquals(result.value.probabilities[0], 0.8);
   assertEquals(result.value.model, "typesafe/jev-1.13-20260917");
   if (request?.body === undefined || typeof request.body !== "string") throw new Error("Expected bounded Decisions request.");
+  assertEquals(request.redirect, "manual");
   const body = JSON.parse(request.body);
   assertEquals(body.model, "~typesafe/jev-latest");
   assertEquals(body.questions["blank-1"].type, "noul");
@@ -132,4 +133,17 @@ Deno.test("Jev latest rejects unrelated models and unbounded or missing probabil
     const result = await grader.grade(command());
     assertEquals(result.ok, false);
   }
+});
+
+Deno.test("Jev rejects provider redirects without following them or forwarding credentials", async () => {
+  let calls = 0;
+  const grader = createJevAnswerGrader(dependencies(async (_input, init) => {
+    calls++;
+    assertEquals(init?.redirect, "manual");
+    return new Response(null, { status: 302, headers: { location: "https://other.example.test/" } });
+  }));
+  const result = await grader.grade(command());
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.kind, "JevProviderRejected");
+  assertEquals(calls, 1);
 });
