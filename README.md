@@ -24,6 +24,9 @@ maintainer files are required. A separate [sample demo](SETUP.md#run-the-local-d
 needs no API keys. Phone installation opens your backend; it does not run one
 on the phone.
 
+To record the real Library → Feed → Review → Progress workflow with isolated
+sample history, use the [local walkthrough](WALKTHROUGH.md).
+
 Personal deployment configurations stay local and are excluded from Git.
 For your account use `wrangler.self-host.example.jsonc` and the guide above.
 

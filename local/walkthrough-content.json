@@ -1,0 +1,160 @@
+{
+  "provenance": "LLM-authored walkthrough samples, paraphrased from the linked Open Music Theory chapters; not production extraction or measured learner outcomes.",
+  "attribution": "Open Music Theory contributors (Kris Shaffer, Bryn Hughes, Brian Moseley and collaborators), Hybrid Pedagogy Publishing. Adapted sample knowledge and questions: CC BY-SA 4.0.",
+  "licence": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "verifiedOn": "2026-10-19",
+  "sources": [
+    {
+      "id": "intervals",
+      "title": "Intervals and dyads",
+      "url": "https://openmusictheory.github.io/intervals.html",
+      "topic": "Intervals",
+      "points": [
+        {
+          "summary": "Specific intervals require both letter-name distance and semitone distance; C to E is a third, and four semitones makes it major.",
+          "section": "Diatonic intervals",
+          "prompt": "C4 to E4 spans four semitones. What is the interval?",
+          "choices": [
+            "Major third",
+            "Perfect fourth",
+            "Minor third"
+          ]
+        },
+        {
+          "summary": "Inverting a simple interval within an octave makes its generic numbers sum to nine; major becomes minor, while perfect stays perfect.",
+          "section": "Interval inversion",
+          "prompt": "What does a major third become when inverted within an octave?",
+          "choices": [
+            "Minor sixth",
+            "Major sixth",
+            "Perfect fifth"
+          ]
+        },
+        {
+          "summary": "Harmonic intervals sound simultaneously; melodic intervals sound successively. These are different listening tasks even for the same pitches.",
+          "section": "Melodic and harmonic intervals",
+          "prompt": "Two pitches sound together. Which interval category describes their presentation?",
+          "choices": [
+            "Harmonic",
+            "Melodic",
+            "Compound"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "triads",
+      "title": "Triads and seventh chords",
+      "url": "https://openmusictheory.github.io/triads.html",
+      "topic": "Chords",
+      "points": [
+        {
+          "summary": "Major and minor triads both have a perfect fifth above the root; the third determines the difference between these two qualities.",
+          "section": "Triad qualities",
+          "prompt": "Which interval distinguishes a major triad from a minor triad on the same root?",
+          "choices": [
+            "The third",
+            "The perfect fifth",
+            "The octave"
+          ]
+        },
+        {
+          "summary": "A slash chord symbol names the root before the slash and the bass after it; changing the bass need not change the root.",
+          "section": "Building a triad",
+          "prompt": "In Cm/E-flat, which pitch is in the bass?",
+          "choices": [
+            "E-flat",
+            "C",
+            "G"
+          ]
+        },
+        {
+          "summary": "A dominant seventh chord combines a major triad with a minor seventh; a major seventh chord instead adds a major seventh.",
+          "section": "Seventh chords",
+          "prompt": "A major triad with a minor seventh forms which chord quality?",
+          "choices": [
+            "Dominant seventh",
+            "Major seventh",
+            "Minor seventh"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scales",
+      "title": "Scales and scale degrees",
+      "url": "https://openmusictheory.github.io/scales.html",
+      "topic": "Scales",
+      "points": [
+        {
+          "summary": "The major scale follows W-W-H-W-W-W-H. Keeping this step pattern preserves the scale when its tonic changes.",
+          "section": "The major scale",
+          "prompt": "Where are the half steps in an ascending major scale?",
+          "choices": [
+            "Between degrees 3–4 and 7–8",
+            "Between degrees 2–3 and 5–6",
+            "Between degrees 1–2 and 4–5"
+          ]
+        },
+        {
+          "summary": "A scale degree describes a pitch relative to a tonic: A is degree five in D major, rather than a fixed degree everywhere.",
+          "section": "Scale degrees and solfège",
+          "prompt": "What scale degree is A in D major?",
+          "choices": [
+            "Fifth",
+            "Third",
+            "First"
+          ]
+        },
+        {
+          "summary": "Harmonic minor raises natural minor’s seventh degree by a semitone, creating a leading tone approaching the tonic.",
+          "section": "The minor scale",
+          "prompt": "Which natural-minor degree is raised to form harmonic minor?",
+          "choices": [
+            "Seventh",
+            "Sixth",
+            "Third"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "meter",
+      "title": "Meter and time signatures",
+      "url": "https://openmusictheory.github.io/meter.html",
+      "topic": "Rhythm and meter",
+      "points": [
+        {
+          "summary": "Simple meter divides a beat into two equal parts; compound meter divides it into three. Division differs from beats per bar.",
+          "section": "Meter and time signatures",
+          "prompt": "A beat divides into three equal parts. Which meter type is this?",
+          "choices": [
+            "Compound",
+            "Simple",
+            "Necessarily triple"
+          ]
+        },
+        {
+          "summary": "Duple, triple and quadruple describe groups of two, three and four beats. Compound duple has two beats, each divided into three.",
+          "section": "Meter and time signatures",
+          "prompt": "In standard compound duple meter, how many counting beats occur per bar?",
+          "choices": [
+            "Two",
+            "Three",
+            "Six"
+          ]
+        },
+        {
+          "summary": "In compound meter, the denominator names the beat division. In standard 6/8, eighth notes divide dotted-quarter beats.",
+          "section": "Notating meter",
+          "prompt": "What is the usual counting beat in standard 6/8 compound duple meter?",
+          "choices": [
+            "Dotted quarter note",
+            "Eighth note",
+            "Quarter note"
+          ]
+        }
+      ]
+    }
+  ]
+}
