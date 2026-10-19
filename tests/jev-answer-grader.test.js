@@ -79,6 +79,23 @@ Deno.test("Jev grader rejects invalid commands before calling the provider", asy
   assertEquals(calls, 0);
 });
 
+Deno.test("Jev grader accepts the quiz contract's twelve answer aliases without truncating them", async () => {
+  const canonicalAnswers = Array.from({ length: 12 }, (_, index) => `valid wording ${index}`);
+  let calls = 0;
+  const grader = createJevAnswerGrader(dependencies(async (_input, init) => {
+    calls++;
+    const body = JSON.parse(String(init?.body));
+    assertEquals(JSON.stringify(body.state.answers[0].canonicalAnswers), JSON.stringify(canonicalAnswers));
+    return response({ "blank-1": 0.9 });
+  }));
+  const result = await grader.grade({ ...command(), answers: [{ ...command().answers[0], canonicalAnswers }] });
+  assertEquals(result.ok, true);
+  assertEquals(calls, 1);
+  const invalid = await grader.grade({ ...command(), answers: [{ ...command().answers[0], canonicalAnswers: [...canonicalAnswers, "extra"] }] });
+  assertEquals(invalid.ok, false);
+  assertEquals(calls, 1);
+});
+
 Deno.test("Jev grader requires the evidence-backed served model identifier", async () => {
   const configuration = { ...JEV_GRADER_CONFIGURATION, requestedModel: "typesafe/jev-1.13", servedModel: "typesafe/jev-1.13-20260917" };
   const grader = createJevAnswerGrader({ ...dependencies(async () => Response.json({ model: "typesafe/jev-1.13", answers: { "blank-1": { type: "noul", noul: 0.99 } } })), configuration });

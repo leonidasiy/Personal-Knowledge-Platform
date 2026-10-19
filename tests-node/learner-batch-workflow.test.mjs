@@ -205,6 +205,28 @@ test('Jev rejection and outage preserve grading boundaries and pending attempts'
   }
 });
 
+test('fill-in grading accepts published quizzes with more than four accepted wordings and replays the saved result', async () => {
+  const f = fixture(5);
+  try {
+    const aliases = ['tonic', 'home note', 'tonal center', 'keynote', 'tonal centre'];
+    for (const row of f.db.prepare('SELECT task_id, task_json FROM learning_generation_tasks').all()) {
+      const task = JSON.parse(row.task_json);
+      task.pairedVariants[1].blanks[0].acceptedAnswers = aliases;
+      f.db.prepare('UPDATE learning_generation_tasks SET task_json = ? WHERE task_id = ?').run(JSON.stringify(task), row.task_id);
+    }
+    await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+    const review = f.value(await f.service.loadReview('owner', f.day()));
+    const question = review.questions.find(question => question.kind === 'fill-blank');
+    const answer = f.value(await f.answer(review.batch, question));
+    assert.equal(answer.score, 0.7);
+    assert.equal(answer.feedback.correctAnswer, 'tonic');
+    assert.deepEqual(f.gradingRequests[0].state.answers[0].canonicalAnswers, aliases);
+    assert.deepEqual(f.value(await f.answer(review.batch, question)), answer);
+    assert.equal(f.gradingRequests.length, 1);
+    assert.equal(f.db.prepare('SELECT COUNT(*) n FROM learner_review_answers').get().n, 1);
+  } finally { f.db.close(); }
+});
+
 test('all questions complete independently; unanswered variants remain available for the next batch', async () => {
   const f = fixture(5);
   try {

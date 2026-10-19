@@ -38,6 +38,7 @@ export function createLearnerController(dependencies) {
   /** @type {{ readonly state: "idle" | "loading" | "success" | "error", readonly value: ReviewBatchProjection | null, readonly error: LearningBatchGatewayFailure | null }} */ let review = { state: "idle", value: null, error: null };
   /** @type {Map<string, { readonly correct: boolean, readonly score: number, readonly explanation: string, readonly correctAnswer: string, readonly skipped?: boolean }> } */ const answers = new Map();
   /** @type {Map<string, { readonly selectedChoiceIds: readonly string[], readonly answerText: string, readonly blanks: Readonly<Record<string, string>> }> } */ const attempts = new Map();
+  /** @type {Map<string, LearningBatchGatewayFailure>} */ const questionErrors = new Map();
 
   const pending = new Set();
   const celebrations = new Set();
@@ -102,16 +103,14 @@ export function createLearnerController(dependencies) {
   }
 
   async function loadReview() {
-    const previousBatchId = review.value?.batch?.batchId ?? null;
+    // Keep the visible attempt and its feedback until an explicit batch or page refresh.
+    if (review.value && (answers.size || pending.size)) return { ok: true, value: review.value };
     review = { state: "loading", value: review.value, error: null };
     onChange();
     const requestedDay = day();
     const result = await gateway.loadReview(requestedDay);
     if (result.ok) reviewDay = requestedDay;
     await loadDailyProgress();
-    if (result.ok && result.value.batch?.batchId !== previousBatchId) {
-      answers.clear();
-    }
     if (result.ok) for (const skipped of result.value.skipped) answers.set(skipped.questionId, { correct: false, score: 0, ...skipped.feedback, skipped: true });
     review = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: null, error: result.error };
     onChange();
@@ -153,6 +152,7 @@ export function createLearnerController(dependencies) {
     if (result.ok) {
       answers.clear();
       attempts.clear();
+      questionErrors.clear();
     }
     review = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: review.value, error: result.error };
     onChange(undefined, "review-refresh");
@@ -180,18 +180,20 @@ export function createLearnerController(dependencies) {
     const actionKey = `review-submit:${questionId}`;
     if (questionPending(questionId) || answers.has(questionId)) return;
     const reviewedBefore = dailyProgress?.reviewAttempts;
+    questionErrors.delete(questionId);
     attempts.set(questionId, { selectedChoiceIds: freeze([...selectedChoiceIds]), answerText: String(answerText ?? ""), blanks: freeze(Object.fromEntries((question.blanks ?? []).map(blank => [blank.id, String(formData.get(`blank:${blank.id}`) ?? "")])))});
     begin(actionKey);
     const result = await gateway.answerReview(batchId, questionId, /** @type {string[]} */ (selectedChoiceIds), `review-answer:${batchId}:${questionId}`, typeof answerText === "string" ? answerText : null, blankAnswers === null ? null : blankAnswers.map((answer) => ({ id: answer.id, text: /** @type {string} */ (answer.text) })), question.revision);
     pending.delete(actionKey);
     if (!result.ok) {
-      review = { state: "error", value: review.value, error: result.error };
-      onChange(undefined, `review-submit:${questionId}`);
+      questionErrors.set(questionId, result.error);
+      onChange(undefined, actionKey);
       return;
     }
     showFeedback(questionId, result.value);
-    await loadDailyProgress();
     onChange(undefined, `review-feedback:${questionId}`, "review-title");
+    await loadDailyProgress();
+    onChange();
     const target = dependencies.getDailyTargets?.().review;
     if (target !== undefined && reviewedBefore !== undefined && reviewedBefore < target && dailyProgress !== null && dailyProgress.reviewAttempts >= target && reviewCelebrationDay !== day()) {
       reviewCelebrationDay = day();
@@ -206,11 +208,12 @@ export function createLearnerController(dependencies) {
     const batch = review.value?.batch;
     const key = `review-skip:${questionId}`;
     if (!question || !batch || questionPending(questionId) || answers.has(questionId)) return;
+    questionErrors.delete(questionId);
     begin(key);
     const result = await gateway.skipReview(batch.batchId, questionId, question.revision, `review-skip:${batch.batchId}:${questionId}`);
     pending.delete(key);
     if (result.ok) showFeedback(questionId, { ...result.value, correct: false, score: 0 }, true);
-    else review = { state: "error", value: review.value, error: result.error };
+    else questionErrors.set(questionId, result.error);
     onChange(undefined, result.ok ? `review-feedback:${questionId}` : key, "review-title");
   }
 
@@ -344,6 +347,7 @@ export function createLearnerController(dependencies) {
   function renderQuestion(question) {
     const answer = answers.get(question.questionId);
     const attempt = attempts.get(question.questionId);
+    const failure = questionErrors.get(question.questionId);
     const input = question.kind === "fill-blank"
       ? question.blanks === null ? `<label>Answer<input type="text" name="answerText" autocomplete="off" required value="${escapeHtml(attempt?.answerText ?? "")}"></label>` : question.blanks.map((blank, index) => `<label>Blank ${index + 1}<input type="text" name="blank:${escapeHtml(blank.id)}" autocomplete="off" required value="${escapeHtml(attempt?.blanks[blank.id] ?? "")}"></label>`).join("")
       : feedMarkup(29, escapeHtml(question.prompt), question.choices?.map(choice => `<label><input type="${question.kind === "multiple-choice" ? "checkbox" : "radio"}" name="selectedChoiceIds" value="${escapeHtml(choice.id)}" ${attempt?.selectedChoiceIds.includes(choice.id) ? "checked" : ""}><span>${escapeHtml(choice.label)}</span></label>`).join("") ?? "");
@@ -356,7 +360,7 @@ export function createLearnerController(dependencies) {
       ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${busy ? 'aria-busy="true"' : ""}>${busy ? input.replaceAll("<input ", "<input disabled ") : input}<p data-answer-prompt role="alert" hidden>${question.kind === "fill-blank" ? "Fill in every blank before checking." : "Choose an answer before checking."}</p><button class="button primary" ${actionState(actionKey)} type="submit" ${busy ? "disabled" : ""}>${actionLabel(actionKey, "Check answer", "Checking…")}</button><button class="button quiet" type="button" data-action="skip-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(skipKey)} ${busy ? "disabled" : ""}>${actionLabel(skipKey, "Skip", "Loading…")}</button></form>`
       : `<p class="answer-feedback ${answer === undefined || answer.skipped ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="${escapeHtml(feedbackKey)}" ${celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : ""}>${answer?.correct ? sparkIcon() : ""}${answer === undefined ? "Answered." : answer.skipped ? "Skipped." : answer.correct ? question.kind === "fill-blank" ? `Correct (${Math.round(answer.score * 100)}%).` : "Correct." : answer.score > 0 ? `Partly correct (${Math.floor(answer.score * 100)}%).` : "Not quite."}</p>`;
     const feedback = answer === undefined || answer.correct ? "" : feedMarkup(27, escapeHtml(answer.correctAnswer), escapeHtml(answer.explanation), escapeHtml(question.sourceAnchorIds.join(", ")));
-    return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body, feedback);
+    return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback);
   }
 
   /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */

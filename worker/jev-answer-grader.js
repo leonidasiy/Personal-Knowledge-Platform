@@ -39,7 +39,7 @@ function text(value) { return typeof value === "string" && value.trim() !== ""; 
 /** @param {unknown} value @returns {value is JevGradeCommand} */
 function validCommand(value) {
   if (!record(value) || !text(value.prompt) || value.prompt.length > MAXIMUM_FIELD_CHARACTERS || !Array.isArray(value.answers) || value.answers.length < 1 || value.answers.length > MAXIMUM_ANSWERS) return false;
-  return value.answers.every((answer) => record(answer) && text(answer.id) && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(answer.id) && text(answer.response) && answer.response.length <= MAXIMUM_FIELD_CHARACTERS && Array.isArray(answer.canonicalAnswers) && answer.canonicalAnswers.length > 0 && answer.canonicalAnswers.length <= 4 && answer.canonicalAnswers.every((canonical) => text(canonical) && canonical.length <= MAXIMUM_FIELD_CHARACTERS)) && new Set(value.answers.map((answer) => answer.id)).size === value.answers.length;
+  return value.answers.every((answer) => record(answer) && text(answer.id) && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(answer.id) && text(answer.response) && answer.response.length <= MAXIMUM_FIELD_CHARACTERS && Array.isArray(answer.canonicalAnswers) && answer.canonicalAnswers.length > 0 && answer.canonicalAnswers.length <= 12 && answer.canonicalAnswers.every((canonical) => text(canonical) && canonical.length <= MAXIMUM_FIELD_CHARACTERS)) && new Set(value.answers.map((answer) => answer.id)).size === value.answers.length;
 }
 
 /** @param {unknown} value @param {readonly string[]} expectedIds @param {string | null} expectedModel @returns {{ readonly model: string, readonly probabilities: readonly number[] } | null} */

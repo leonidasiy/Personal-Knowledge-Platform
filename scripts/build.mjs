@@ -19,8 +19,8 @@ export const ARTIFACT_BUDGETS = Object.freeze({
     // Measured image controls / Bright Spark allowance approved 2026-10-15.
     // Initial and lazy-chunk limits remain unchanged.
     rawBytes: 231_823,
-    // Local/phone private-document links add 233 gzip bytes (2026-10-18).
-    gzipBytes: 76_811,
+    // Inline Review failures add 16 gzip bytes (2026-10-19).
+    gzipBytes: 76_827,
   }),
   stylesheet: Object.freeze({
     label: "CSS",
