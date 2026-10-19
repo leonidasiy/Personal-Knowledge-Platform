@@ -191,3 +191,18 @@ Deno.test("calendar axes align weekdays and week dates across periods and year b
     assert(readouts.every(value => value === "0 cards · 0 quizzes"), "empty-day readouts contain only quantities");
   }
 });
+
+Deno.test("cached Progress remains visible during a refresh, failure and successful retry", async () => {
+  const result = buildProgress(input({})); if (!result.ok) throw new Error("Invalid fixture");
+  let next = Promise.resolve(Response.json({ result: result.value }));
+  const page = createProgressPage({ fetch: async () => await next, baseUrl: "https://example.test/", escapeHtml: value => value, onChange() {} });
+  await page.load();
+  /** @type {(value:Response)=>void} */ let settle = () => {};
+  next = new Promise(resolve => { settle = resolve; });
+  const refresh = page.load();
+  assert(page.render().includes('class="progress-summary"') && page.render().includes('role="status">Updating progress'), "Previously loaded metrics remain visible while refreshing.");
+  settle(Response.json({}, { status: 503 })); await refresh;
+  assert(page.render().includes('class="progress-summary"') && page.render().includes('role="alert"') && page.render().includes('data-action="retry-progress"'), "A failed refresh retains metrics and offers a retry.");
+  next = Promise.resolve(Response.json({ result: result.value })); await page.load();
+  assert(page.render().includes('class="progress-summary"') && !page.render().includes('role="alert"'), "Retry replaces the error with the refreshed content.");
+});

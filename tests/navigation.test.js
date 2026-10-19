@@ -28,7 +28,10 @@ async function notificationHarness(initialHash = "#library") {
   };
   /** @type {string[]} */
   const actions = [];
+  const loadedRoutes = new Map([["library", "library"], ["review", "review"]]);
   const bindings = {
+    loadedRoutes,
+    learnerController: { loadReview: async () => { actions.push("review"); } },
     addEventListener: events.addEventListener.bind(events),
     document: new EventTarget(),
     systemThemeQuery: new EventTarget(),
@@ -49,7 +52,7 @@ async function notificationHarness(initialHash = "#library") {
     `let activeView = "library", discoveryItemId = null;\n${source.slice(start, end)}\nregisterOfflineSupport();`
   )(...Object.values(bindings));
   return {
-    actions, location,
+    actions, location, loadedRoutes,
     async open(type = "resonance-source-update-open") {
       serviceWorker.dispatchEvent(new MessageEvent("message", { data: { type } }));
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -61,6 +64,7 @@ Deno.test("Source notification refreshes and renders Library when its hash is un
   const app = await notificationHarness();
   await app.open();
   assert(app.location.hash === "#library", "Library route must remain active.");
+  assert(!app.loadedRoutes.has("library"), "An explicit source update must invalidate cached Library content.");
   assert(JSON.stringify(app.actions) === JSON.stringify(["load", "render:nav-library:library-title"]),
     `Expected Library reload followed by render, got ${JSON.stringify(app.actions)}`);
 });
@@ -128,4 +132,10 @@ Deno.test("Upload route retains bound URL context and its sixth navigation label
       review.includes('aria-label="Review due"'),
     "Notification dot must sit outside label geometry.",
   );
+});
+
+Deno.test("Review notification refreshes its controller while preserving navigation caching", async () => {
+  const app = await notificationHarness("#review");
+  await app.open("resonance-reminder-open");
+  assert(JSON.stringify(app.actions) === JSON.stringify(["review", "load", "render:nav-review:review-title"]), "Review reminders explicitly refresh current questions.");
 });

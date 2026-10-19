@@ -112,7 +112,7 @@ Deno.test("Upload resolves bound identity independently of Library and rejects m
       });
     },
   });
-  await page.load("#upload?sourceId=source-a&runId=run-a&title=Untrusted");
+  assert(await page.load("#upload?sourceId=source-a&runId=run-a&title=Untrusted"), "A valid context is ready for caching.");
   assert(page.render().includes('<form data-upload-form="source-a" aria-busy="false">'), "Bound source key and truthful busy state must be HTML attributes.");
   assert(
     page.render().includes('value="Original &lt;title&gt;"'),
@@ -130,7 +130,7 @@ Deno.test("Upload resolves bound identity independently of Library and rejects m
       "#upload?title=orphan",
     ]
   ) {
-    await page.load(route);
+    assert(!await page.load(route), "An invalid context must not be cached as loaded.");
     assert(
       page.render().includes("Upload unavailable") &&
         page.render().includes('href="#library"'),
@@ -147,7 +147,7 @@ Deno.test("Upload resolves bound identity independently of Library and rejects m
     fetch: async () =>
       Response.json({ error: "SourceRenameConflict" }, { status: 409 }),
   });
-  await denied.load("#upload?sourceId=source-a&runId=run-a");
+  assert(!await denied.load("#upload?sourceId=source-a&runId=run-a"), "Unavailable context must remain retryable.");
   assert(
     denied.render().includes("Upload unavailable") &&
       !denied.render().includes("source-a"),

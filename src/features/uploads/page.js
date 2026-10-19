@@ -248,12 +248,12 @@ export function createUploadPage(dependencies) {
     if (route !== "#upload") {
       state = "unavailable";
       dependencies.onChange();
-      return;
+      return false;
     }
     if (query === undefined) {
       state = "ready";
       dependencies.onChange();
-      return;
+      return true;
     }
     const params = new URLSearchParams(query);
     const sourceId = params.get("sourceId"), runId = params.get("runId");
@@ -264,12 +264,12 @@ export function createUploadPage(dependencies) {
     ) {
       state = "unavailable";
       dependencies.onChange();
-      return;
+      return false;
     }
     state = "loading";
     dependencies.onChange();
     const result = await gateway.uploadContext({ sourceId, runId });
-    if (generation !== current) return;
+    if (generation !== current) return false;
     if (!result.ok) {
       state = "unavailable";
       message =
@@ -281,6 +281,7 @@ export function createUploadPage(dependencies) {
       state = "ready";
     }
     dependencies.onChange();
+    return result.ok;
   }
   /** @param {string} value */
   async function select(value) {

@@ -23,15 +23,16 @@ export function createProgressPage(dependencies) {
   }
   function render() {
     const e = dependencies.escapeHtml;
-    if (state.kind === "loading") return progressMarkup(3);
-    if (state.kind === "error") return progressMarkup(4, e(state.message));
+    if (state.kind === "loading" && state.summary === null) return progressMarkup(3);
+    if (state.kind === "error" && state.summary === null) return progressMarkup(4, e(state.message));
     const controls = `<form class="progress-controls" data-progress-controls><label>Period<select name="days">${[7,30,90].map(n => `<option value="${n}"${n === days ? " selected" : ""}>${n} days</option>`).join("")}</select></label><label>Primary subject<select name="subject"><option value="">All subjects</option>${SUBJECTS.map(s => `<option value="${e(s.id)}"${s.id === subject ? " selected" : ""}>${e(s.label)}</option>`).join("")}</select></label><button class="button primary">Update</button></form>`;
     if (state.summary === null) return progressMarkup(2, progressMarkup(1), controls);
     const s = state.summary, accuracy = s.attempts.accuracy === null ? "Unavailable" : `${Math.round(s.attempts.accuracy * 100)}%`, score = s.attempts.averageScore === null ? "Unavailable" : `${Math.round(s.attempts.averageScore * 100)}%`;
     const empty = s.attempts.count === 0 ? progressMarkup(0) : "";
     const heading = progressMarkup(1);
+    const status = state.kind === "loading" ? '<p role="status">Updating progress…</p>' : state.kind === "error" ? `<p role="alert">${e(state.message)} <button class="button quiet" data-action="retry-progress" type="button">Try again</button></p>` : "";
     const metrics = `<div class="progress-summary"><div><span>Answer accuracy</span><strong>${accuracy}</strong></div><div><span>Average score</span><strong>${score}</strong></div><div><span>Review attempts</span><strong>${s.attempts.count}</strong></div></div>`;
-    return `<section class="wide-view progress-page" aria-labelledby="progress-title">${heading}<div class="progress-toolbar"><p class="progress-note">${e(s.period.startedOn)} — ${e(s.period.endedOn)} · UTC</p>${controls}</div>${metrics}${empty}<div class="progress-charts"><div class="progress-timeline">${chart(e,"Daily accuracy",s.daily,"line")}</div><div>${chart(e,"Activity calendar",s.activity,"activity")}</div><div>${chart(e,"Review accuracy by subject",s.subjects,"subjects")}</div></div></section>`;
+    return `<section class="wide-view progress-page" aria-labelledby="progress-title">${heading}${status}<div class="progress-toolbar"><p class="progress-note">${e(s.period.startedOn)} — ${e(s.period.endedOn)} · UTC</p>${controls}</div>${metrics}${empty}<div class="progress-charts"><div class="progress-timeline">${chart(e,"Daily accuracy",s.daily,"line")}</div><div>${chart(e,"Activity calendar",s.activity,"activity")}</div><div>${chart(e,"Review accuracy by subject",s.subjects,"subjects")}</div></div></section>`;
   }
   /** @param {HTMLElement} root */
   function bind(root) {

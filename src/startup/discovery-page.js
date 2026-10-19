@@ -157,7 +157,7 @@ export function createDiscoveryPage(dependencies) {
         sourceActionsAvailable = true;
       }
       if (loaded.ok && sourceActionsAvailable) await syncSuppressions();
-      return loaded;
+      return !loaded.ok ? loaded : !capabilities.ok ? capabilities : !areas.ok ? areas : loaded;
     },
     /** @param {{readonly selectedItemId:string|null,readonly online:boolean}} route */
     render(route) {

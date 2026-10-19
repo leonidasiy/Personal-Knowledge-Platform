@@ -465,7 +465,7 @@ Deno.test("Learner Review and Library terminate route failures independently", a
   );
   assert(
     source.includes("await loadLibraryRoute();") &&
-      source.includes("await learnerController?.loadReview();") &&
+      source.includes("learnerController.loadFeed(), learnerController.loadReview()") &&
       !source.includes('import("./routes/review.js")'),
     "Library and top-level Review must use their current controllers without reviving the retired Review route.",
   );
@@ -626,7 +626,7 @@ Deno.test("Discover remains a lazy destination with one bounded search command",
   }
 });
 
-Deno.test("Discover route re-entry retries the hosted source capability probe", async () => {
+Deno.test("uncached Discover entry retries the hosted source capability probe", async () => {
   const source = await Deno.readTextFile(new URL("src/app.js", root)) + await Deno.readTextFile(new URL("src/routes/navigation.js", root));
   const loadRoute = source.slice(
     source.indexOf("async function loadActiveRoute()"),
@@ -642,7 +642,7 @@ Deno.test("Discover route re-entry retries the hosted source capability probe", 
         'activeView === "discover" && discoveryPage === null',
       ) &&
       discoveryBranch.includes("await discoveryPage.load()"),
-    "Every Discover entry must retry load after one-time controller creation.",
+    "Uncached Discover entries must retry load after one-time controller creation.",
   );
 });
 
@@ -729,7 +729,7 @@ Deno.test("rerender paths preserve a deliberate focus target", async () => {
   );
   assert(
       source.includes("captureTransientViewState()") &&
-      source.includes("restoreTransientViewState(transientState)") &&
+      source.includes("restoreTransientViewState(panelState)") && source.includes("panelDrafts.get(activeView)") &&
       source.includes("DataTransfer") &&
       libraryRoute.includes('href="') && libraryRoute.includes('escapeHtml(`#upload?'),
     "Background rerenders must preserve existing transient state and Library must hand off uploads to their dedicated route.",

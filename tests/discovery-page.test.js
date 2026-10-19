@@ -677,7 +677,7 @@ Deno.test("Discovery source actions recover after a transient catalog failure", 
     navigateToLibrary: () => {},
     rerender: () => {},
   });
-  await page.load();
+  assert(!(await page.load()).ok, "An incomplete capability probe must remain retryable on navigation.");
   const searched = await page.search({ query: "starter-sources", providerIds: ["web"], limit: 10 });
   assert(searched.ok, "Recovery fixture must submit a search.");
   const list = page.render({ selectedItemId: null, online: true });

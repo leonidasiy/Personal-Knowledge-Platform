@@ -23,7 +23,6 @@ const freeze = Object.freeze;
 const revealedCards = new Set();
 const cardReader = createCardReader();
 /** @type {IntersectionObserver|null} */ let cardObserver = null;
-let revealView = "";
 import {
   installNotificationController,
   renderNotification,
@@ -245,6 +244,12 @@ let progressPage = null;
 let settingsPage = null;
 /** @type {Set<string>} */
 const routeLoads = new Set(), routeFailures = new Set();
+/** @type {Map<string, string>} */
+const loadedRoutes = new Map();
+let progressDirty = false, progressDay = "";
+let renderedView = activeView;
+/** @type {Map<string, ReturnType<typeof captureTransientViewState>>} */
+const panelDrafts = new Map();
 /** @type {RankedFeedItem[]} */
 let visibleItems = [];
 let revealedStudyItems = 1;
@@ -329,6 +334,8 @@ async function initialize() {
   }
   await loadLearnerController();
   await loadActiveRoute();
+  loadedRoutes.set("feed", "feed");
+  loadedRoutes.set("review", "review");
   render();
   void syncReminderTimeZone();
   setInterval(() => { if (document.visibilityState === "visible") void learnerController?.refreshDay(); }, 60_000);
@@ -515,6 +522,16 @@ function createRecallPrompt(id, contentId, knowledgeUnitId, promptText) {
 async function loadActiveRoute() {
   if (startupRestoreIssue !== null) return;
   const view = activeView, hash = location.hash;
+  const key = view === "upload" ? hash : view;
+  if (loadedRoutes.get(view) === key && (view !== "upload" || uploadPrefill === null)) {
+    if (view === "progress" && (progressDirty || progressDay !== new Date().toISOString().slice(0, 10))) {
+      progressDirty = false;
+      progressDay = new Date().toISOString().slice(0, 10);
+      void progressPage?.load();
+    }
+    render();
+    return;
+  }
   if (routeLoads.has(view)) return;
   routeLoads.add(view);
   routeFailures.delete(view);
@@ -522,12 +539,6 @@ async function loadActiveRoute() {
   try {
     const libraryAlreadyLoaded = libraryPageController !== null;
     await loadLibraryRoute();
-    if (learnerController !== null && view === "feed") {
-      await learnerController.loadFeed();
-    }
-    if (view === "review") {
-      await learnerController?.loadReview();
-    }
     if (view === "library") {
       if (libraryAlreadyLoaded) await libraryPageController?.load();
     }
@@ -541,7 +552,7 @@ async function loadActiveRoute() {
         }
         const prefill = uploadPrefill;
         uploadPrefill = null;
-        await uploadPage.load(hash, prefill);
+        if (!await uploadPage.load(hash, prefill)) return;
       }
     }
     if (view === "progress") {
@@ -549,6 +560,8 @@ async function loadActiveRoute() {
         const module = await import("./features/progress/page.js");
         progressPage = module.createProgressPage({ fetch, baseUrl: new URL("./", location.href).href, escapeHtml, onChange: () => render() });
       }
+      progressDirty = false;
+      progressDay = new Date().toISOString().slice(0, 10);
       await progressPage.load();
     }
     if (view === "settings") {
@@ -609,8 +622,10 @@ async function loadActiveRoute() {
       const loaded = await discoveryPage.load();
       if (!loaded.ok) {
         errorMessage = APP_COPY.discoveryUnavailable;
+        return;
       }
     }
+    loadedRoutes.set(view, key);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     routeFailures.add(view);
@@ -636,6 +651,7 @@ async function loadLearnerController() {
     getDailyTargets: () => ({ learning: dailySettings?.dailyStudyTarget ?? 5, review: dailySettings?.dailyRecallLimit ?? 5 }),
     onChange: (message, preferredFocusKey = null, fallbackHeadingId = null, refreshedView) => {
       notice = message ?? null;
+      progressDirty = true;
       if (message === undefined) {
         const refreshed = refreshedView === activeView;
         render(refreshed ? `${activeView}-title` : preferredFocusKey, refreshed ? `${activeView}-title` : fallbackHeadingId);
@@ -693,12 +709,13 @@ async function loadLibraryRoute() {
           errorMessage = message;
           notice = null;
         },
-        rerender: () => render(),
+        rerender: () => { progressDirty = true; render(); },
       });
       return libraryPageController.load();
     },
   ).then(() => {
     libraryRouteIssue = null;
+    loadedRoutes.set("library", "library");
   }).catch(() => {
     libraryRouteIssue = APP_COPY.libraryRouteUnavailable;
   }).finally(() => {
@@ -930,8 +947,10 @@ function restoreTransientViewState(state) {
 function render(preferredFocusKey = null, fallbackHeadingId = null) {
   cancelSparkEffects();
   cardObserver?.disconnect();
-  if (revealView !== activeView) { revealedCards.clear(); revealView = activeView; }
   const transientState = captureTransientViewState();
+  panelDrafts.set(renderedView, transientState);
+  const panelState = renderedView === activeView ? transientState : panelDrafts.get(activeView) ?? null;
+  renderedView = activeView;
   const activeElement = document.activeElement;
   const previousFocusKey = activeElement instanceof HTMLElement
     ? activeElement.dataset.focusKey ?? null
@@ -953,7 +972,7 @@ function render(preferredFocusKey = null, fallbackHeadingId = null) {
     }</div></div>`;
   bindInteractions();
   restoreFocus(preferredFocusKey ?? previousFocusKey, fallbackHeadingId);
-  restoreTransientViewState(transientState);
+  restoreTransientViewState(panelState);
   cardObserver = revealCards(root, revealedCards, typeof IntersectionObserver === "undefined" ? null : IntersectionObserver);
 }
 
@@ -1226,6 +1245,7 @@ async function retryRoute(target) {
   const route = target.getAttribute("data-route");
   if (route !== "library") return;
   libraryRouteIssue = null;
+  loadedRoutes.delete(route);
   await loadActiveRoute();
   render(`${route}-title`, `${route}-title`);
 }
@@ -1476,6 +1496,8 @@ function registerOfflineSupport() {
       if (event.data?.type === "resonance-reminder-open" || event.data?.type === "resonance-source-update-open") {
         activeView = event.data.type === "resonance-reminder-open" ? "review" : "library";
         discoveryItemId = null;
+        if (activeView === "library") loadedRoutes.delete("library");
+        else void learnerController?.loadReview();
         if (location.hash === `#${activeView}`) {
           const view = activeView;
           void loadActiveRoute().then(() =>

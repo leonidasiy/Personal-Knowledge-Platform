@@ -11,11 +11,12 @@ function fixture(view) {
   const renders = [];
   const state = {
     activeView: view, startupRestoreIssue: null, routeLoads: new Set(), routeFailures: new Set(),
+    loadedRoutes: new Map(), progressDirty: false, progressDay: "",
     libraryPageController: { load: async () => {} }, loadLibraryRoute: async () => {},
     learnerController: { loadFeed: async () => {}, loadReview: async () => {} },
     discoveryPage: { load: async () => ({ ok: true }) },
     progressPage: { load: async () => {} }, settingsPage: {},
-    uploadPage: { load: async () => {} }, uploadPrefill: null,
+    uploadPage: { load: async () => true }, uploadPrefill: null,
     location: { hash: "#" + view }, APP_COPY: copy, errorMessage: null,
     fetch: async () => Response.json([]),
     importModule: async () => { throw new TypeError("Isolated module request failed"); },
@@ -54,17 +55,62 @@ Deno.test("failed Upload dependency stops loading and a later navigation can rec
   assert(!state.routeFailures.has("upload") && !state.routeLoads.has("upload"), "A successful later navigation must replace a genuine previous failure.");
 });
 Deno.test("navigation during pending work preserves the requested route and isolates failures", async () => {
-  const { state, load } = fixture("feed");
+  const { state, load } = fixture("library");
   let release = () => {};
-  state.loadLibraryRoute = () => new Promise((resolve) => { release = () => resolve(); });
-  let feeds = 0, reviews = 0;
-  state.learnerController.loadFeed = async () => { feeds++; throw new TypeError("Isolated connection failed"); };
-  state.learnerController.loadReview = async () => { reviews++; };
+  state.libraryPageController.load = () => new Promise((_resolve, reject) => { release = () => reject(new TypeError("Isolated connection failed")); });
   const task = load();
+  await Promise.resolve();
   state.activeView = "review";
   release(); await task;
-  assert(feeds === 1 && reviews === 0, "An awaited route must keep its original request instead of loading a later navigation.");
-  assert(state.routeFailures.has("feed") && !state.routeFailures.has("review"), "A background failure must not replace the new panel.");
+  assert(state.routeFailures.has("library") && !state.routeFailures.has("review"), "A background failure must not replace the new panel.");
+  assert(!state.loadedRoutes.has("library"), "Failures must not be cached as loaded.");
+});
+Deno.test("opened panels return immediately without another loader or loading screen", async () => {
+  for (const view of ["feed", "review", "library", "discover", "upload", "progress", "settings"]) {
+    const { state, renders, load } = fixture(view);
+    let reads = 0;
+    state.loadLibraryRoute = async () => { reads++; };
+    await load();
+    const initialReads = reads;
+    state.activeView = "feed"; state.location.hash = "#feed"; await load();
+    state.activeView = view; state.location.hash = "#" + view;
+    renders.length = 0;
+    await load();
+    assert(reads === initialReads + (view === "feed" ? 0 : 1), `${view} must reuse its initialized controller.`);
+    assert(renders.length > 0 && renders.every(render => !render.busy), `${view} must render without a loading screen.`);
+  }
+});
+Deno.test("pending first load is reused and new Upload contexts still load", async () => {
+  const { state, load } = fixture("upload");
+  let reads = 0, release = () => {};
+  state.uploadPage.load = () => { reads++; return new Promise(resolve => { release = () => resolve(true); }); };
+  const first = load(); await Promise.resolve(); await Promise.resolve();
+  await load(); assert(reads === 1, "Returning during a request must not duplicate it.");
+  release(); await first;
+  state.location.hash = "#upload?sourceId=new&runId=next";
+  const next = load(); await Promise.resolve(); await Promise.resolve();
+  assert(reads === 2, "A different upload target must not reuse another source context.");
+  release(); await next;
+  const prefill = { title: "New source" };
+  Object.assign(state, { uploadPrefill: prefill, uploadPage: { load: async () => { reads++; return true; } } });
+  await load(); assert(reads === 3, "A new prefill must reset the upload panel even with the same hash.");
+});
+Deno.test("dirty Progress refreshes in the background while cached navigation stays ready", async () => {
+  const { state, renders, load } = fixture("progress");
+  await load(); let reads = 0, release = () => {};
+  state.progressPage.load = () => { reads++; return new Promise(resolve => { release = () => resolve(); }); };
+  state.progressDirty = true; renders.length = 0;
+  await load();
+  assert(reads === 1 && !state.progressDirty && renders.every(render => !render.busy), "New learning activity refreshes data without hiding cached content.");
+  await load(); assert(reads === 1, "Returning during a refresh must reuse its pending content."); release();
+  state.progressDay = "2020-01-01"; await load(); assert(reads === 2, "A new UTC day refreshes cached metrics."); release();
+});
+Deno.test("failed Discover probes remain retryable instead of cached", async () => {
+  const { state, load } = fixture("discover");
+  Object.assign(state, { discoveryPage: { load: async () => ({ ok: false }) } });
+  await load(); assert(!state.loadedRoutes.has("discover"), "Incomplete discovery initialization must retry.");
+  state.discoveryPage.load = async () => ({ ok: true });
+  await load(); assert(state.loadedRoutes.has("discover"), "Recovered content can be cached.");
 });
 Deno.test("loading markup is accessible, has restrained art, and excludes failure copy", () => {
   assert(copy.panelLoading.includes('role="status"') && copy.panelLoading.includes('aria-busy="true"') && copy.panelLoading.includes('aria-hidden="true"'), "Loading status must be announced and decoration hidden from assistive technology.");
@@ -89,4 +135,12 @@ Deno.test("desktop Discover navigation starts loading before the detail-preserva
   click(); hashchange();
   await Promise.resolve();
   assert(loads === 1 && state.activeView === "discover", "A new desktop Discover entry must request loading, even though detail navigation can preserve existing results.");
+});
+
+Deno.test("an unavailable Upload context remains retryable on navigation", async () => {
+  const { state, load } = fixture("upload");
+  state.uploadPage.load = async () => false;
+  await load(); assert(!state.loadedRoutes.has("upload"), "Unavailable context cannot become a completed cached load.");
+  state.uploadPage.load = async () => true;
+  await load(); assert(state.loadedRoutes.has("upload"), "A recovered context can be cached.");
 });
