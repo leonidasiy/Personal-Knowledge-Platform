@@ -449,7 +449,7 @@ Deno.test("only crossing the learning target opens the Review celebration", asyn
   }
 });
 
-Deno.test("separate typed quiz cards show failed corrections outside Source explanation and hide passed feedback", async () => {
+Deno.test("typed quiz cards retain submitted answers and show canonical answers after correct and incorrect grading", async () => {
   const originalForm = Object.getOwnPropertyDescriptor(globalThis, "HTMLFormElement");
   const originalData = Object.getOwnPropertyDescriptor(globalThis, "FormData");
   class Form {
@@ -460,19 +460,20 @@ Deno.test("separate typed quiz cards show failed corrections outside Source expl
   }
   class Values {
     /** @param {string} _name */ getAll(_name) { return []; }
-    /** @param {string} name */ get(name) { return name === "blank:blank-1" ? "home note" : null; }
+    /** @param {string} name */ get(name) { return name === "blank:blank-1" || name === "answerText" ? "home note" : name === "blank:blank-2" ? "fifth" : null; }
   }
   Object.defineProperty(globalThis, "HTMLFormElement", { configurable: true, value: Form });
   Object.defineProperty(globalThis, "FormData", { configurable: true, value: Values });
   try {
-    for (const score of [0.7, 0.699999]) {
+    for (const blanks of [null, [{ id: "blank-1" }], [{ id: "blank-1" }, { id: "blank-2" }]]) for (const score of [0.7, 0.699999]) {
       const correct = score >= 0.7;
-      const projection = { ...review, questions: [{ ...review.questions[0], kind: "fill-blank", choices: null, blanks: [{ id: "blank-1" }], pairedVariants: null }] };
+      const canonical = blanks?.length === 2 ? "tonic, dominant" : "tonic";
+      const projection = { ...review, questions: [{ ...review.questions[0], kind: "fill-blank", choices: null, blanks, pairedVariants: null }] };
       const controller = createLearnerController({ fetch: async (input, options) => {
         if (String(input).endsWith("/answer")) {
           const command = JSON.parse(String(options?.body));
-          assert(command.blankAnswers[0].text === "home note" && !Object.hasOwn(command, "pairedBlankAnswers"), "Only this card's response is submitted.");
-          return response({ result: { correct, score, completed: true, nextDueAt: "2026-09-02T12:00:00.000Z", feedback: { correctAnswer: "tonic", explanation: "Source explanation of the tonal center.", components: [{ id: "blank-1", correct, correctAnswer: "tonic" }] } } });
+          assert((blanks === null ? command.answerText : command.blankAnswers[0].text) === "home note" && !Object.hasOwn(command, "pairedBlankAnswers"), "Only this card's response is submitted.");
+          return response({ result: { correct, score, completed: true, nextDueAt: "2026-09-02T12:00:00.000Z", feedback: { correctAnswer: canonical, explanation: "Source explanation of the tonal center.", components: [{ id: "blank-1", correct, correctAnswer: "tonic" }] } } });
         }
         return response({ result: projection });
       }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", onChange: () => {} });
@@ -483,12 +484,13 @@ Deno.test("separate typed quiz cards show failed corrections outside Source expl
       form.submit?.({ preventDefault: () => {}, currentTarget: form });
       await new Promise(resolve => setTimeout(resolve, 0));
       const html = controller.renderReview();
-      if (correct) {
-        assert(html.includes("Correct (70%).") && !html.includes("Correct answer:") && !html.includes("Source explanation"), "Jev pass hides correction and explanation.");
-      } else {
-        assert(html.includes("Correct answer:</strong> tonic</p><details"), "Correct answer is outside the drawer and immediately above it.");
-        assert(html.includes('<details class="source-details"><summary>Source explanation</summary>'), "Only Source explanation titles the closed drawer.");
-      }
+      assert(html.includes(correct ? "Correct (70%)." : "Partly correct"), "The grading status remains visible.");
+      const submitted = `Your answer:</strong> ${blanks?.length === 2 ? "home note, fifth" : "home note"}</p><p class="correct-answer">`;
+      assert(html.includes(submitted), "Submitted free text stays directly above the canonical answer, including legacy and multiple blanks.");
+      assert(html.includes(`Correct answer:</strong> ${canonical}</p><details`), "Canonical feedback appears after every grading result.");
+      assert(html.includes('<details class="source-details"><summary>Source explanation</summary>'), "The source explanation remains available in its drawer.");
+      await controller.loadReview(); await controller.refreshDay();
+      assert(controller.renderReview().includes(submitted), "Submitted answers and canonical feedback survive navigation and automatic refresh.");
     }
   } finally {
     if (originalForm) Object.defineProperty(globalThis, "HTMLFormElement", originalForm); else Reflect.deleteProperty(globalThis, "HTMLFormElement");

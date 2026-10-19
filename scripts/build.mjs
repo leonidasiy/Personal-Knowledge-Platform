@@ -16,10 +16,10 @@ export const ARTIFACT_BUDGETS = Object.freeze({
   }),
   aggregateJavascript: Object.freeze({
     label: "Aggregate JavaScript",
-    // Measured Read controls / refresh / quiz deletion allowance approved 2026-10-19.
+    // Measured submitted-answer and canonical feedback allowance, 2026-10-19.
     // Initial and lazy-chunk limits remain unchanged.
-    rawBytes: 234_523,
-    gzipBytes: 77_709,
+    rawBytes: 234_713,
+    gzipBytes: 77_770,
   }),
   stylesheet: Object.freeze({
     label: "CSS",

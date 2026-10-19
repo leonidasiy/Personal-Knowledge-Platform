@@ -70,7 +70,6 @@ export function createLearnerController(dependencies) {
 
   async function refreshDay() {
     if (pending.size > 0 || feed.state === "loading" || review.state === "loading" || (feedDay === day() && reviewDay === day())) return;
-    attempts.clear();
     await Promise.all([loadFeed(), loadReview()]);
   }
 
@@ -233,6 +232,7 @@ export function createLearnerController(dependencies) {
     if (result.ok && review.value) {
       review = { ...review, value: { ...review.value, questions: review.value.questions.filter(item => item.questionId !== questionId), skipped: review.value.skipped.filter(item => item.questionId !== questionId), dueCount: Math.max(0, review.value.dueCount - (answers.get(questionId)?.skipped ? 1 : 0)) } };
       answers.delete(questionId);
+      attempts.delete(questionId);
       questionErrors.delete(questionId);
       onChange(undefined, null, "review-title");
       onChange("Quiz deleted. Other quiz types and the knowledge card are kept.");
@@ -244,7 +244,7 @@ export function createLearnerController(dependencies) {
 
   /** @param {string} questionId @param {{correct:boolean,score:number,completed:boolean,feedback:{explanation:string,correctAnswer:string}}} result @param {boolean} [skipped] */
   function showFeedback(questionId, result, skipped = false) {
-    attempts.delete(questionId);
+    if (skipped) attempts.delete(questionId);
     if (result.correct) celebrations.add(`review-feedback:${questionId}`);
     answers.set(questionId, { correct: result.correct, score: result.score, ...result.feedback, skipped });
     if (review.value !== null) review = { state: "success", value: { ...review.value, batch: result.completed && review.value.batch ? { ...review.value.batch, status: "completed", completedAt: now() } : review.value.batch, dueCount: Math.max(0, review.value.dueCount - (skipped ? 0 : 1)) }, error: null };
@@ -385,9 +385,10 @@ export function createLearnerController(dependencies) {
     const body = answer === undefined && !completed
       ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${busy ? 'aria-busy="true"' : ""}>${busy ? input.replaceAll("<input ", "<input disabled ") : input}<p data-answer-prompt role="alert" hidden>${question.kind === "fill-blank" ? "Fill in every blank before checking." : "Choose an answer before checking."}</p><button class="button primary" ${actionState(actionKey)} type="submit" ${busy ? "disabled" : ""}>${actionLabel(actionKey, "Check answer", "Checking…")}</button><button class="button quiet" type="button" data-action="skip-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(skipKey)} ${busy ? "disabled" : ""}>${actionLabel(skipKey, "Skip", "Loading…")}</button></form>`
       : `<p class="answer-feedback ${answer === undefined || answer.skipped ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="${escapeHtml(feedbackKey)}" ${celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : ""}>${answer?.correct ? sparkIcon() : ""}${answer === undefined ? "Answered." : answer.skipped ? "Skipped." : answer.correct ? question.kind === "fill-blank" ? `Correct (${Math.round(answer.score * 100)}%).` : "Correct." : answer.score > 0 ? `Partly correct (${Math.floor(answer.score * 100)}%).` : "Not quite."}</p>`;
-    const feedback = answer === undefined || answer.correct ? "" : feedMarkup(27, escapeHtml(answer.correctAnswer), escapeHtml(answer.explanation), escapeHtml(question.sourceAnchorIds.join(", ")));
+    const submitted = answer && !answer.skipped && attempt && question.kind === "fill-blank" ? `<p><strong>Your answer:</strong> ${escapeHtml(question.blanks === null ? attempt.answerText : question.blanks.map(blank => attempt.blanks[blank.id]).join(", "))}</p>` : "";
+    const feedback = answer === undefined || answer.correct && question.kind !== "fill-blank" ? "" : feedMarkup(27, escapeHtml(answer.correctAnswer), escapeHtml(answer.explanation), escapeHtml(question.sourceAnchorIds.join(", ")));
     const removal = answer === undefined && !completed ? "" : `<button class="button quiet" type="button" data-action="remove-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(removeKey)} ${busy ? "disabled" : ""}>${actionLabel(removeKey, "Delete quiz", "Deleting…")}</button>`;
-    return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback + removal);
+    return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body + submitted + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback + removal);
   }
 
   /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */
