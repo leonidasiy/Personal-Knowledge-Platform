@@ -1,0 +1,79 @@
+Resonance Personal Use License 1.0
+
+Copyright (c) 2026 leonidasiy. All rights reserved except as granted below.
+
+1. Scope
+
+This license applies to the original software, documentation, and assets in
+Personal-Knowledge-Platform / Resonance for which leonidasiy (the Licensor)
+holds copyright (the Software). It does not replace third-party licenses.
+
+2. Permission for personal use
+
+Subject to these terms, the Licensor grants you, as an individual, a limited,
+worldwide, royalty-free, nonexclusive, nontransferable license to download,
+copy, install, run, and privately modify the Software solely for your own
+personal, noncommercial use. You may keep private backups and self-host your
+own instance on your own devices or with a hosting provider acting solely
+on your behalf. Access must remain limited to you. Paying an independent
+hosting provider or API provider to operate your personal instance does not,
+by itself, make your use commercial.
+
+3. Restrictions
+
+Unless the Licensor gives you separate written permission, you may not:
+
+a. Use the Software or a modified version for commercial, business,
+   professional, revenue-generating, or other profit-seeking purposes,
+   including internal business operations, paid services, consulting,
+   advertising-supported services, or monetized products.
+b. Sell, rent, sublicense, redistribute, publish, or otherwise make copies
+   of the Software or modified versions available to others; offer hosted
+   access to others; or incorporate the Software into a distributed product
+   or service. This applies whether changes are minor or substantial and
+   whether or not you charge a fee.
+c. Remove or alter copyright, license, or attribution notices, claim the
+   Licensor's work as your own, or imply the Licensor's endorsement.
+
+4. Ownership and reserved rights
+
+The Licensor retains ownership of the original Software and reserves all
+rights not expressly granted here, including the right to use, distribute,
+license, and commercialize the Licensor's own work under different terms.
+This license does not transfer ownership of your independently authored
+changes or your personal data to the Licensor. Ownership of your changes
+does not grant permission to distribute the underlying Software or a
+modified version contrary to section 3.
+
+5. Third-party materials and other rights
+
+Dependencies, vendored code, fonts, external source content, and other
+third-party materials remain subject to their own licenses and notices.
+The permissions and restrictions above apply only to the Licensor's rights
+in the Software. They neither restrict rights separately granted by those
+third parties nor grant rights the Licensor does not hold.
+
+Nothing here limits rights or exceptions that applicable law gives you,
+or rights separately granted under the applicable hosting platform's terms,
+including GitHub's terms for viewing and forking public repositories. Such
+platform permissions do not constitute a separate grant by the Licensor
+of commercial-use or independent republication rights under this license.
+
+6. Termination
+
+Your permissions under this license terminate if you breach its terms.
+After termination, you must stop using the Software and remove copies and
+modified versions under your control, except copies you must retain by law.
+The Licensor may separately reinstate permission in writing.
+
+7. Disclaimer
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED "AS IS",
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+THE LICENSOR IS NOT LIABLE FOR CLAIMS, DAMAGES, OR OTHER LIABILITY ARISING
+FROM THE SOFTWARE OR ITS USE. NOTHING HERE EXCLUDES LIABILITY THAT CANNOT
+LAWFULLY BE EXCLUDED.
+
+This is a custom source-available license, not an open-source license or a
+standard license template supplied or endorsed by GitHub.

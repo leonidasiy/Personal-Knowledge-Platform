@@ -67,13 +67,13 @@ Deno.test("progress response validates ratios, real dates and recovery counts", 
   assert(deduped.ok && deduped.value.attempts.count === 1, "property order is not new evidence");
 });
 
-Deno.test("progress charts keep data gaps and escape labels; malformed JSON is named", async () => {
+Deno.test("progress charts connect review days and escape labels; malformed JSON is named", async () => {
   const result = buildProgress(input({ attempts: [attempt, { ...attempt, batchId: "earlier", answeredAt: "2026-09-17T12:00:00Z" }] }));
   if (!result.ok) throw new Error("fixture invalid");
   const summary = { ...result.value, subjects: result.value.subjects.map(r => ({ ...r, label: "<img src=x onerror=alert(1)>" })) };
   const page = createProgressPage({ fetch: async () => new Response(JSON.stringify({ result: summary })), baseUrl: "https://example.test/", escapeHtml: value => value.replaceAll("<", "&lt;"), onChange: () => {} });
   await page.load(); const html = page.render();
-  assert(!html.includes("<line "), "separated single observations are not connected");
+  assert((html.match(/<line /g) ?? []).length === 1, "separated observations are connected across days without attempts");
   assert(html.includes("<circle") && !html.includes("<img"), "dots and escaped labels");
   const invalid = createProgressPage({ fetch: async () => new Response("{"), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
   await invalid.load(); assert(invalid.render().includes("Progress data could not be read"), "JSON parse error is malformed data");
@@ -90,6 +90,28 @@ Deno.test("primary subjects rank library knowledge counts, cap at five and never
   for (const bad of [null, [{ id: "music", count: -1 }], [{ id: "music", count: 1.5 }], [{ id: "invented", count: 1 }], [{ id: "music", count: 1 }, { id: "music", count: 2 }]]) assert(!buildProgress(input({ subjectCounts: bad })).ok, "invalid knowledge counts rejected");
 });
 
+Deno.test("daily accuracy labels every date with readable spacing and connects only recorded scores across periods", async () => {
+  for (const days of [7, 30, 90]) {
+    const result = buildProgress(input({ days, now: "2026-01-04T12:00:00Z", attempts: [
+      { ...attempt, answeredAt: "2025-12-29T12:00:00Z" },
+      { ...attempt, batchId: "zero", answeredAt: "2026-01-02T12:00:00Z", correct: false, score: 0 },
+      { ...attempt, batchId: "last", answeredAt: "2026-01-04T12:00:00Z" },
+    ] }));
+    if (!result.ok) throw new Error("fixture invalid");
+    const page = createProgressPage({ fetch: async () => Response.json({ result: result.value }), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
+    await page.load(); const html = page.render();
+    const chart = html.slice(html.indexOf('<svg height="220"'), html.indexOf("</svg>") + 6);
+    const labels = [...chart.matchAll(/<text x="([^"]+)%" y="155" style="transform-origin:[^"]+;rotate:-60deg">(\d{4}-\d{2}-\d{2})<\/text>/g)];
+    assert(labels.map(label => label[2]).join() === result.value.daily.map(row => row.date).join(), "every calendar date, including missing scores and year boundaries, is labelled and tilted");
+    const width = Number(chart.match(/min-width:(\d+)px/)?.[1]);
+    for (let i = 1; i < labels.length; i++) assert((Number(labels[i][1]) - Number(labels[i-1][1])) * width / 100 > 31, "minimum 32px day spacing is retained for horizontal scrolling");
+    assert((chart.match(/data-chart-value=/g) ?? []).length === 3 && chart.includes('data-chart-value="0%"'), "missing days never become scores; genuine zero remains a point");
+    const lines = [...chart.matchAll(/<line x1="([^"]+)" y1="([^"]+)" x2="([^"]+)" y2="([^"]+)"/g)];
+    assert(lines.length === 2 && lines[0][3] === lines[1][1] && lines[0][4] === "135" && lines[1][2] === "135", "one connected line passes through the zero score with calendar spacing preserved");
+    assert(Number(lines[0][3].slice(0,-1)) - Number(lines[0][1].slice(0,-1)) > Number(lines[1][3].slice(0,-1)) - Number(lines[1][1].slice(0,-1)), "four-day gap is wider than two-day gap");
+  }
+});
+
 Deno.test("Progress has only interactive daily and subject accuracy charts plus activity without tables or recovery", async () => {
   const result = buildProgress(input({ attempts: [attempt, { ...attempt, batchId: "wrong", correct: false, score: 0 }] })); if (!result.ok) throw new Error("fixture invalid");
   const page = createProgressPage({ fetch: async () => Response.json({ result: result.value }), baseUrl: "https://example.test/", escapeHtml: value => value, onChange: () => {} });
@@ -104,7 +126,7 @@ Deno.test("Progress has only interactive daily and subject accuracy charts plus 
   assert(html.includes('aria-label="2026-09-19: 50%"') && html.includes('aria-label="2026-09-19: 5 cards · 2 quizzes"'), "dates remain available to screen readers");
   assert(html.includes('y="210" text-anchor="middle">09-14</text>') && html.includes('>Mon</text>') && html.includes('>Sun</text>'), "calendar exposes week dates and weekday axes");
   for (const redundant of ["correct answers", "scored attempts", "One per question", "Stronger shading", "Answer accuracy by day", "Accuracy for the selected period"]) assert(!html.includes(redundant), `${redundant} is omitted`);
-  assert(html.includes("Top 5 by knowledge points.") && html.includes("Gaps mean no review attempts."), "only non-obvious chart notes remain");
+  assert(html.includes("Top 5 by knowledge points.") && !html.includes("Gaps mean no review attempts."), "subject ranking note remains; obsolete disconnected-line note is removed");
   assert((html.match(/role="tooltip" hidden/g) ?? []).length === 3, "data readouts start hidden");
   assert(html.includes('tabindex="0" role="img"'), "chart data is keyboard and screen-reader accessible");
 });

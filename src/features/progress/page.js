@@ -86,17 +86,19 @@ function chart(e, title, rows, kind) {
     plot = `<div class="progress-plot"><svg height="214" style="min-width:${columns*58+40}px" aria-label="${e(title)} chart">${marks}</svg></div>`;
   } else {
     if (!rows.some(r => r.count > 0)) return progressMarkup(5, e(title), progressMarkup(6));
-    const x = (/** @type {number} */ i) => `${10+i*85/Math.max(1,rows.length-1)}%`, y = (/** @type {number} */ n) => 135-n*120;
+    const x = (/** @type {number} */ i) => `${(i+2)/(rows.length+3)*100}%`, y = (/** @type {number} */ n) => 135-n*120;
+    marks = rows.map((r,i) => `<text x="${x(i)}" y="155" style="transform-origin:${x(i)} 155px;rotate:-60deg">${e(r.date)}</text>`).join("");
+    let previous;
     for (let i=0;i<rows.length;i++) {
-      const r=rows[i], previous=rows[i-1];
+      const r=rows[i];
       if (r.accuracy === null) continue;
-      if (previous?.accuracy != null) marks += `<line x1="${x(i-1)}" y1="${y(previous.accuracy)}" x2="${x(i)}" y2="${y(r.accuracy)}" stroke="currentColor" stroke-width="2" pointer-events="none"/>`;
+      if (previous != null) marks += `<line x1="${x(previous)}" y1="${y(rows[previous].accuracy)}" x2="${x(i)}" y2="${y(r.accuracy)}" stroke="currentColor" stroke-width="2" pointer-events="none"/>`;
       const value = percent(r.accuracy);
-      marks += `<g ${point(value, `${r.date}: ${value}`)}><circle cx="${x(i)}" cy="${y(r.accuracy)}" r="12" fill="transparent"/><circle cx="${x(i)}" cy="${y(r.accuracy)}" r="4" fill="currentColor"/></g>`;
+      marks += `<g ${point(value, `${r.date}: ${value}`)}><circle cx="${x(i)}" cy="${y(r.accuracy)}" r="12" opacity="0"/><circle cx="${x(i)}" cy="${y(r.accuracy)}" r="4"/></g>`;
+      previous = i;
     }
-    marks += `<g font-size="11" fill="currentColor"><text x="0" y="20">100%</text><text x="12" y="137">0%</text><text x="10%" y="160">${e(rows[0]?.date ?? "")}</text><text x="95%" y="160" text-anchor="end">${e(rows.at(-1)?.date ?? "")}</text></g>`;
-    plot = `<div class="progress-plot"><svg height="170" style="min-width:${rows.length*28}px" aria-label="${e(title)} chart">${marks}</svg></div>`;
-    caption = "Gaps mean no review attempts.";
+    marks += '<text x="36" y="20">100%</text><text x="36" y="137">0%</text>';
+    plot = `<div class="progress-plot"><svg height="220" font-size="11" fill="currentColor" text-anchor="end" style="min-width:${(rows.length+3)*32}px" aria-label="${e(title)} chart">${marks}</svg></div>`;
   }
   return `<section class="progress-chart" data-progress-chart><h2>${e(title)}</h2>${plot}${caption ? `<p>${e(caption)}</p>` : ""}<div class="progress-tooltip" role="tooltip" hidden></div></section>`;
 }

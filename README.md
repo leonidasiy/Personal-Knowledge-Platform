@@ -5,6 +5,22 @@ source-linked knowledge cards and retrieval-practice quizzes. Music is its first
 subject; extraction now uses a fixed 22-subject taxonomy with source-specific
 subcategories. Fieldnotes is the light theme and Observatory the dark theme.
 
+## License
+
+Original project code and documentation use the custom
+[Resonance Personal Use License](LICENSE). Individuals may install, self-host,
+and modify it privately for their own noncommercial use. Commercial or business
+use, hosted access for others, and republication of original or modified copies
+require the copyright owner's separate written permission. Commercial rights
+to the owner's original work are reserved. This is source-available software,
+not open source or a standard GitHub license template.
+
+Third-party materials retain their own terms, including the licenses in
+[`vendor/ts-fsrs`](vendor/ts-fsrs/LICENSE), [`vendor/yaml`](vendor/yaml/LICENSE),
+and [`assets/fonts`](assets/fonts/LICENSE.txt). The Open Music Theory walkthrough
+content retains its attribution and CC BY-SA 4.0 terms recorded in
+[`local/walkthrough-content.json`](local/walkthrough-content.json).
+
 ## Set up your own copy on computer and phone
 
 Start with [SETUP.md](SETUP.md) to compare two complete setups:
