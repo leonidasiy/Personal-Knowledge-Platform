@@ -227,6 +227,37 @@ Deno.test("Feed completion is not triggered by an intersection observer", async 
   assert(source.includes("data-action='complete-learner-feed'"), "Feed must retain its explicit completion action.");
 });
 
+Deno.test("Feed completion and manual Feed/Review refresh reset the view only after success", async () => {
+  const feed = { batch: { ...review.batch, batchId: "feed:scroll", itemIds: ["knowledge-1"] }, items: [{ knowledgeId: "knowledge-1", sourceId: "source-1", sourceRevision: 1, sourceClassification: null, sourceClassificationRevision: 0, questionId: "question-1", title: "Source", summary: "Read this knowledge.", sourceUrl: "https://example.test/source", evidenceAnchorIds: ["page:1"], media: null, questionLocked: true }] };
+  for (const action of ["refresh-learner-feed", "complete-learner-feed", "refresh-learner-review", "retry-learner-feed", "retry-learner-review"]) {
+    for (const success of [true, false]) {
+      /** @type {string[]} */ const refreshed = [];
+      /** @type {() => void} */ let click = () => {};
+      /** @type {(value: Response) => void} */ let settle = () => {};
+      let activated = false;
+      const controller = createLearnerController({
+        fetch: async (input, init) => {
+          if (init?.method === "POST" || activated && action.startsWith("retry-")) return await new Promise(resolve => { settle = resolve; });
+          return response({ result: String(input).includes("review-batch") ? review : feed });
+        },
+        baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value,
+        now: () => "2026-09-01T12:00:00.000Z", createId: () => "scroll",
+        onChange: (_notice, _focus, _heading, view) => { if (view) refreshed.push(view); },
+      });
+      await Promise.all([controller.loadFeed(), controller.loadReview()]);
+      assert(controller.renderFeed().includes('data-read-knowledge="knowledge-1"') && controller.renderFeed().includes('data-reading-status role="status"'), "Knowledge cards offer a native Read button and speech status.");
+      controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: (/** @type {string} */ selector) => selector === `[data-action='${action}']` ? { addEventListener: (/** @type {string} */ _event, /** @type {() => void} */ listener) => { click = listener; } } : null, querySelectorAll: () => [] })));
+      activated = true;
+      click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      assert(refreshed.length === 0, "Pending refresh keeps the current position.");
+      settle(success ? response({ result: action === "complete-learner-feed" ? { completed: true } : action.endsWith("review") ? review : feed }) : new Response("Unavailable", { status: 503 }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      assert(refreshed.join() === (success ? action.endsWith("review") ? "review" : "feed" : ""), "Only a successful replacement asks the active page to return to the top.");
+    }
+  }
+});
+
 Deno.test("Empty Feed and Review offer artwork and a next action without invented learning content", async () => {
   const controller = createLearnerController({ fetch: async () => response({ result: { batch: null, items: [], questions: [], dueCount: 0 } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-10-14T00:00:00.000Z", createId: () => "empty", onChange: () => {} });
   await controller.loadFeed();

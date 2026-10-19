@@ -288,3 +288,25 @@ Deno.test("existing-Library replay route injects the Access owner and exposes bl
   assertEquals(Array.isArray(body.result.blockedSources), true);
   assertEquals("configDigests" in body.result, false);
 });
+
+Deno.test("Delete quiz route authenticates, injects its owner and propagates rejected or unavailable commands", async () => {
+  /** @type {unknown[]} */ const seen = [];
+  /** @returns {Promise<{ok:false,error:{kind:string}}>} */
+  const unavailable = async () => ({ ok: false, error: { kind: "LearningBatchUnavailable" } });
+  /** @type {NonNullable<Parameters<typeof createDiscoveryWorker>[1]["learningBatches"]>} */
+  const batches = { loadFeed: unavailable, loadReview: unavailable, completeFeed: unavailable, answerReview: unavailable, setPreference: unavailable, removeKnowledge: unavailable,
+    removeReview: async (/** @type {unknown} */ command) => { seen.push(command); return { ok: false, error: { kind: "ReviewRemovalNotAllowed" } }; },
+  };
+  const app = worker({ learningBatches: batches }), path = "/api/learning-generation/review-batch/remove";
+  const command = { batchId: "review:a", questionId: "q", questionRevision: 1, idempotencyKey: "remove" };
+  assertEquals((await app.fetch(request(path, { method: "GET" }))).status, 405);
+  assertEquals((await app.fetch(request(path, { body: { ...command, ownerId: "other" } }))).status, 400);
+  assertEquals(seen.length, 0);
+  assertEquals((await app.fetch(request(path, { body: command }))).status, 409);
+  assertEquals(JSON.stringify(seen[0]), JSON.stringify({ ...command, ownerId: "owner-a" }));
+  const denied = worker({ learningBatches: batches, authenticate: async () => ({ ok: false, error: { kind: "DiscoveryAccessTokenMissing" } }) });
+  assertEquals((await denied.fetch(request(path, { body: command }))).status, 401);
+  assertEquals(seen.length, 1);
+  const missing = { ...batches, removeReview: undefined };
+  assertEquals((await worker({ learningBatches: missing }).fetch(request(path, { body: command }))).status, 503);
+});

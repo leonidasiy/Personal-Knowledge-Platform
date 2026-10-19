@@ -221,3 +221,14 @@ Deno.test("learner gateway keeps Skip separate from answers and validates reveal
   const foreign = new LearningBatchGatewayClient({ fetch: async () => response({ result: { ...review, skipped: [{ ...skip, questionId: "foreign" }] } }), baseUrl: "https://app.example.test/", timeoutMs: 1000 });
   assertEquals((await foreign.loadReview("2026-08-19")).ok, false);
 });
+
+Deno.test("Delete quiz validates the exact question acknowledgement", async () => {
+  for (const [result, expected] of [[{ batchId: "review:a", questionId: "q1", removed: true }, true], [{ batchId: "review:b", questionId: "q1", removed: true }, false], [{ batchId: "review:a", questionId: "q2", removed: true }, false], [{ batchId: "review:a", questionId: "q1", removed: false }, false]]) {
+    const gateway = new LearningBatchGatewayClient({ fetch: async (input, init) => {
+      assertEquals(String(input).endsWith("/review-batch/remove"), true);
+      assertEquals(JSON.stringify(JSON.parse(String(init?.body))), JSON.stringify({ batchId: "review:a", questionId: "q1", questionRevision: 1, idempotencyKey: "remove:q1" }));
+      return response({ result });
+    }, baseUrl: "https://app.example.test/", timeoutMs: 1000 });
+    assertEquals((await gateway.removeReview("review:a", "q1", 1, "remove:q1")).ok, expected);
+  }
+});

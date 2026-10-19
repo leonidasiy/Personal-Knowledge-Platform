@@ -91,7 +91,9 @@ test('Review refresh replaces an unfinished batch and preserves saved answers, s
   const f = fixture();
   try {
     await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
-    const initial = f.value(await f.service.loadReview('owner', f.day()));
+    let initial = f.value(await f.service.loadReview('owner', f.day()));
+    f.db.prepare('UPDATE learner_review_batches SET batch_id = ? WHERE batch_id = ?').run('zzzz-old-batch', initial.batch.batchId);
+    initial = { ...initial, batch: { ...initial.batch, batchId: 'zzzz-old-batch' } };
     f.value(await f.answer(initial.batch, initial.questions[0]));
     f.value(await f.skip(initial.batch, initial.questions[1]));
     const answers = f.db.prepare('SELECT * FROM learner_review_answers').all();
@@ -361,4 +363,51 @@ test('concurrent Skip requests for one card persist only one skip event', async 
     assert.equal(f.db.prepare("SELECT COUNT(*) n FROM learner_batch_commands WHERE command_kind = 'review-skip'").get().n, 1);
     assert.equal(f.db.prepare('SELECT COUNT(*) n FROM learner_review_answers').get().n, 0);
   } finally { f.db.close(); }
+});
+
+test('Delete quiz requires an answer or skip and preserves the other quiz type, knowledge and history', async () => {
+  for (const kind of ['choice', 'fill']) for (const action of ['answer', 'skip']) {
+    const f = fixture(5);
+    try {
+      await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+      const initial = f.value(await f.service.loadReview('owner', f.day()));
+      const ids = ['task-0:choice', 'task-0:fill'];
+      f.db.prepare('UPDATE learner_review_batches SET question_ids_json = ? WHERE batch_id = ?').run(JSON.stringify(ids), initial.batch.batchId);
+      const review = f.value(await f.service.loadReview('owner', f.day()));
+      const question = review.questions.find(q => q.questionId === `task-0:${kind}`);
+      const sibling = review.questions.find(q => q.questionId !== question.questionId);
+      const command = { ownerId: 'owner', batchId: review.batch.batchId, questionId: question.questionId, questionRevision: question.revision, idempotencyKey: `remove:${kind}:${action}` };
+      assert.equal((await f.service.removeReview(command)).error.kind, 'ReviewRemovalNotAllowed');
+      f.value(await f[action](review.batch, question));
+      assert.equal((await f.service.removeReview({ ...command, ownerId: 'foreign' })).ok, false);
+      assert.equal((await f.service.removeReview({ ...command, questionRevision: 999 })).ok, false);
+      assert.equal((await f.service.removeReview({ ...command, batchId: 'foreign' })).ok, false);
+      assert.equal((await f.service.removeReview({ ...command, questionId: sibling.questionId })).ok, false);
+      const history = f.db.prepare('SELECT * FROM learner_review_answers').all();
+      const schedules = f.db.prepare('SELECT * FROM learner_question_state ORDER BY question_id').all();
+      const tasks = f.db.prepare('SELECT task_json FROM learning_generation_tasks ORDER BY task_id').all();
+      const progress = f.value(await f.service.loadProgress('owner', 7, null));
+      const removed = f.value(await f.service.removeReview(command));
+      assert.equal(removed.removed, true);
+      assert.deepEqual(f.value(await f.service.removeReview(command)), removed, 'Retries replay the same deletion');
+      const reloaded = f.value(await f.service.loadReview('owner', f.day()));
+      assert.equal(reloaded.batch.batchId, review.batch.batchId, 'Deleting one quiz keeps the current batch');
+      assert.deepEqual(reloaded.questions.map(q => q.questionId), [sibling.questionId]);
+      assert.deepEqual(reloaded.skipped, [], 'Removed skip feedback cannot leak into the public projection');
+      assert.deepEqual(f.db.prepare('SELECT * FROM learner_review_answers').all(), history);
+      assert.deepEqual(f.db.prepare('SELECT * FROM learner_question_state ORDER BY question_id').all(), schedules);
+      assert.deepEqual(f.db.prepare('SELECT task_json FROM learning_generation_tasks ORDER BY task_id').all(), tasks);
+      assert.deepEqual(f.value(await f.service.loadProgress('owner', 7, null)), progress);
+      assert.equal(f.value(await f.service.listKnowledge('owner')).items.length, 5);
+      f.db.prepare('UPDATE learner_knowledge_state SET studied_at = NULL WHERE knowledge_id != ?').run(question.knowledgeId);
+      f.setClock('2026-10-25T00:00:00.000Z');
+      const next = f.value(await f.service.loadReview('owner', f.day(), true));
+      assert.deepEqual(next.questions.map(q => q.questionId), [sibling.questionId], 'Only the remaining type returns in future batches');
+      f.value(await f.skip(next.batch, next.questions[0]));
+      f.value(await f.service.removeReview({ ...command, batchId: next.batch.batchId, questionId: sibling.questionId, idempotencyKey: 'remove-last' }));
+      const empty = f.value(await f.service.loadReview('owner', f.day()));
+      assert.equal(empty.batch, null, 'Deleting the last quiz returns a valid empty projection');
+      assert.deepEqual(empty.questions, []);
+    } finally { f.db.close(); }
+  }
 });

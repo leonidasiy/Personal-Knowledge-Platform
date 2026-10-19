@@ -113,3 +113,41 @@ Deno.test("successful grading renders before a slow progress request completes",
   assert(renderedFeedback && controller.renderReview().includes("Correct answer:</strong> tonic"), "Grading feedback must not wait for daily progress.");
   settle(Response.json({ result: progress.value })); await tick();
 }));
+
+Deno.test("Delete quiz appears only after an answer or skip, retries failures and keeps the sibling", async () => await withForms(async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement");
+  class Button {
+    constructor() { this.dataset = { questionId: "fill" }; }
+    /** @type {()=>void} */ click = () => {};
+    /** @param {string} _type @param {()=>void} callback */ addEventListener(_type, callback) { this.click = callback; }
+  }
+  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: Button });
+  try {
+    for (const action of ["answer", "skip"]) {
+      let fail = true, calls = 0;
+      const controller = createLearnerController({
+        fetch: async (input, init) => {
+          const path = String(input);
+          if (path.endsWith("/remove")) { calls++; return fail ? Response.json({ error: "LearningBatchPersistenceFailed" }, { status: 503 }) : Response.json({ result: { batchId: batch.batchId, questionId: JSON.parse(String(init?.body)).questionId, removed: true } }); }
+          if (path.endsWith("/answer")) return Response.json({ result: grade });
+          if (path.endsWith("/skip")) return Response.json({ result: { ...grade, batchId: batch.batchId, questionId: "fill", questionRevision: 1, skipped: true, skippedAt: batch.createdAt } });
+          return Response.json({ result: projection });
+        }, baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value,
+        now: () => batch.createdAt, createId: () => "fixture", onChange() {},
+      });
+      await controller.loadReview();
+      assert(!controller.renderReview().includes('data-action="remove-review"'), "No deletion before attempting.");
+      const form = new Form("fill"), skip = new Button(), remove = new Button();
+      controller.bind(/** @type {HTMLElement} */ (/** @type {unknown} */ ({ querySelector: () => null, querySelectorAll: (/** @type {string} */ selector) => selector === "[data-learner-review]" ? [form] : selector === "[data-action='skip-review']" ? [skip] : selector === "[data-action='remove-review']" ? [remove] : [] })));
+      remove.click(); await tick(); assert(calls === 0, "Controller also rejects an unattempted deletion.");
+      if (action === "answer") form.send(); else skip.click();
+      await tick();
+      assert(controller.renderReview().includes('data-action="remove-review"'), `${action} unlocks deletion.`);
+      remove.click(); remove.click(); await tick();
+      assert(calls === 1 && controller.renderReview().includes('data-review-question="fill"') && controller.renderReview().includes('role="alert"'), "One pending request; failure retains the quiz and shows an error.");
+      fail = false; remove.click(); await tick();
+      const html = controller.renderReview();
+      assert(!html.includes('data-review-question="fill"') && html.includes('data-review-question="choice"'), "Only the selected quiz disappears.");
+    }
+  } finally { if (original) Object.defineProperty(globalThis, "HTMLElement", original); else Reflect.deleteProperty(globalThis, "HTMLElement"); }
+}));

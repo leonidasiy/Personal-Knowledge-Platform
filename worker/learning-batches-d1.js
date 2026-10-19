@@ -178,7 +178,7 @@ export function createLearningBatchService(dependencies) {
   /** @param {string} ownerId @returns {Promise<Result<BatchRow | null>>} */
   async function feedRow(ownerId) {
     try {
-      const row = await database.prepare("SELECT batch_id, learning_day, status, item_ids_json, revision, created_at, completed_at FROM learner_feed_batches WHERE owner_id = ? ORDER BY created_at DESC, batch_id DESC LIMIT 1").bind(ownerId).first();
+      const row = await database.prepare("SELECT batch_id, learning_day, status, item_ids_json, revision, created_at, completed_at FROM learner_feed_batches WHERE owner_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").bind(ownerId).first();
       return { ok: true, value: row === null ? null : parseBatch(row, true) };
     } catch (error) {
       dependencies.logger({ event: "learning-feed-row-failure", ownerId, failureKind: "LearningBatchPersistenceFailed" });
@@ -189,7 +189,7 @@ export function createLearningBatchService(dependencies) {
   /** @param {string} ownerId @returns {Promise<Result<BatchRow | null>>} */
   async function reviewRow(ownerId) {
     try {
-      const row = await database.prepare("SELECT batch_id, learning_day, status, question_ids_json AS item_ids_json, revision, created_at, completed_at FROM learner_review_batches WHERE owner_id = ? ORDER BY created_at DESC, batch_id DESC LIMIT 1").bind(ownerId).first();
+      const row = await database.prepare("SELECT batch_id, learning_day, status, question_ids_json AS item_ids_json, revision, created_at, completed_at FROM learner_review_batches WHERE owner_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").bind(ownerId).first();
       if (row === null) return { ok: true, value: null };
       const parsed = parseBatch(row, true);
       if (parsed === null) return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
@@ -396,12 +396,23 @@ export function createLearningBatchService(dependencies) {
     if (!knowledge.ok) return knowledge;
     const all = await reviewCandidates(ownerId, knowledge.value);
     if (!all.ok) return all;
+    let removed;
+    try {
+      const rows = await database.prepare("SELECT json_extract(result_json, '$.questionId') AS question_id FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-remove'").bind(ownerId).all();
+      if (!rows.success || rows.results.some(row => !record(row) || !text(row.question_id))) throw new Error("Removed quizzes unavailable");
+      removed = new Set(rows.results.map(row => /** @type {{question_id:string}} */ (row).question_id));
+    } catch {
+      dependencies.logger({ event: "learning-review-removals-failure", ownerId, failureKind: "LearningBatchPersistenceFailed" });
+      return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+    }
+    const available = all.value.filter(candidate => !removed.has(candidate.questionId));
     const current = await reviewRow(ownerId);
     if (!current.ok) return current;
     if (!force && current.value !== null && current.value.learningDay === day && current.value.itemIds.every(id => all.value.some(candidate => candidate.questionId === id))) {
-      return hydrateReview(ownerId, current.value, all.value);
+      const itemIds = current.value.itemIds.filter(id => !removed.has(id));
+      if (itemIds.length) return hydrateReview(ownerId, { ...current.value, itemIds }, available);
     }
-    const due = all.value.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now()));
+    const due = available.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now()));
     if (due.length < 1) return { ok: true, value: Object.freeze({ batch: null, questions: Object.freeze([]), dueCount: 0 }) };
     const selection = selectKnowledgeBatch(due.map((candidate) => ({ knowledgeId: candidate.questionId, sourceId: candidate.sourceId, questionId: candidate.questionId, viewCount: candidate.viewCount, lastAnswerCorrect: candidate.lastAnswerCorrect, scheduledDays: candidate.scheduledDays, preference: candidate.preference })), { count: Math.min(MAX_BATCH_SIZE, due.length), random, now: dependencies.now() });
     if (!selection.ok) return selection;
@@ -444,7 +455,35 @@ export function createLearningBatchService(dependencies) {
         return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
       }
     }
-    return { ok: true, value: Object.freeze({ batch, skipped: Object.freeze([...skipped.values()]), questions: Object.freeze(await Promise.all(selected.filter(candidate => !answeredIds.has(candidate.questionId)).map(candidate => publicQuestion(candidate, batch.batchId)))), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
+    return { ok: true, value: Object.freeze({ batch, skipped: Object.freeze([...skipped.values()].filter(item => batch.itemIds.includes(item.questionId))), questions: Object.freeze(await Promise.all(selected.filter(candidate => !answeredIds.has(candidate.questionId)).map(candidate => publicQuestion(candidate, batch.batchId)))), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
+  }
+
+  /** @param {unknown} command @returns {Promise<Result<unknown>>} */
+  async function removeReview(command) {
+    if (!record(command) || !text(command.ownerId) || !text(command.batchId) || !text(command.questionId) || !positiveInteger(command.questionRevision) || !text(command.idempotencyKey)) return { ok: false, error: { kind: "ReviewRemovalNotAllowed" } };
+    try {
+      const replay = await commandResult(command.ownerId, command.idempotencyKey);
+      if (!replay.ok) return replay;
+      if (replay.value !== null) {
+        const saved = replay.value.value;
+        return record(saved) && saved.removed === true && saved.batchId === command.batchId && saved.questionId === command.questionId ? replay.value : { ok: false, error: { kind: "ReviewRemovalNotAllowed" } };
+      }
+      const knowledge = await candidates(command.ownerId, dependencies.now());
+      if (!knowledge.ok) return knowledge;
+      const question = separateQuestions(knowledge.value).find(item => item.questionId === command.questionId);
+      if (!question || question.question.revision !== command.questionRevision) return { ok: false, error: { kind: "ReviewRemovalNotAllowed" } };
+      const now = dependencies.now();
+      if (!iso(now)) return { ok: false, error: { kind: "LearningBatchClockInvalid" } };
+      const result = { batchId: command.batchId, questionId: command.questionId, removed: true };
+      // Keep retrieval history and the paired task; suppress only this question ID.
+      const written = await database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) SELECT ?, ?, 'review-remove', ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? AND EXISTS (SELECT 1 FROM json_each(question_ids_json) WHERE value = ?)) AND (EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?) OR EXISTS (SELECT 1 FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-skip' AND json_extract(result_json, '$.batchId') = ? AND json_extract(result_json, '$.questionId') = ?))").bind(command.ownerId, command.idempotencyKey, JSON.stringify(result), now, command.ownerId, command.batchId, command.questionId, command.ownerId, command.batchId, command.questionId, command.ownerId, command.batchId, command.questionId).run();
+      if (!changed(written)) return { ok: false, error: { kind: written.success ? "ReviewRemovalNotAllowed" : "LearningBatchPersistenceFailed" } };
+      dependencies.logger({ event: "learning-review-removed", ownerId: command.ownerId, batchId: command.batchId });
+      return { ok: true, value: result };
+    } catch {
+      dependencies.logger({ event: "learning-review-remove-failure", ownerId: command.ownerId, batchId: command.batchId, failureKind: "LearningBatchPersistenceFailed" });
+      return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+    }
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
@@ -737,6 +776,7 @@ export function createLearningBatchService(dependencies) {
     listKnowledge,
     answerReview,
     skipReview,
+    removeReview,
     setPreference,
     removeKnowledge,
     removeSource,

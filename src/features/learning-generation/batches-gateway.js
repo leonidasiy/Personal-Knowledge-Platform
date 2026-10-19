@@ -201,6 +201,12 @@ export class LearningBatchGatewayClient {
     const parsed = parseSkip(result.value);
     return parsed === null ? bad() : { ok: true, value: parsed };
   }
+  /** @param {string} batchId @param {string} questionId @param {number} questionRevision @param {string} idempotencyKey @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */
+  async removeReview(batchId, questionId, questionRevision, idempotencyKey) {
+    const result = await this.#command("api/learning-generation/review-batch/remove", { batchId, questionId, questionRevision, idempotencyKey });
+    if (!result.ok) return result;
+    return result.value.questionId === questionId && result.value.batchId === batchId && result.value.removed === true ? result : bad();
+  }
   /** @param {string} knowledgeId @param {"more" | "less"} choice @param {string} idempotencyKey @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */
   async setPreference(knowledgeId, choice, idempotencyKey) { return this.#command("api/learning-generation/knowledge-preference", { knowledgeId, choice, idempotencyKey }); }
   /** @param {string} knowledgeId @param {string} idempotencyKey @param {"image"|"knowledge"} [target] @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */

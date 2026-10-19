@@ -74,6 +74,7 @@ import { handleReminderRequest } from "./reminders/http.js";
  *     readonly loadReview: (ownerId: string, learningDay: string, force?: boolean) => Promise<Result<unknown, { readonly kind: string }>>,
  *     readonly loadProgress?: (ownerId:string, days:number, subject:string|null) => Promise<Result<unknown,{readonly kind:string}>>,
  *     readonly correctClassification?: (command:unknown) => Promise<Result<unknown,{readonly kind:string}>>,
+ *     readonly removeReview?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
  *     readonly skipReview?: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
  *     readonly answerReview: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
  *     readonly setPreference: (command: unknown) => Promise<Result<unknown, { readonly kind: string }>>,
@@ -190,6 +191,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
       const learningReviewBatch = url.pathname === "/api/learning-generation/review-batch";
       const learningReviewRefresh = url.pathname === "/api/learning-generation/review-batch/refresh";
       const learningReviewAnswer = url.pathname === "/api/learning-generation/review-batch/answer";
+      const learningReviewRemove = url.pathname === "/api/learning-generation/review-batch/remove";
       const learningReviewSkip = url.pathname === "/api/learning-generation/review-batch/skip";
       const learningPreference = url.pathname === "/api/learning-generation/knowledge-preference";
       const learningKnowledgeRemove = url.pathname === "/api/learning-generation/knowledge-remove";
@@ -206,7 +208,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         !sourceSearch && !sourceClassification && !sourceClassificationBackfill && !sourceSuppressionCheck && !sourceActiveCheck &&
         !sourceIngestion && !manualMaterial && !wikimediaTimedText &&
         !learningStatus && !learningReviewQueue && !learningPublished && !learningReview && !learningRevocation &&
-        !learningProgress && !learningClassification && !learningFeedBatch && !learningLibraryKnowledge && !learningFeedRefresh && !learningFeedComplete && !learningReviewBatch && !learningReviewRefresh && !learningReviewAnswer && !learningReviewSkip && !learningPreference && !learningKnowledgeRemove &&
+        !learningProgress && !learningClassification && !learningFeedBatch && !learningLibraryKnowledge && !learningFeedRefresh && !learningFeedComplete && !learningReviewBatch && !learningReviewRefresh && !learningReviewAnswer && !learningReviewSkip && !learningReviewRemove && !learningPreference && !learningKnowledgeRemove &&
         !knowledgeWorkflowStatus && !knowledgeWorkflowSourceStatus && !knowledgeWorkflowControl && !knowledgeWorkflowMaterial && !knowledgeWorkflowBackfill && !knowledgeWorkflowReplay && !learningMedia
       ) {
         return json({ error: "Not found." }, 404);
@@ -340,7 +342,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         return result.ok ? json({ ownerId: authenticated.value.ownerId, result: result.value }, 200) : learningBatchFailureResponse(result.error);
       }
       if (learningClassification && request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
-      if (learningFeedRefresh || learningFeedComplete || learningReviewRefresh || learningReviewAnswer || learningReviewSkip || learningPreference || learningKnowledgeRemove) {
+      if (learningFeedRefresh || learningFeedComplete || learningReviewRefresh || learningReviewAnswer || learningReviewSkip || learningReviewRemove || learningPreference || learningKnowledgeRemove) {
         if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { Allow: "POST" });
         if (dependencies.learningBatches == null) return learningBatchFailureResponse({ kind: "LearningBatchUnavailable" });
       }
@@ -516,7 +518,7 @@ export function createDiscoveryWorker(configuration, dependencies) {
         const result = await dependencies.learningBatches.correctClassification({ ...document, ownerId: authenticated.value.ownerId });
         return result.ok ? json({ result: result.value }, 200) : learningBatchFailureResponse(result.error);
       }
-      if (learningFeedRefresh || learningFeedComplete || learningReviewRefresh || learningReviewAnswer || learningReviewSkip || learningPreference || learningKnowledgeRemove) {
+      if (learningFeedRefresh || learningFeedComplete || learningReviewRefresh || learningReviewAnswer || learningReviewRemove || learningReviewSkip || learningPreference || learningKnowledgeRemove) {
         if (!isRecord(document) || Object.hasOwn(document, "ownerId")) return learningBatchFailureResponse({ kind: "LearningBatchCommandInvalid" });
         const ownedCommand = Object.freeze({ ...document, ownerId: authenticated.value.ownerId });
         const learningBatches = dependencies.learningBatches;
@@ -529,6 +531,8 @@ export function createDiscoveryWorker(configuration, dependencies) {
           ? await learningBatches.loadReview(authenticated.value.ownerId, utcDay(dependencies.now?.()), true)
           : learningReviewAnswer
           ? await learningBatches.answerReview(ownedCommand)
+          : learningReviewRemove
+          ? await learningBatches.removeReview?.(ownedCommand) ?? { ok: false, error: { kind: "LearningBatchUnavailable" } }
           : learningReviewSkip
           ? await learningBatches.skipReview?.(ownedCommand) ?? { ok: false, error: { kind: "LearningBatchUnavailable" } }
           : learningPreference
@@ -1183,7 +1187,7 @@ function learningBatchFailureResponse(failure) {
     : failure.kind === "LearningBatchIncomplete" ||
         failure.kind === "LearningBatchAlreadyClosed" ||
         failure.kind === "ReviewRefreshLocked" ||
-        failure.kind === "ReviewAnswerNotAllowed" || failure.kind === "ClassificationConflict"
+        failure.kind === "ReviewAnswerNotAllowed" || failure.kind === "ReviewRemovalNotAllowed" || failure.kind === "ClassificationConflict"
     ? 409
     : failure.kind === "ProgressReadUnavailable" || failure.kind === "ProgressHistoryLimitExceeded" || failure.kind === "ProgressDataInvalid" || failure.kind === "ClassificationWriteUnavailable" || failure.kind === "LearningBatchUnavailable" ||
         failure.kind === "ReviewGradePending" || failure.kind === "ReviewGradingUnavailable" ||

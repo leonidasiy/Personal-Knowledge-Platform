@@ -22,7 +22,7 @@ import { LearningBatchGatewayClient } from "./batches-gateway.js";
  *   readonly now: () => string,
  *   readonly createId: () => string,
  *   readonly getDailyTargets?: () => { readonly learning: number, readonly review: number },
- *   readonly onChange: (notice?: string, preferredFocusKey?: string | null, fallbackHeadingId?: string | null) => void
+ *   readonly onChange: (notice?: string, preferredFocusKey?: string | null, fallbackHeadingId?: string | null, refreshedView?: "feed" | "review") => void
  * }} LearnerControllerDependencies
  */
 
@@ -90,7 +90,8 @@ export function createLearnerController(dependencies) {
 
   function day() { return now().slice(0, 10); }
 
-  async function loadFeed() {
+  /** @param {boolean} [resetView] */
+  async function loadFeed(resetView = false) {
     feed = { state: "loading", value: feed.value, error: null };
     onChange();
     const requestedDay = day();
@@ -98,11 +99,12 @@ export function createLearnerController(dependencies) {
     if (result.ok) feedDay = requestedDay;
     await loadDailyProgress();
     feed = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: null, error: result.error };
-    onChange();
+    onChange(undefined, null, null, result.ok && resetView ? "feed" : undefined);
     return result;
   }
 
-  async function loadReview() {
+  /** @param {boolean} [resetView] */
+  async function loadReview(resetView = false) {
     // Keep the visible attempt and its feedback until an explicit batch or page refresh.
     if (review.value && (answers.size || pending.size)) return { ok: true, value: review.value };
     review = { state: "loading", value: review.value, error: null };
@@ -113,7 +115,7 @@ export function createLearnerController(dependencies) {
     await loadDailyProgress();
     if (result.ok) for (const skipped of result.value.skipped) answers.set(skipped.questionId, { correct: false, score: 0, ...skipped.feedback, skipped: true });
     review = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: null, error: result.error };
-    onChange();
+    onChange(undefined, null, null, result.ok && resetView ? "review" : undefined);
     return result;
   }
 
@@ -122,7 +124,7 @@ export function createLearnerController(dependencies) {
     const result = await gateway.refreshFeed(`feed-refresh:${createId()}`);
     pending.delete("feed-refresh");
     feed = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: feed.value, error: result.error };
-    onChange(undefined, "feed-refresh");
+    onChange(undefined, result.ok ? null : "feed-refresh", null, result.ok ? "feed" : undefined);
   }
 
   async function completeFeed() {
@@ -138,7 +140,7 @@ export function createLearnerController(dependencies) {
       onChange();
       return;
     }
-    await Promise.all([loadFeed(), ...(review.value?.batch == null ? [loadReview()] : [])]);
+    await Promise.all([loadFeed(true), ...(review.value?.batch == null ? [loadReview()] : [])]);
     const targets = dependencies.getDailyTargets?.();
     if (targets && studiedBefore !== undefined && studiedBefore < targets.learning && dailyProgress !== null && dailyProgress.studyItems >= targets.learning) {
       showGoalCelebration("learning", dailyProgress.studyItems, Math.max(0, targets.review - dailyProgress.reviewAttempts));
@@ -155,12 +157,12 @@ export function createLearnerController(dependencies) {
       questionErrors.clear();
     }
     review = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: review.value, error: result.error };
-    onChange(undefined, "review-refresh");
+    onChange(undefined, result.ok ? null : "review-refresh", null, result.ok ? "review" : undefined);
     return result;
   }
 
   /** @param {string} questionId */
-  function questionPending(questionId) { return pending.has("review-refresh") || pending.has(`review-submit:${questionId}`) || pending.has(`review-skip:${questionId}`); }
+  function questionPending(questionId) { return pending.has("review-refresh") || pending.has(`review-submit:${questionId}`) || pending.has(`review-skip:${questionId}`) || pending.has(`review-remove:${questionId}`); }
 
   /** @param {HTMLFormElement} form */
   async function answerReview(form) {
@@ -215,6 +217,29 @@ export function createLearnerController(dependencies) {
     if (result.ok) showFeedback(questionId, { ...result.value, correct: false, score: 0 }, true);
     else questionErrors.set(questionId, result.error);
     onChange(undefined, result.ok ? `review-feedback:${questionId}` : key, "review-title");
+  }
+
+  /** @param {HTMLElement} button */
+  async function removeReview(button) {
+    const questionId = button.dataset.questionId ?? "";
+    const question = review.value?.questions.find(item => item.questionId === questionId);
+    const batch = review.value?.batch;
+    if (!question || !batch || questionPending(questionId) || !answers.has(questionId) && batch.status !== "completed") return;
+    const key = `review-remove:${questionId}`;
+    questionErrors.delete(questionId);
+    begin(key);
+    const result = await gateway.removeReview(batch.batchId, questionId, question.revision, `review-remove:${batch.batchId}:${questionId}`);
+    pending.delete(key);
+    if (result.ok && review.value) {
+      review = { ...review, value: { ...review.value, questions: review.value.questions.filter(item => item.questionId !== questionId), skipped: review.value.skipped.filter(item => item.questionId !== questionId), dueCount: Math.max(0, review.value.dueCount - (answers.get(questionId)?.skipped ? 1 : 0)) } };
+      answers.delete(questionId);
+      questionErrors.delete(questionId);
+      onChange(undefined, null, "review-title");
+      onChange("Quiz deleted. Other quiz types and the knowledge card are kept.");
+    } else {
+      if (!result.ok) questionErrors.set(questionId, result.error);
+      onChange(undefined, key);
+    }
   }
 
   /** @param {string} questionId @param {{correct:boolean,score:number,completed:boolean,feedback:{explanation:string,correctAnswer:string}}} result @param {boolean} [skipped] */
@@ -311,7 +336,7 @@ export function createLearnerController(dependencies) {
     const media = !hasImage || card.media === null ? "" : `<figure class="card-media"><button class="image-zoom" type="button" data-image-zoom aria-label="Enlarge image"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6m-3-3v6"/></svg></button></figure>`;
     const key = `remove:${card.knowledgeId}`;
     const removal = `<details class="card-remove" data-library-details-key="${escapeHtml(key)}" ${pending.has(key) ? "open" : ""}><summary class="button quiet" data-focus-key="${escapeHtml(key)}">Remove ▾</summary><div class="removal-actions">${[["image", "Image only"], ["knowledge", "Knowledge point"]].map(([target, label]) => `<button class="button secondary" type="button" data-action="remove-learner-knowledge" data-remove-target="${target}" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${pending.has(key) || target === "image" && !hasImage ? "disabled" : ""}>${pending.has(key) ? "Removing…" : label}</button>`).join("")}</div></details>`;
-    return `<article class="learning-card"${subject} data-reveal="knowledge:${escapeHtml(card.knowledgeId)}" data-knowledge-id="${escapeHtml(card.knowledgeId)}"><div class="card-body"><p class="card-knowledge">${escapeHtml(card.summary)}</p>${media}<h3 class="card-source"><a href="${escapeHtml(sourceHref(card.sourceUrl))}" rel="noreferrer">${escapeHtml(card.title)}</a></h3><p class="card-subject">${mark}${escapeHtml(presentation?.label ?? "Unclassified")}</p>${classification ? `<p>${escapeHtml(classification.topic)}</p>` : ""}<div class="card-context">${classificationEditor(card)}<details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(sourceHref(card.sourceUrl))}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details></div><div class="preference-controls"><button class="button preference-more ${preferences.get(card.knowledgeId) === "more" ? "spark-saved" : ""}" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:more`)}>${actionLabel(`preference:${card.knowledgeId}:more`, `${sparkIcon()}${preferences.get(card.knowledgeId) === "more" ? "Preference saved" : "More like this"}`, "Saving…")}</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:less`)}>${actionLabel(`preference:${card.knowledgeId}:less`, preferences.get(card.knowledgeId) === "less" ? "Preference saved" : "Less like this", "Saving…")}</button>${removal}</div></div></article>`;
+    return `<article class="learning-card"${subject} data-reveal="knowledge:${escapeHtml(card.knowledgeId)}" data-knowledge-id="${escapeHtml(card.knowledgeId)}"><div class="card-body"><div class="card-reading"><button class="button quiet" type="button" data-read-knowledge="${escapeHtml(card.knowledgeId)}" data-focus-key="read:${escapeHtml(card.knowledgeId)}" aria-pressed="false">Read</button><span data-reading-status role="status"></span></div><p class="card-knowledge">${escapeHtml(card.summary)}</p>${media}<h3 class="card-source"><a href="${escapeHtml(sourceHref(card.sourceUrl))}" rel="noreferrer">${escapeHtml(card.title)}</a></h3><p class="card-subject">${mark}${escapeHtml(presentation?.label ?? "Unclassified")}</p>${classification ? `<p>${escapeHtml(classification.topic)}</p>` : ""}<div class="card-context">${classificationEditor(card)}<details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(sourceHref(card.sourceUrl))}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details></div><div class="preference-controls"><button class="button preference-more ${preferences.get(card.knowledgeId) === "more" ? "spark-saved" : ""}" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:more`)}>${actionLabel(`preference:${card.knowledgeId}:more`, `${sparkIcon()}${preferences.get(card.knowledgeId) === "more" ? "Preference saved" : "More like this"}`, "Saving…")}</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:less`)}>${actionLabel(`preference:${card.knowledgeId}:less`, preferences.get(card.knowledgeId) === "less" ? "Preference saved" : "Less like this", "Saving…")}</button>${removal}</div></div></article>`;
   }
 
   /** @param {LearningKnowledgeCard} card */
@@ -355,12 +380,14 @@ export function createLearnerController(dependencies) {
     const actionKey = `review-submit:${question.questionId}`;
     const feedbackKey = `review-feedback:${question.questionId}`;
     const skipKey = `review-skip:${question.questionId}`;
+    const removeKey = `review-remove:${question.questionId}`;
     const busy = questionPending(question.questionId);
     const body = answer === undefined && !completed
       ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${busy ? 'aria-busy="true"' : ""}>${busy ? input.replaceAll("<input ", "<input disabled ") : input}<p data-answer-prompt role="alert" hidden>${question.kind === "fill-blank" ? "Fill in every blank before checking." : "Choose an answer before checking."}</p><button class="button primary" ${actionState(actionKey)} type="submit" ${busy ? "disabled" : ""}>${actionLabel(actionKey, "Check answer", "Checking…")}</button><button class="button quiet" type="button" data-action="skip-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(skipKey)} ${busy ? "disabled" : ""}>${actionLabel(skipKey, "Skip", "Loading…")}</button></form>`
       : `<p class="answer-feedback ${answer === undefined || answer.skipped ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="${escapeHtml(feedbackKey)}" ${celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : ""}>${answer?.correct ? sparkIcon() : ""}${answer === undefined ? "Answered." : answer.skipped ? "Skipped." : answer.correct ? question.kind === "fill-blank" ? `Correct (${Math.round(answer.score * 100)}%).` : "Correct." : answer.score > 0 ? `Partly correct (${Math.floor(answer.score * 100)}%).` : "Not quite."}</p>`;
     const feedback = answer === undefined || answer.correct ? "" : feedMarkup(27, escapeHtml(answer.correctAnswer), escapeHtml(answer.explanation), escapeHtml(question.sourceAnchorIds.join(", ")));
-    return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback);
+    const removal = answer === undefined && !completed ? "" : `<button class="button quiet" type="button" data-action="remove-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(removeKey)} ${busy ? "disabled" : ""}>${actionLabel(removeKey, "Delete quiz", "Deleting…")}</button>`;
+    return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback + removal);
   }
 
   /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */
@@ -376,8 +403,8 @@ export function createLearnerController(dependencies) {
       requestAnimationFrame(() => playSpark(element, key.startsWith("review-feedback:") ? "answer" : "preference"));
     });
     root.querySelectorAll("form[data-source-classification]").forEach(form => form.addEventListener("submit", event => { event.preventDefault(); if (form instanceof HTMLFormElement) void correctClassification(form); }));
-    root.querySelector("[data-action='retry-learner-feed']")?.addEventListener("click", () => void loadFeed());
-    root.querySelector("[data-action='retry-learner-review']")?.addEventListener("click", () => void loadReview());
+    root.querySelector("[data-action='retry-learner-feed']")?.addEventListener("click", () => void loadFeed(true));
+    root.querySelector("[data-action='retry-learner-review']")?.addEventListener("click", () => void loadReview(true));
     root.querySelector("[data-action='refresh-learner-feed']")?.addEventListener("click", () => void refreshFeed());
     root.querySelector("[data-action='complete-learner-feed']")?.addEventListener("click", () => void completeFeed());
     root.querySelector("[data-action='refresh-learner-review']")?.addEventListener("click", () => void refreshReview());
@@ -404,6 +431,7 @@ export function createLearnerController(dependencies) {
     }));
     root.querySelectorAll("img[data-associated-media]").forEach((element) => element.addEventListener("error", () => { element.closest(".card-media")?.remove(); }));
     root.querySelectorAll("[data-action='skip-review']").forEach(button => button.addEventListener("click", () => { if (button instanceof HTMLElement) void skipReview(button); }));
+    root.querySelectorAll("[data-action='remove-review']").forEach(button => button.addEventListener("click", () => { if (button instanceof HTMLElement) void removeReview(button); }));
     root.querySelectorAll("[data-learner-review]").forEach((element) => element.addEventListener("submit", (event) => { event.preventDefault(); if (event.currentTarget instanceof HTMLFormElement) void answerReview(event.currentTarget); }));
   }
 

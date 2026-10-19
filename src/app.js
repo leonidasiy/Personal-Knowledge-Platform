@@ -10,6 +10,7 @@ import { applyPresentationUpdate, resolveTheme } from "./features/experience/pre
 import { SettingsRepository } from "./features/experience/settings.js";
 import { revealCards } from "./features/experience/reveal.js";
 import { cancelSparkEffects } from "./features/experience/spark.js";
+import { createCardReader } from "./features/learning-generation/card-reader.js";
 import { PreferenceRepository } from "./features/preference/repository.js";
 import { PreferenceService } from "./features/preference/service.js";
 import { RecallRepository } from "./features/recall/repository.js";
@@ -20,6 +21,7 @@ import { RECORD_KINDS } from "./persistence/contracts.js";
 
 const freeze = Object.freeze;
 const revealedCards = new Set();
+const cardReader = createCardReader();
 /** @type {IntersectionObserver|null} */ let cardObserver = null;
 let revealView = "";
 import {
@@ -632,9 +634,16 @@ async function loadLearnerController() {
     now: () => new Date().toISOString(),
     createId: () => crypto.randomUUID(),
     getDailyTargets: () => ({ learning: dailySettings?.dailyStudyTarget ?? 5, review: dailySettings?.dailyRecallLimit ?? 5 }),
-    onChange: (message, preferredFocusKey = null, fallbackHeadingId = null) => {
+    onChange: (message, preferredFocusKey = null, fallbackHeadingId = null, refreshedView) => {
       notice = message ?? null;
-      if (message === undefined) render(preferredFocusKey, fallbackHeadingId);
+      if (message === undefined) {
+        const refreshed = refreshedView === activeView;
+        render(refreshed ? `${activeView}-title` : preferredFocusKey, refreshed ? `${activeView}-title` : fallbackHeadingId);
+        if (refreshed) {
+          cardReader.stop();
+          scrollTo({ top: 0, left: 0, behavior: "instant" });
+        }
+      }
       else { errorMessage = null; renderMessagesOnly(); }
     },
   });
@@ -1053,6 +1062,7 @@ function renderRouteFailure(route, title, message) {
 }
 
 function bindInteractions() {
+  cardReader.bind(root);
   root.querySelectorAll("[data-view]").forEach((element) => {
     element.addEventListener("click", () => {
       const view = element.getAttribute("data-view");
@@ -1420,6 +1430,7 @@ function restoreFocus(focusKey, headingId) {
 }
 
 function registerOfflineSupport() {
+  addEventListener("pagehide", () => cardReader.stop());
   addEventListener("online", () => render());
   addEventListener("offline", () => render());
   addEventListener("pagehide", () => libraryPageController?.dispose());
