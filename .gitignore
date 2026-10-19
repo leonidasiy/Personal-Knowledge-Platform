@@ -50,6 +50,7 @@ test-results/
 /PROCESS.history-*.md
 /INDEPENDENT-REVIEW.md
 /DESIGN.md
+/WALKTHROUGH.md
 /todo.md
 __pycache__/
 /docs/
