@@ -103,21 +103,21 @@ for (
 }
 test("fresh schema retains the full required pair without count-only composition", () => {
   const schema = quizPairSchema(true);
-  assert.equal(schema.name, "paired_quiz_v3");
+  assert.equal(schema.name, "paired_quiz_v4");
   assert.deepEqual(schema.schema.required, ["knowledgeId", "knowledgeRevision", "canonicalAnswers", "citedEvidenceUrls", "multipleChoice", "fillBlank"]);
   assert.equal(schema.schema.anyOf, undefined);
   assert.equal(schema.schema.allOf, undefined);
   assert.equal(schema.schema.properties.canonicalAnswers.minItems, 1);
-  assert.equal(schema.schema.properties.canonicalAnswers.maxItems, 4);
+  assert.equal(schema.schema.properties.canonicalAnswers.maxItems, 3);
   assert.deepEqual(schema.schema.properties.fillBlank.properties.blanks.items.required, ["id", "canonicalAnswer", "acceptedAnswers"]);
 });
 test("fresh prompt describes final pair rebuilding and substantive source conflict rather than cosmetic order", () => {
-  assert.match(questionGeneratorPrompt, /paired-question-generator-v7/);
+  assert.match(questionGeneratorPrompt, /paired-question-generator-v8/);
   assert.match(
     questionGeneratorPrompt,
     /rebuild all four arrays and the blank prompt together/,
   );
-  assert.match(questionEvaluatorPrompt, /paired-question-evaluator-v9/);
+  assert.match(questionEvaluatorPrompt, /paired-question-evaluator-v10/);
   assert.match(
     questionEvaluatorPrompt,
     /source-conflicting requires a substantive opposing meaning/,
@@ -226,8 +226,9 @@ import { createAgentConfigurationLoader } from "../src/features/knowledge-workfl
 import { D1KnowledgeWorkflowRepository } from "../worker/knowledge-workflow-d1.js";
 import { D1KnowledgeContentRepository } from "../worker/knowledge-workflow-content-d1.js";
 import { WEBPAGE_IMAGE_POLICY } from "../worker/webpage-image-budget.js";
-for (const malformed of [false, true]) {
-  test(`actual runtime provider boundary preserves raw history; malformed count=${malformed}`, async () => {
+for (const scenario of ['valid','malformed','importance-rejected']) {
+  const malformed=scenario==='malformed', importanceRejected=scenario==='importance-rejected';
+  test(`actual runtime provider boundary preserves raw history; scenario=${scenario}`, async () => {
     const db = new DatabaseSync(":memory:");
     try {
       for (
@@ -383,7 +384,7 @@ for (const malformed of [false, true]) {
           },
         }),
       );
-      let drafts = 0, critics = 0, wireFailure;
+      let drafts = 0, critics = 0, importanceReviews = 0, wireFailure;
       const raw = draft();
       if (malformed) {
         raw.fillBlank.blanks.push({
@@ -413,12 +414,15 @@ for (const malformed of [false, true]) {
             const body = JSON.parse(init.body),
               schema = body.response_format.json_schema;
             let output;
-            if (schema.name === "paired_quiz_v3") {
+            if (schema.name === "paired_quiz_v4") {
               drafts++;
               assert.equal(body.max_tokens, 16384);
               assert.equal(schema.schema.anyOf, undefined);
               assert.deepEqual(schema.schema.required, ["knowledgeId", "knowledgeRevision", "canonicalAnswers", "citedEvidenceUrls", "multipleChoice", "fillBlank"]);
               output = raw;
+            } else if(schema.name==='quiz_answer_importance_v1') {
+              importanceReviews++;
+              output={targets:[{answer:'NAD+',important:!importanceRejected,reason:'Constructed importance judgment.'}],feedback:importanceRejected?'Constructed weak-target rejection.':'Central fixture target.'};
             } else {
               assert.equal(schema.name, "quiz_evaluation_v3");
               critics++;
@@ -465,8 +469,9 @@ for (const malformed of [false, true]) {
           points: [point],
         });
       if(malformed){assert.equal(result.ok,false);assert.equal(result.error.kind,"QuizDraftSchemaInvalid");assert.equal(result.error.technicalRetriesExhausted,true);assert.equal(result.error.technicalAttempts,4);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_quizzes").get().n,0);assert.equal(db.prepare("SELECT count(*) AS n FROM extraction_knowledge_points").get().n,1);assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_quiz_attempts").get().n,0);}
+      else if(importanceRejected){assert(result.ok,JSON.stringify({result,wireFailure}));assert.equal(result.value.dispositions[0].status,'abandoned');assert.equal(result.value.dispositions[0].failureKind,'QuizScoreBelowThreshold');assert.equal(db.prepare("SELECT count(*) AS n FROM knowledge_workflow_quizzes").get().n,0);assert.equal(db.prepare("SELECT count(*) AS n FROM extraction_knowledge_points").get().n,0);}
       else {assert(result.ok,JSON.stringify({result,wireFailure}));assert.equal(result.value.dispositions[0].status,"accepted");}
-      assert.deepEqual([drafts, critics], malformed ? [4, 0] : [1, 1]);
+      assert.deepEqual([drafts, critics, importanceReviews], malformed ? [4, 0, 0] : importanceRejected ? [4, 0, 4] : [1, 1, 1]);
       const rows = db.prepare(
         "SELECT result_json FROM knowledge_workflow_stages WHERE stage_key LIKE 'question-generator:%'",
       ).all();

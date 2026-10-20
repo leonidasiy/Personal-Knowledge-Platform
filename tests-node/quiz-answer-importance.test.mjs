@@ -19,6 +19,8 @@ test('generator, reviewer and schema share contextual importance criteria withou
  assert.match(quizAnswerQualityInstruction,/not by word length, rarity or a vocabulary blacklist/);
  assert.match(quizAnswerQualityInstruction,/what important understanding would go untested/);
  assert.match(quizAnswerQualityInstruction,/Evaluate each fill-blank independently of the MCQ/);
+ assert.match(quizAnswerQualityInstruction,/Retrieving a defining technical term from its described role is valid conceptual recall/);
+ assert.match(quizAnswerQualityInstruction,/SAME concepts; that agreement is required, not duplication/);
  assert.match(quizAnswerQualityInstruction,/Reducing to one answer does not by itself fix a weak target/);
  assert.match(questionEvaluatorPrompt,/For EVERY canonical answer, state in reasons/);
  assert.match(questionEvaluatorPrompt,/Any weak target or filler distractor requires a score below 8/);
@@ -40,4 +42,18 @@ test('three distinct central concepts can still publish, and a format retry pres
  const knowledge={...point,summary:'Self-attention uses queries to match keys, and weights the corresponding values.'};
  const result=await createQuizActorCritic({maxAttempts:2,repository:repo,now:()=> '2026-10-20T00:00:00Z',logger:()=>{},generator:{generate:async()=>({ok:true,value:draft(['query','key','value'])})},reviewer:{evaluate:async input=>{reviews++;assert(input.rubric.includes(quizAnswerQualityInstruction));if(reviews===1)return {ok:true,value:{score:'invalid'}};assert.match(input.rubric,/Previous response failed format validation/);return judgment(9,'Query, key and value each have a distinct central role in this fixture.');}}}).run({ownerId:'owner',runId:'run',points:[knowledge]});
  assert(result.ok);assert.equal(reviews,2);assert.equal(repo.published.length,1);assert.deepEqual(repo.published[0].draft.pairedQuiz.canonicalAnswers,['query','key','value']);
+});
+
+// These are synthetic boundary judgments; real model calibration remains separate.
+test('focused importance judgments cover every target and any weak target blocks the pair',async()=>{
+ const {normalizeQuizAnswerImportance,quizAnswerImportancePrompt}=await import('../src/features/knowledge-workflows/quiz-answer-importance.js');
+ assert(quizAnswerImportancePrompt.includes(quizAnswerQualityInstruction));
+ const answers=['reward model','high'];
+ const valid={targets:[{answer:'reward model',important:true,reason:'Central scoring component.'},{answer:'high',important:false,reason:'Generic directional completion.'}],feedback:'Remove high; keep the reward-model concept.'};
+ const result=normalizeQuizAnswerImportance(valid,answers);assert(result.ok);assert.equal(result.value.passed,false);
+ assert.equal(normalizeQuizAnswerImportance({...valid,targets:[valid.targets[0]]},answers).ok,false);
+ assert.equal(normalizeQuizAnswerImportance({...valid,targets:[...valid.targets].reverse()},answers).ok,false);
+ assert.equal(normalizeQuizAnswerImportance({...valid,targets:valid.targets.map(t=>({...t,important:'true'}))},answers).ok,false);
+ assert.equal(normalizeQuizAnswerImportance({...valid,extra:true},answers).ok,false);
+ const positive=normalizeQuizAnswerImportance({targets:['query','key','value'].map(answer=>({answer,important:true,reason:'A distinct attention vector role.'})),feedback:'Each target is central.'},['query','key','value']);assert(positive.ok&&positive.value.passed);
 });
