@@ -1,6 +1,7 @@
 // @ts-check
 
 import { createOpenRouterGlm53FlashAdapter } from "../worker/openrouter-glm-5-3-flash-adapter.js";
+import { quizAnswerQualityInstruction } from "../src/features/knowledge-workflows/quiz-pair.js";
 
 /** @template T @param {T} actual @param {T} expected */
 function assertEquals(actual, expected) {
@@ -57,10 +58,11 @@ Deno.test("OpenRouter GLM adapter sends bounded JSON-mode requests and parses ty
   assertEquals(result.value.drafts.length, 1);
   if (requests.length !== 1) throw new Error("Expected one provider request.");
   const captured = requests[0];
-  const body = /** @type {{ readonly model: unknown, readonly response_format: unknown, readonly stream: unknown }} */ (await captured.json());
+  const body = /** @type {{ readonly model: unknown, readonly response_format: unknown, readonly stream: unknown, readonly messages: readonly { readonly content: string }[] }} */ (await captured.json());
   assertEquals(body.model, "z-ai/glm-5.3-flash");
   assertEquals((/** @type {{ readonly type: unknown }} */ (body.response_format)).type, "json_object");
   assertEquals(body.stream, false);
+  assertEquals(body.messages[0].content.includes(quizAnswerQualityInstruction), true);
   assertEquals(JSON.stringify(body).includes("at most five choices"), true);
   assertEquals(JSON.stringify(body).includes("at most three correct choices"), true);
   assertEquals(JSON.stringify(body).includes("at most three fill-in-the-blank entries"), true);
