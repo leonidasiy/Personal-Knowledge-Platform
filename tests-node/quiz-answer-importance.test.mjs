@@ -22,6 +22,10 @@ test('generator, reviewer and schema share contextual importance criteria withou
  assert.match(quizAnswerQualityInstruction,/Retrieving a defining technical term from its described role is valid conceptual recall/);
  assert.match(quizAnswerQualityInstruction,/SAME concepts; that agreement is required, not duplication/);
  assert.match(quizAnswerQualityInstruction,/Reducing to one answer does not by itself fix a weak target/);
+ assert.match(quizAnswerQualityInstruction,/Repair existing quizzes before considering withdrawal/);
+ assert.match(quizAnswerQualityInstruction,/Rewrite both explanations to match the final options and blanks/);
+ assert.match(questionGeneratorPrompt,/When previousDraft is supplied, repair that exact pair using feedback/);
+ assert.match(quizAnswerQualityInstruction,/optional coverage of another relationship is not a reason to reject a sound single-target question/);
  assert.match(questionEvaluatorPrompt,/For EVERY canonical answer, state in reasons/);
  assert.match(questionEvaluatorPrompt,/Any weak target or filler distractor requires a score below 8/);
  assert.match(questionEvaluatorPrompt,/not knowledgeGroundingProblems/);
@@ -42,6 +46,20 @@ test('three distinct central concepts can still publish, and a format retry pres
  const knowledge={...point,summary:'Self-attention uses queries to match keys, and weights the corresponding values.'};
  const result=await createQuizActorCritic({maxAttempts:2,repository:repo,now:()=> '2026-10-20T00:00:00Z',logger:()=>{},generator:{generate:async()=>({ok:true,value:draft(['query','key','value'])})},reviewer:{evaluate:async input=>{reviews++;assert(input.rubric.includes(quizAnswerQualityInstruction));if(reviews===1)return {ok:true,value:{score:'invalid'}};assert.match(input.rubric,/Previous response failed format validation/);return judgment(9,'Query, key and value each have a distinct central role in this fixture.');}}}).run({ownerId:'owner',runId:'run',points:[knowledge]});
  assert(result.ok);assert.equal(reviews,2);assert.equal(repo.published.length,1);assert.deepEqual(repo.published[0].draft.pairedQuiz.canonicalAnswers,['query','key','value']);
+});
+
+test('a repairable explanation defect is revised and published without discarding its sound target',async()=>{
+ const repo=repository(),feedback='Keep reward model; remove the explanation reference to deleted option oldB.';
+ const result=await createQuizActorCritic({maxAttempts:2,technicalRetries:false,repository:repo,now:()=> '2026-10-20T00:00:00Z',logger:()=>{},generator:{generate:async input=>{
+  if(input.attempt===1)assert(!Object.hasOwn(input,'previousDraft'));
+  if(input.attempt===2){assert.equal(input.feedback,feedback);assert.deepEqual(input.previousDraft.pairedQuiz.canonicalAnswers,['reward model']);assert.match(input.previousDraft.explanation,/oldB/);}
+  const d=draft(['reward model']),explanation=input.attempt===1?'Reward model is correct; oldB is incorrect.':'A reward model scores response preferences; a tokenizer does not.';
+  return {ok:true,value:{...d,explanation,pairedQuiz:{...d.pairedQuiz,multipleChoice:{...d.pairedQuiz.multipleChoice,explanation},fillBlank:{...d.pairedQuiz.fillBlank,explanation}}}};
+ }},reviewer:{evaluate:async input=>input.attempt===1?{ok:true,value:{score:9,reasons:['The concept is sound.'],feedback,groundingProblems:['Explanation references deleted option oldB.'],knowledgeGroundingProblems:[]}}:judgment(9,'The corrected explanation matches the options.')}}).run({ownerId:'owner',runId:'run',points:[point]});
+ assert(result.ok);assert.equal(repo.discarded.length,0);assert.equal(repo.published.length,1);
+ assert.equal(repo.attempts[0].failureKind,'QuizDraftUngrounded');
+ assert.deepEqual(repo.published[0].draft.pairedQuiz.canonicalAnswers,['reward model']);
+ assert(!JSON.stringify(repo.published[0].draft.pairedQuiz).includes('oldB'));
 });
 
 // These are synthetic boundary judgments; real model calibration remains separate.

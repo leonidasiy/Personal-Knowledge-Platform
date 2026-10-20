@@ -16,7 +16,7 @@ function fixture({maxAttempts=2,generate,evaluate=async()=>ok({score:9,reasons:[
  return {actor,generated,evaluated,attempts,discarded,published};
 }
 test('flat required schema retains complete pair and strict missing-field/count boundaries',()=>{
- const s=quizPairSchema(true);assert.equal(s.name,'paired_quiz_v3');assert.equal(s.schema.anyOf,undefined);assert.equal(s.schema.allOf,undefined);assert.deepEqual(s.schema.required,['knowledgeId','knowledgeRevision','canonicalAnswers','citedEvidenceUrls','multipleChoice','fillBlank']);
+ const s=quizPairSchema(true);assert.equal(s.name,'paired_quiz_v4');assert.equal(s.schema.anyOf,undefined);assert.equal(s.schema.allOf,undefined);assert.deepEqual(s.schema.required,['knowledgeId','knowledgeRevision','canonicalAnswers','citedEvidenceUrls','multipleChoice','fillBlank']);
  const partial={canonicalAnswers:['relation'],fillBlank:{blanks:[{id:'blank-1',canonicalAnswer:'relation',acceptedAnswers:['relation']}]}};assert.equal(validateQuizPairDraft(partial),false);assert.equal(normalizeQuizPairDraftAliases(partial),partial);assert.equal(partial.multipleChoice,undefined);
 });
 for(const mode of ['typed-schema','raw-invalid'])test(`${mode} exhausts four technical attempts without quality disposition or removal`,async()=>{

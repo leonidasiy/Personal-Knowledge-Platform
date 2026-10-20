@@ -84,7 +84,7 @@ import { quizAnswerQualityInstruction, limitChoiceOptions, normalizeAssembledQui
 
 /** @typedef {{readonly kind:"KnowledgeModelTimeout"|"KnowledgeModelCancelled"|"KnowledgeModelUnavailable"|"KnowledgeModelResponseReadFailed"|"KnowledgeModelResponseInvalid"|"KnowledgeModelResponseDuplicateKey"|"KnowledgeModelRejected"|"WorkflowAgentAgentOutputInvalid"|"WorkflowStageCallUncertain"|"QuizDraftSchemaInvalid"|"QuizEvaluatorOutputInvalid"|"QuizGeneratorFailed"|"QuizEvaluatorFailed",readonly causeKind?:string,readonly status?:number,readonly technicalRetriesExhausted?:true,readonly technicalAttempts?:number}} QuizTechnicalFailure */
 
-/** @typedef {{ readonly generate: (command: { readonly knowledge: KnowledgePoint, readonly attempt: number, readonly technicalAttempt?: number, readonly feedback: string | null }) => Promise<Result<unknown, unknown>> }} QuestionGenerator */
+/** @typedef {{ readonly generate: (command: { readonly knowledge: KnowledgePoint, readonly attempt: number, readonly technicalAttempt?: number, readonly feedback: string | null, readonly previousDraft?: QuestionDraft }) => Promise<Result<unknown, unknown>> }} QuestionGenerator */
 // Production reviewer only. External benchmark evaluators are never dependencies of this actor.
 /** @typedef {{ readonly evaluate: (command: { readonly draft: QuestionDraft, readonly knowledge: { readonly id: string, readonly summary: string, readonly evidenceAnchors: readonly { readonly url: string, readonly selector: string }[] }, readonly deterministicValidation: { readonly ok: true }, readonly attempt: number, readonly technicalAttempt?: number, readonly rubric: string }) => Promise<Result<unknown, unknown>> }} QuestionReviewer */
 /**
@@ -285,6 +285,7 @@ export function createQuizActorCritic(dependencies) {
           }
         }
         /** @type {string|null} */ let feedback = null;
+        /** @type {QuestionDraft|null} */ let previousDraft = null;
         let lastFailure = /** @type {QuizFailure["kind"] | null} */ (null);
         let attempts = 0;
         let accepted = false;
@@ -293,7 +294,7 @@ export function createQuizActorCritic(dependencies) {
         for (let attempt = 1; attempt <= dependencies.maxAttempts; attempt += 1) {
           attempts = attempt;
           /** @type {string|null} */ let technicalFeedback=feedback;
-          /** @type {Result<QuestionDraft,QuizFailure>} */ const generated=await technicalCall(technicalAttempt=>dependencies.generator.generate({knowledge,attempt,technicalAttempt,feedback:technicalFeedback}),value=>{
+          /** @type {Result<QuestionDraft,QuizFailure>} */ const generated=await technicalCall(technicalAttempt=>dependencies.generator.generate({knowledge,attempt,technicalAttempt,feedback:technicalFeedback,...(previousDraft===null?{}:{previousDraft})}),value=>{
             value = normalizeQuizDraftLimits(value);
             if(!validDraft(value))return {ok:false,error:{kind:"QuizDraftSchemaInvalid"}};
             const invalid=validateGrounding(value,knowledge);
@@ -310,6 +311,7 @@ export function createQuizActorCritic(dependencies) {
             const saved=await persistAttempt(dependencies.repository,{ownerId:command.ownerId,runId:command.runId,knowledgeId:knowledge.id,attempt,draftId:null,score:null,feedback:null,failureKind:lastFailure,createdAt:dependencies.now()},dependencies,command.runId,knowledge.id);
             if(!saved.ok)return saved;
             feedback=lastFailure==="QuizDuplicate"?"This draft repeats a quiz already generated for this source. Test a distinct meaningful relationship, not a reworded duplicate.":"Use only the knowledge point's cited evidence.";
+            previousDraft = null;
             continue;
           }
           const draft = /** @type {QuestionDraft} */ (generated.value);
@@ -319,6 +321,7 @@ export function createQuizActorCritic(dependencies) {
             const saved = await persistAttempt(dependencies.repository, { ownerId: command.ownerId, runId: command.runId, knowledgeId: knowledge.id, attempt, draftId: draft.id, score: null, feedback: null, failureKind: lastFailure, createdAt: dependencies.now() }, dependencies, command.runId, knowledge.id);
             if (!saved.ok) return saved;
             feedback = "Use only the knowledge point's cited evidence.";
+            previousDraft = null;
             continue;
           }
           const qualityRubric = "10 means the draft tests the key concept precisely; 1 means irrelevant or too general. " + quizAnswerQualityInstruction + " In reasons, justify the distinct central understanding tested by EVERY canonical answer. Score below 8 for any weak, incidental or overlapping target or filler distractor; higher answer counts earn no credit. Identify exact weak target text in feedback. Supported but low-value wording is a quiz quality fault, not a knowledgeGroundingProblems source fault.";
@@ -345,6 +348,7 @@ export function createQuizActorCritic(dependencies) {
               if (record(published.error) && published.error.kind === "QuizDuplicate") {
                 lastFailure = "QuizDuplicate";
                 feedback = "This draft duplicates an existing quiz from the same source. Test a distinct meaningful relationship.";
+                previousDraft = null;
                 continue;
               }
               return fail({ kind: "QuizPublicationFailed" }, dependencies, command.runId, knowledge.id);
@@ -354,6 +358,7 @@ export function createQuizActorCritic(dependencies) {
             break;
           }
           feedback = evaluation.feedback;
+          previousDraft = draft;
         }
         if (accepted) {
           dispositions.push(freeze({ knowledgeId: knowledge.id, status: "accepted", publicationStatus: acceptedPublicationStatus, attempts, failureKind: null, restrictedUntil: null }));
