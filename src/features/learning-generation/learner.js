@@ -22,7 +22,7 @@ import { LearningBatchGatewayClient } from "./batches-gateway.js";
  *   readonly now: () => string,
  *   readonly createId: () => string,
  *   readonly getDailyTargets?: () => { readonly learning: number, readonly review: number },
- *   readonly onChange: (notice?: string, preferredFocusKey?: string | null, fallbackHeadingId?: string | null, refreshedView?: "feed" | "review") => void
+ *   readonly onChange: (notice?: string, preferredFocusKey?: string | null, fallbackHeadingId?: string | null, refreshedView?: "feed" | "review", preserveScroll?: boolean) => void
  * }} LearnerControllerDependencies
  */
 
@@ -48,6 +48,42 @@ export function createLearnerController(dependencies) {
   /** @type {Promise<void> | null} */ let progressLoad = null;
   let feedDay = "", reviewDay = "";
   let reviewCelebrationDay = "";
+  /** @type {Map<string, number>} */ const countdowns = new Map();
+  /** @type {Map<string, number>} */ const replacementHeights = new Map();
+  /** @type {HTMLElement | null} */ let countdownRoot = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */ let countdownTimer;
+
+  /** @param {string} key */
+  function startCountdown(key) { if (!countdowns.has(key)) countdowns.set(key, Date.now() + 10_000); }
+
+  function unbind() {
+    clearTimeout(countdownTimer);
+    countdownRoot = null;
+  }
+
+  function tickCountdowns() {
+    const root = countdownRoot;
+    if (!root?.isConnected) return;
+    for (const [key, deadline] of countdowns) {
+      const remaining = Math.max(0, deadline - Date.now());
+      const button = root.querySelector(`[data-review-countdown="${CSS.escape(key)}"]`);
+      const seconds = button?.querySelector("[data-countdown-seconds]");
+      if (seconds) seconds.textContent = String(Math.ceil(remaining / 1000));
+      button?.querySelector(".spark-ring")?.setAttribute("stroke-dashoffset", String(100 - remaining / 100));
+      if (remaining === 0 && !review.value?.questions.some(question => questionPending(question.questionId)) && review.state !== "loading") {
+        if (key === "batch") void refreshReview(true);
+        else void replaceReview(key);
+        return;
+      }
+    }
+    if (countdowns.size) countdownTimer = setTimeout(tickCountdowns, 1000);
+  }
+
+  /** @param {string} key @param {string} label @param {string} action @param {string} [questionId] */
+  function countdownButton(key, label, action, questionId = "") {
+    const remaining = Math.max(0, (countdowns.get(key) ?? Date.now()) - Date.now());
+    return feedMarkup(30, action, escapeHtml(questionId), escapeHtml(key), escapeHtml(key), 100 - remaining / 100, Math.ceil(remaining / 1000), label);
+  }
 
   async function loadDailyProgress() {
     if (!dependencies.getDailyTargets) return;
@@ -112,7 +148,14 @@ export function createLearnerController(dependencies) {
     const result = await gateway.loadReview(requestedDay);
     if (result.ok) reviewDay = requestedDay;
     await loadDailyProgress();
-    if (result.ok) for (const skipped of result.value.skipped) answers.set(skipped.questionId, { correct: false, score: 0, ...skipped.feedback, skipped: true });
+    if (result.ok) {
+      countdowns.clear();
+      for (const skipped of result.value.skipped) {
+        answers.set(skipped.questionId, { correct: false, score: 0, ...skipped.feedback, skipped: true });
+        startCountdown(skipped.questionId);
+      }
+      if (result.value.batch?.status === "completed" && !result.value.skipped.length) startCountdown("batch");
+    }
     review = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: null, error: result.error };
     onChange(undefined, null, null, result.ok && resetView ? "review" : undefined);
     return result;
@@ -146,14 +189,19 @@ export function createLearnerController(dependencies) {
     }
   }
 
-  async function refreshReview() {
-    if (review.state === "loading" || review.value?.questions.some(question => questionPending(question.questionId)) || !begin("review-refresh")) return;
+  /** @param {boolean} [resetAtStart] */
+  async function refreshReview(resetAtStart = false) {
+    if (review.state === "loading" || review.value?.questions.some(question => questionPending(question.questionId)) || pending.has("review-refresh")) return;
+    countdowns.clear();
+    pending.add("review-refresh");
+    onChange(undefined, "review-refresh", null, resetAtStart ? "review" : undefined);
     const result = await gateway.refreshReview(`review-refresh:${createId()}`);
     pending.delete("review-refresh");
     if (result.ok) {
       answers.clear();
       attempts.clear();
       questionErrors.clear();
+      replacementHeights.clear();
     }
     review = result.ok ? { state: "success", value: result.value, error: null } : { state: "error", value: review.value, error: result.error };
     onChange(undefined, result.ok ? null : "review-refresh", null, result.ok ? "review" : undefined);
@@ -161,7 +209,32 @@ export function createLearnerController(dependencies) {
   }
 
   /** @param {string} questionId */
-  function questionPending(questionId) { return pending.has("review-refresh") || pending.has(`review-submit:${questionId}`) || pending.has(`review-skip:${questionId}`) || pending.has(`review-remove:${questionId}`); }
+  function questionPending(questionId) { return pending.has("review-refresh") || pending.has(`review-submit:${questionId}`) || pending.has(`review-skip:${questionId}`) || pending.has(`review-remove:${questionId}`) || pending.has(`review-replace:${questionId}`); }
+
+  /** @param {string} questionId */
+  async function replaceReview(questionId) {
+    const question = review.value?.questions.find(item => item.questionId === questionId);
+    const batch = review.value?.batch;
+    if (!question || !batch || !answers.get(questionId)?.skipped || review.value?.questions.some(item => questionPending(item.questionId))) return;
+    countdowns.delete(questionId);
+    const height = countdownRoot?.querySelector(`[data-review-question="${CSS.escape(questionId)}"]`)?.getBoundingClientRect().height;
+    const key = `review-replace:${questionId}`;
+    questionErrors.delete(questionId);
+    pending.add(key);
+    onChange(undefined, `review-countdown:${questionId}`, null, undefined, true);
+    const result = await gateway.replaceReview(batch.batchId, questionId, question.revision, `review-replace:${batch.batchId}:${questionId}`);
+    pending.delete(key);
+    if (result.ok && review.value?.batch?.batchId === batch.batchId) {
+      review = { state: "success", value: { ...review.value, batch: result.value.batch, questions: review.value.questions.map(item => item.questionId === questionId ? result.value.questions[0] : item), skipped: review.value.skipped.filter(item => item.questionId !== questionId) }, error: null };
+      answers.delete(questionId);
+      replacementHeights.delete(questionId);
+      if (height) replacementHeights.set(result.value.questions[0].questionId, height);
+      onChange(undefined, `review-question:${result.value.questions[0].questionId}`, null, undefined, true);
+    } else {
+      if (!result.ok) questionErrors.set(questionId, result.error);
+      onChange(undefined, `review-countdown:${questionId}`, null, undefined, true);
+    }
+  }
 
   /** @param {HTMLFormElement} form */
   async function answerReview(form) {
@@ -234,6 +307,7 @@ export function createLearnerController(dependencies) {
       answers.delete(questionId);
       attempts.delete(questionId);
       questionErrors.delete(questionId);
+      countdowns.delete(questionId);
       onChange(undefined, null, "review-title");
       onChange("Quiz deleted. Other quiz types and the knowledge card are kept.");
     } else {
@@ -248,6 +322,8 @@ export function createLearnerController(dependencies) {
     if (result.correct) celebrations.add(`review-feedback:${questionId}`);
     answers.set(questionId, { correct: result.correct, score: result.score, ...result.feedback, skipped });
     if (review.value !== null) review = { state: "success", value: { ...review.value, batch: result.completed && review.value.batch ? { ...review.value.batch, status: "completed", completedAt: now() } : review.value.batch, dueCount: Math.max(0, review.value.dueCount - (skipped ? 0 : 1)) }, error: null };
+    if (skipped) startCountdown(questionId);
+    if (result.completed && !review.value?.questions.some(question => answers.get(question.questionId)?.skipped)) startCountdown("batch");
   }
 
   /** @param {HTMLElement} button */
@@ -303,6 +379,7 @@ export function createLearnerController(dependencies) {
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "LearningBatchIncomplete") return feedMarkup(9);
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradePending") return feedMarkup(11);
     if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewGradingUnavailable") return feedMarkup(12);
+    if (failure.kind === "LearningBatchGatewayRejected" && failure.failureKind === "ReviewReplacementUnavailable") return feedMarkup(50);
     return feedMarkup(13);
   }
 
@@ -323,7 +400,7 @@ export function createLearnerController(dependencies) {
     const value = feed.value;
     if (value === null || value.batch === null || value.items.length === 0) return feedMarkup(1);
     const complete = value.batch.status === "completed";
-    return `${pending.has("feed-refresh") ? feedMarkup(26, pendingSpark()) : ""}<section class="feed-column learner-feed" aria-labelledby="feed-title">${classificationMessage === "" ? "" : `<p role="status">${escapeHtml(classificationMessage)}</p>`}<div class="feed-stack">${value.items.map(renderCard).join("")}</div>${complete ? feedMarkup(22) : feedMarkup(21, actionState("feed-complete"), actionLabel("feed-complete", "Mark batch studied", "Saving study…"))}${feed.state === "error" ? `<p class="state-inline" role="alert">${escapeHtml(friendly(feed.error))}</p>` : ""}</section>`;
+    return feedMarkup(46, pending.has("feed-refresh") ? feedMarkup(26, pendingSpark()) : "", classificationMessage === "" ? "" : `<p role="status">${escapeHtml(classificationMessage)}</p>`, value.items.map(renderCard).join(""), complete ? feedMarkup(22) : feedMarkup(21, actionState("feed-complete"), actionLabel("feed-complete", "Mark batch studied", "Saving study…")), feed.state === "error" ? `<p class="state-inline" role="alert">${escapeHtml(friendly(feed.error))}</p>` : "");
   }
 
   /** @param {LearningKnowledgeCard} card */
@@ -331,19 +408,19 @@ export function createLearnerController(dependencies) {
     const classification = card.sourceClassification;
     const presentation = subjectPresentation(classification?.mainSubject ?? null);
     const subject = presentation === null ? "" : ` data-subject="${escapeHtml(classification?.mainSubject ?? "")}"`;
-    const mark = presentation === null ? "" : `<svg class="subject-mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="${presentation.path}"/></svg>`;
+    const mark = presentation === null ? "" : feedMarkup(44, presentation.path);
     const hasImage = card.media !== null && !card.media.url.startsWith("/assets/fallback-media/");
-    const media = !hasImage || card.media === null ? "" : `<figure class="card-media"><button class="image-zoom" type="button" data-image-zoom aria-label="Enlarge image"><img src="${escapeHtml(card.media.url)}" alt="${escapeHtml(card.media.attribution)}" loading="lazy" decoding="async" data-associated-media="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6m-3-3v6"/></svg></button></figure>`;
+    const media = !hasImage || card.media === null ? "" : feedMarkup(42, escapeHtml(card.media.url), escapeHtml(card.media.attribution));
     const key = `remove:${card.knowledgeId}`;
-    const removal = `<details class="card-remove" data-library-details-key="${escapeHtml(key)}" ${pending.has(key) ? "open" : ""}><summary class="button quiet" data-focus-key="${escapeHtml(key)}">Remove ▾</summary><div class="removal-actions">${[["image", "Image only"], ["knowledge", "Knowledge point"]].map(([target, label]) => `<button class="button secondary" type="button" data-action="remove-learner-knowledge" data-remove-target="${target}" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${pending.has(key) || target === "image" && !hasImage ? "disabled" : ""}>${pending.has(key) ? "Removing…" : label}</button>`).join("")}</div></details>`;
-    return `<article class="learning-card"${subject} data-reveal="knowledge:${escapeHtml(card.knowledgeId)}" data-knowledge-id="${escapeHtml(card.knowledgeId)}"><div class="card-body"><div class="card-reading"><button class="button quiet" type="button" data-read-knowledge="${escapeHtml(card.knowledgeId)}" data-focus-key="read:${escapeHtml(card.knowledgeId)}" aria-pressed="false">Read</button><span data-reading-status role="status"></span></div><p class="card-knowledge">${escapeHtml(card.summary)}</p>${media}<h3 class="card-source"><a href="${escapeHtml(sourceHref(card.sourceUrl))}" rel="noreferrer">${escapeHtml(card.title)}</a></h3><p class="card-subject">${mark}${escapeHtml(presentation?.label ?? "Unclassified")}</p>${classification ? `<p>${escapeHtml(classification.topic)}</p>` : ""}<div class="card-context">${classificationEditor(card)}<details class="source-details"><summary>Source evidence</summary><p><a href="${escapeHtml(sourceHref(card.sourceUrl))}" rel="noreferrer">Open source</a></p><p>Evidence anchors: ${escapeHtml(card.evidenceAnchorIds.join(", "))}</p></details></div><div class="preference-controls"><button class="button preference-more ${preferences.get(card.knowledgeId) === "more" ? "spark-saved" : ""}" type="button" data-action="learner-preference" data-preference="more" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:more`)}>${actionLabel(`preference:${card.knowledgeId}:more`, `${sparkIcon()}${preferences.get(card.knowledgeId) === "more" ? "Preference saved" : "More like this"}`, "Saving…")}</button><button class="button preference-less" type="button" data-action="learner-preference" data-preference="less" data-knowledge-id="${escapeHtml(card.knowledgeId)}" ${actionState(`preference:${card.knowledgeId}:less`)}>${actionLabel(`preference:${card.knowledgeId}:less`, preferences.get(card.knowledgeId) === "less" ? "Preference saved" : "Less like this", "Saving…")}</button>${removal}</div></div></article>`;
+    const removal = feedMarkup(43, escapeHtml(key), pending.has(key) ? "open" : "", escapeHtml(key), [["image", "Image only"], ["knowledge", "Knowledge point"]].map(([target, label]) => feedMarkup(48, target, escapeHtml(card.knowledgeId), pending.has(key) || target === "image" && !hasImage ? "disabled" : "", pending.has(key) ? "Removing…" : label)).join(""));
+    return feedMarkup(40, subject, escapeHtml(card.knowledgeId), escapeHtml(card.knowledgeId), escapeHtml(card.knowledgeId), escapeHtml(card.knowledgeId), escapeHtml(card.summary), media, escapeHtml(sourceHref(card.sourceUrl)), escapeHtml(card.title), mark, escapeHtml(presentation?.label ?? "Unclassified"), classification ? `<p>${escapeHtml(classification.topic)}</p>` : "", classificationEditor(card), escapeHtml(sourceHref(card.sourceUrl)), escapeHtml(card.evidenceAnchorIds.join(", ")), preferences.get(card.knowledgeId) === "more" ? "spark-saved" : "", escapeHtml(card.knowledgeId), actionState(`preference:${card.knowledgeId}:more`), actionLabel(`preference:${card.knowledgeId}:more`, `${sparkIcon()}${preferences.get(card.knowledgeId) === "more" ? "Preference saved" : "More like this"}`, "Saving…"), escapeHtml(card.knowledgeId), actionState(`preference:${card.knowledgeId}:less`), actionLabel(`preference:${card.knowledgeId}:less`, preferences.get(card.knowledgeId) === "less" ? "Preference saved" : "Less like this", "Saving…"), removal);
   }
 
   /** @param {LearningKnowledgeCard} card */
   function classificationEditor(card) {
     const classification = card.sourceClassification;
-    const options = SUBJECTS.map(subject => `<option value="${subject.id}" ${subject.id === classification?.mainSubject ? "selected" : ""}>${escapeHtml(subject.label)}</option>`).join("");
-    return `<details data-library-details-key="classification-${escapeHtml(card.sourceId)}"><summary>Edit source classification</summary><form class="classification-form" data-source-classification="${escapeHtml(card.sourceId)}" data-source-revision="${card.sourceRevision}" data-revision="${card.sourceClassificationRevision}"><label>Main subject<select name="mainSubject" required><option value="" disabled ${classification === null ? "selected" : ""}>Choose a main subject</option>${options}</select></label><label>Topic<input name="topic" maxlength="120" required value="${escapeHtml(classification?.topic ?? "")}"></label><button class="button secondary" type="submit">Save source classification</button></form></details>`;
+    const options = SUBJECTS.map(subject => feedMarkup(49, subject.id, subject.id === classification?.mainSubject ? "selected" : "", escapeHtml(subject.label))).join("");
+    return feedMarkup(41, escapeHtml(card.sourceId), escapeHtml(card.sourceId), card.sourceRevision, card.sourceClassificationRevision, classification === null ? "selected" : "", options, escapeHtml(classification?.topic ?? ""));
   }
 
   /** @param {HTMLFormElement} form */
@@ -358,9 +435,10 @@ export function createLearnerController(dependencies) {
     if (review.state === "loading" && review.value === null) return feedMarkup(4);
     if (review.state === "error" && review.value === null) return statePanel("Review", friendly(review.error), "retry-learner-review");
     const value = review.value;
-    const error = review.error === null ? "" : feedMarkup(20, escapeHtml(friendly(review.error)));
+    const error = (pending.has("review-refresh") ? feedMarkup(47, pendingSpark()) : "") + (review.error === null ? "" : feedMarkup(20, escapeHtml(friendly(review.error))));
     if (value === null || value.questions.length === 0) return renderDailyGoal("review") + error + feedMarkup(2, renderReviewRefresh());
-    return feedMarkup(17, renderDailyGoal("review"), String(value.questions.length), value.questions.length === 1 ? "" : "s", renderReviewRefresh(), error, value.questions.map(renderQuestion).join(""));
+    const nextBatch = countdowns.has("batch") ? feedMarkup(31, countdownButton("batch", "Next batch", "next-review-batch")) : "";
+    return feedMarkup(17, renderDailyGoal("review"), String(value.questions.length), value.questions.length === 1 ? "" : "s", renderReviewRefresh(), error, value.questions.map(renderQuestion).join("") + nextBatch);
   }
 
   function renderReviewRefresh() {
@@ -374,8 +452,8 @@ export function createLearnerController(dependencies) {
     const attempt = attempts.get(question.questionId);
     const failure = questionErrors.get(question.questionId);
     const input = question.kind === "fill-blank"
-      ? question.blanks === null ? `<label>Answer<input type="text" name="answerText" autocomplete="off" required value="${escapeHtml(attempt?.answerText ?? "")}"></label>` : question.blanks.map((blank, index) => `<label>Blank ${index + 1}<input type="text" name="blank:${escapeHtml(blank.id)}" autocomplete="off" required value="${escapeHtml(attempt?.blanks[blank.id] ?? "")}"></label>`).join("")
-      : feedMarkup(29, escapeHtml(question.prompt), question.choices?.map(choice => `<label><input type="${question.kind === "multiple-choice" ? "checkbox" : "radio"}" name="selectedChoiceIds" value="${escapeHtml(choice.id)}" ${attempt?.selectedChoiceIds.includes(choice.id) ? "checked" : ""}><span>${escapeHtml(choice.label)}</span></label>`).join("") ?? "");
+      ? question.blanks === null ? feedMarkup(32, escapeHtml(attempt?.answerText ?? "")) : question.blanks.map((blank, index) => feedMarkup(33, index + 1, escapeHtml(blank.id), escapeHtml(attempt?.blanks[blank.id] ?? ""))).join("")
+      : feedMarkup(29, escapeHtml(question.prompt), question.choices?.map(choice => feedMarkup(34, question.kind === "multiple-choice" ? "checkbox" : "radio", escapeHtml(choice.id), attempt?.selectedChoiceIds.includes(choice.id) ? "checked" : "", escapeHtml(choice.label))).join("") ?? "");
     const completed = review.value?.batch?.status === "completed";
     const actionKey = `review-submit:${question.questionId}`;
     const feedbackKey = `review-feedback:${question.questionId}`;
@@ -383,12 +461,14 @@ export function createLearnerController(dependencies) {
     const removeKey = `review-remove:${question.questionId}`;
     const busy = questionPending(question.questionId);
     const body = answer === undefined && !completed
-      ? `<form data-learner-review data-learner-review-batch="${escapeHtml(review.value?.batch?.batchId ?? "")}" data-learner-review-question="${escapeHtml(question.questionId)}" novalidate ${busy ? 'aria-busy="true"' : ""}>${busy ? input.replaceAll("<input ", "<input disabled ") : input}<p data-answer-prompt role="alert" hidden>${question.kind === "fill-blank" ? "Fill in every blank before checking." : "Choose an answer before checking."}</p><button class="button primary" ${actionState(actionKey)} type="submit" ${busy ? "disabled" : ""}>${actionLabel(actionKey, "Check answer", "Checking…")}</button><button class="button quiet" type="button" data-action="skip-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(skipKey)} ${busy ? "disabled" : ""}>${actionLabel(skipKey, "Skip", "Loading…")}</button></form>`
-      : `<p class="answer-feedback ${answer === undefined || answer.skipped ? "" : `is-${answer.correct ? "correct" : "incorrect"}`}" role="status" tabindex="-1" data-focus-key="${escapeHtml(feedbackKey)}" ${celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : ""}>${answer?.correct ? sparkIcon() : ""}${answer === undefined ? "Answered." : answer.skipped ? "Skipped." : answer.correct ? question.kind === "fill-blank" ? `Correct (${Math.round(answer.score * 100)}%).` : "Correct." : answer.score > 0 ? `Partly correct (${Math.floor(answer.score * 100)}%).` : "Not quite."}</p>`;
-    const submitted = answer && !answer.skipped && attempt && question.kind === "fill-blank" ? `<p><strong>Your answer:</strong> ${escapeHtml(question.blanks === null ? attempt.answerText : question.blanks.map(blank => attempt.blanks[blank.id]).join(", "))}</p>` : "";
+      ? feedMarkup(35, escapeHtml(review.value?.batch?.batchId ?? ""), escapeHtml(question.questionId), busy ? 'aria-busy="true"' : "", busy ? input.replaceAll("<input ", "<input disabled ") : input, question.kind === "fill-blank" ? "Fill in every blank before checking." : "Choose an answer before checking.", actionState(actionKey), busy ? "disabled" : "", actionLabel(actionKey, "Check answer", "Checking…"), escapeHtml(question.questionId), actionState(skipKey), busy ? "disabled" : "", actionLabel(skipKey, "Skip", "Loading…"))
+      : feedMarkup(36, answer === undefined || answer.skipped ? "" : `is-${answer.correct ? "correct" : "incorrect"}`, escapeHtml(feedbackKey), celebrations.has(feedbackKey) ? `data-spark-event="${escapeHtml(feedbackKey)}"` : "", answer?.correct ? sparkIcon() : "", answer === undefined ? "Answered." : answer.skipped ? "Skipped." : answer.correct ? question.kind === "fill-blank" ? `Correct (${Math.round(answer.score * 100)}%).` : "Correct." : answer.score > 0 ? `Partly correct (${Math.floor(answer.score * 100)}%).` : "Not quite.");
+    const submitted = answer && !answer.skipped && attempt && question.kind === "fill-blank" ? feedMarkup(37, escapeHtml(question.blanks === null ? attempt.answerText : question.blanks.map(blank => attempt.blanks[blank.id]).join(", "))) : "";
     const feedback = answer === undefined || answer.correct && question.kind !== "fill-blank" ? "" : feedMarkup(27, escapeHtml(answer.correctAnswer), escapeHtml(answer.explanation), escapeHtml(question.sourceAnchorIds.join(", ")));
-    const removal = answer === undefined && !completed ? "" : `<button class="button quiet" type="button" data-action="remove-review" data-question-id="${escapeHtml(question.questionId)}" ${actionState(removeKey)} ${busy ? "disabled" : ""}>${actionLabel(removeKey, "Delete quiz", "Deleting…")}</button>`;
-    return feedMarkup(28, escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.prompt), body + submitted + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback + removal);
+    const removal = answer === undefined && !completed ? "" : feedMarkup(38, escapeHtml(question.questionId), actionState(removeKey), busy ? "disabled" : "", actionLabel(removeKey, "Delete quiz", "Deleting…"));
+    const replacement = !answer?.skipped ? "" : countdowns.has(question.questionId) ? countdownButton(question.questionId, "Replace quiz", "replace-review", question.questionId) : feedMarkup(39, escapeHtml(question.questionId), escapeHtml(question.questionId), busy ? 'disabled aria-busy="true"' : "", busy ? `${pendingSpark()}Finding a quiz…` : "Replace quiz");
+    const height = replacementHeights.get(question.questionId);
+    return feedMarkup(28, height ? `style="min-height:${height}px"` : "", escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.questionId), escapeHtml(question.prompt), body + submitted + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback + replacement + removal);
   }
 
   /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */
@@ -396,6 +476,11 @@ export function createLearnerController(dependencies) {
 
   /** @param {HTMLElement} root */
   function bind(root) {
+    unbind();
+    if (root.isConnected && root.querySelector("[data-review-question]")) {
+      countdownRoot = root;
+      countdownTimer = setTimeout(tickCountdowns, 1000);
+    }
     root.querySelectorAll("[data-spark-event]").forEach(element => {
       if (!(element instanceof HTMLElement)) return;
       const key = element.dataset.sparkEvent ?? "";
@@ -409,6 +494,7 @@ export function createLearnerController(dependencies) {
     root.querySelector("[data-action='refresh-learner-feed']")?.addEventListener("click", () => void refreshFeed());
     root.querySelector("[data-action='complete-learner-feed']")?.addEventListener("click", () => void completeFeed());
     root.querySelector("[data-action='refresh-learner-review']")?.addEventListener("click", () => void refreshReview());
+    root.querySelector("[data-action='next-review-batch']")?.addEventListener("click", () => void refreshReview(true));
     root.querySelectorAll("[data-action='learner-preference']").forEach((element) => element.addEventListener("click", () => { if (element instanceof HTMLElement) void preference(element); }));
     root.querySelectorAll("[data-action='remove-learner-knowledge']").forEach((element) => element.addEventListener("click", () => { if (element instanceof HTMLElement) void removeKnowledge(element); }));
     root.querySelectorAll("[data-image-zoom]").forEach(button => button.addEventListener("click", () => {
@@ -417,7 +503,7 @@ export function createLearnerController(dependencies) {
       const dialog = document.createElement("dialog");
       dialog.className = "image-viewer";
       dialog.setAttribute("aria-label", "Image detail");
-      dialog.innerHTML = `<form method="dialog" class="hero-actions"><button class="button secondary" type="button" data-zoom-toggle aria-pressed="false">Zoom in</button><button class="button primary">Close</button></form><div class="image-view"><img src="${escapeHtml(source.src)}" alt="${escapeHtml(source.alt)}"></div>`;
+      dialog.innerHTML = feedMarkup(45, escapeHtml(source.src), escapeHtml(source.alt));
       dialog.querySelector("[data-zoom-toggle]")?.addEventListener("click", event => {
         const zoomed = dialog.classList.toggle("is-zoomed");
         if (event.currentTarget instanceof HTMLElement) {
@@ -432,11 +518,12 @@ export function createLearnerController(dependencies) {
     }));
     root.querySelectorAll("img[data-associated-media]").forEach((element) => element.addEventListener("error", () => { element.closest(".card-media")?.remove(); }));
     root.querySelectorAll("[data-action='skip-review']").forEach(button => button.addEventListener("click", () => { if (button instanceof HTMLElement) void skipReview(button); }));
+    root.querySelectorAll("[data-action='replace-review']").forEach(button => button.addEventListener("click", () => { if (button instanceof HTMLElement) void replaceReview(button.dataset.questionId ?? ""); }));
     root.querySelectorAll("[data-action='remove-review']").forEach(button => button.addEventListener("click", () => { if (button instanceof HTMLElement) void removeReview(button); }));
     root.querySelectorAll("[data-learner-review]").forEach((element) => element.addEventListener("submit", (event) => { event.preventDefault(); if (event.currentTarget instanceof HTMLFormElement) void answerReview(event.currentTarget); }));
   }
 
-  return freeze({ loadFeed, loadReview, refreshFeed, refreshDay, renderFeed, renderReview, bind, hasDueReview: () => (review.value?.dueCount ?? 0) > 0 });
+  return freeze({ loadFeed, loadReview, refreshFeed, refreshDay, renderFeed, renderReview, bind, unbind, hasDueReview: () => (review.value?.dueCount ?? 0) > 0 });
 }
 
 export {};

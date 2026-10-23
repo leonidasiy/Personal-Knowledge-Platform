@@ -41,6 +41,22 @@ test('a padded pair stays unpublished; quality feedback repairs both variants to
  assert(!pair.multipleChoice.options.some(o=>o.text==='high'||o.text==='low'));
 });
 
+test('bundled answer repair reaches generation and every reviewer without a delimiter parser',async()=>{
+ for(const prompt of [questionGeneratorPrompt,questionEvaluatorPrompt,quizPairSchema(true).schema.properties.canonicalAnswers.description]) {
+  assert(prompt.includes('separate canonical answers, separate blanks and separate mapped correct MCQ options'));
+  assert(prompt.includes('rhythm and blues'));
+  assert(prompt.includes('narrow the question to a supported subset'));
+ }
+ const repo=repository(),generated=[];
+ const knowledge={...point,summary:'Attention uses query, key and value.'};
+ const feedback='Split query, key and value into three mapped targets and rewrite both prompts.';
+ const result=await createQuizActorCritic({maxAttempts:2,technicalRetries:false,repository:repo,now:()=> '2026-10-23T00:00:00Z',logger:()=>{},generator:{generate:async input=>{generated.push(input);return {ok:true,value:draft(input.attempt===1?['query, key and value']:['query','key','value'])};}},reviewer:{evaluate:async input=>{assert(input.rubric.includes('Reviewers must request repair for bundled distinct items'));return input.attempt===1?judgment(6,feedback):judgment(9,'Three separate concepts.');}}}).run({ownerId:'owner',runId:'run',points:[knowledge]});
+ assert.equal(result.ok,true);
+ assert.equal(repo.published.length,1);
+ assert.deepEqual(repo.published[0].draft.pairedQuiz.canonicalAnswers,['query','key','value']);
+ assert(generated[1].feedback.includes(feedback));
+});
+
 test('three distinct central concepts can still publish, and a format retry preserves the quality rubric',async()=>{
  const repo=repository();let reviews=0;
  const knowledge={...point,summary:'Self-attention uses queries to match keys, and weights the corresponding values.'};

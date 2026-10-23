@@ -201,6 +201,14 @@ export class LearningBatchGatewayClient {
     const parsed = parseSkip(result.value);
     return parsed === null ? bad() : { ok: true, value: parsed };
   }
+  /** @param {string} batchId @param {string} questionId @param {number} questionRevision @param {string} idempotencyKey @returns {Promise<Result<ReviewBatchProjection, LearningBatchGatewayFailure>>} */
+  async replaceReview(batchId, questionId, questionRevision, idempotencyKey) {
+    if (!text(batchId) || !text(questionId) || !positiveInteger(questionRevision) || !text(idempotencyKey)) return invalid("question");
+    const result = await this.#command("api/learning-generation/review-batch/replace", { batchId, questionId, questionRevision, idempotencyKey });
+    if (!result.ok) return result;
+    const parsed = parseReview(result.value);
+    return parsed.ok && result.value.questionId === questionId && parsed.value.batch?.batchId === batchId && parsed.value.batch.status === "open" && !parsed.value.batch.itemIds.includes(questionId) && parsed.value.questions.length === 1 && parsed.value.batch.itemIds.includes(parsed.value.questions[0].questionId) ? parsed : bad();
+  }
   /** @param {string} batchId @param {string} questionId @param {number} questionRevision @param {string} idempotencyKey @returns {Promise<Result<Record<string, unknown>, LearningBatchGatewayFailure>>} */
   async removeReview(batchId, questionId, questionRevision, idempotencyKey) {
     const result = await this.#command("api/learning-generation/review-batch/remove", { batchId, questionId, questionRevision, idempotencyKey });

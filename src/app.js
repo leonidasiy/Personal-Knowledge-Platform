@@ -649,16 +649,18 @@ async function loadLearnerController() {
     now: () => new Date().toISOString(),
     createId: () => crypto.randomUUID(),
     getDailyTargets: () => ({ learning: dailySettings?.dailyStudyTarget ?? 5, review: dailySettings?.dailyRecallLimit ?? 5 }),
-    onChange: (message, preferredFocusKey = null, fallbackHeadingId = null, refreshedView) => {
+    onChange: (message, preferredFocusKey = null, fallbackHeadingId = null, refreshedView, preserveScroll = false) => {
       notice = message ?? null;
       progressDirty = true;
       if (message === undefined) {
+        const position = preserveScroll ? { top: scrollY, left: scrollX } : null;
         const refreshed = refreshedView === activeView;
         render(refreshed ? `${activeView}-title` : preferredFocusKey, refreshed ? `${activeView}-title` : fallbackHeadingId);
         if (refreshed) {
           cardReader.stop();
           scrollTo({ top: 0, left: 0, behavior: "instant" });
         }
+        else if (position !== null) scrollTo({ ...position, behavior: "instant" });
       }
       else { errorMessage = null; renderMessagesOnly(); }
     },
@@ -945,6 +947,7 @@ function restoreTransientViewState(state) {
  * @param {string | null} [fallbackHeadingId]
  */
 function render(preferredFocusKey = null, fallbackHeadingId = null) {
+  learnerController?.unbind();
   cancelSparkEffects();
   cardObserver?.disconnect();
   const transientState = captureTransientViewState();

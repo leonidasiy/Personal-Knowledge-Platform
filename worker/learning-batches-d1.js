@@ -316,9 +316,11 @@ export function createLearningBatchService(dependencies) {
     const count = await database.prepare("SELECT COUNT(*) AS count FROM (SELECT question_id FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? UNION SELECT json_extract(result_json, '$.questionId') AS question_id FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-skip' AND json_extract(result_json, '$.batchId') = ?) WHERE question_id IN (SELECT value FROM json_each(?))").bind(ownerId, batch.batchId, ownerId, batch.batchId, JSON.stringify(batch.itemIds)).first();
     if (!record(count) || !nonNegativeInteger(count.count)) throw new Error("Review completion unavailable");
     if (count.count !== batch.itemIds.length) return false;
-    const closed = await database.prepare("UPDATE learner_review_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open'").bind(now, ownerId, batch.batchId).run();
+    const closed = await database.prepare("UPDATE learner_review_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open' AND question_ids_json = ?").bind(now, ownerId, batch.batchId, JSON.stringify(batch.itemIds)).run();
     if (!closed.success) throw new Error("Review completion unavailable");
-    return true;
+    if (changed(closed)) return true;
+    const current = await database.prepare("SELECT status FROM learner_review_batches WHERE owner_id = ? AND batch_id = ?").bind(ownerId, batch.batchId).first();
+    return record(current) && current.status === "completed";
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
@@ -355,6 +357,57 @@ export function createLearningBatchService(dependencies) {
       return { ok: true, value: Object.freeze(result) };
     } catch (error) {
       dependencies.logger({ event: "learning-review-skip-failure", ownerId: command.ownerId, batchId: command.batchId, failureKind: "LearningBatchPersistenceFailed" });
+      return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+    }
+  }
+
+  /** @param {unknown} command @returns {Promise<Result<unknown>>} */
+  async function replaceReview(command) {
+    if (!record(command) || !text(command.ownerId) || !text(command.batchId) || !text(command.questionId) || !positiveInteger(command.questionRevision) || !text(command.idempotencyKey)) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+    try {
+      const replay = await commandResult(command.ownerId, command.idempotencyKey);
+      if (!replay.ok) return replay;
+      if (replay.value !== null) {
+        const saved = replay.value.value;
+        return record(saved) && saved.questionId === command.questionId && record(saved.batch) && saved.batch.batchId === command.batchId ? replay.value : { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      }
+      const current = await reviewRow(command.ownerId);
+      if (!current.ok) return current;
+      const batch = current.value;
+      if (!batch || batch.batchId !== command.batchId || !batch.itemIds.includes(command.questionId)) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      const skipped = await reviewSkips(command.ownerId, batch.batchId);
+      if (!skipped.has(command.questionId)) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      const now = dependencies.now();
+      if (!iso(now)) return { ok: false, error: { kind: "LearningBatchClockInvalid" } };
+      const knowledge = await candidates(command.ownerId, now);
+      if (!knowledge.ok) return knowledge;
+      const all = await reviewCandidates(command.ownerId, knowledge.value);
+      if (!all.ok) return all;
+      const original = all.value.find(item => item.questionId === command.questionId);
+      if (!original || original.question.revision !== command.questionRevision) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      const removed = await database.prepare("SELECT json_extract(result_json, '$.questionId') AS question_id FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-remove'").bind(command.ownerId).all();
+      if (!removed.success || removed.results.some(row => !record(row) || !text(row.question_id))) throw new Error("Removed quizzes unavailable");
+      const removedIds = new Set(removed.results.map(row => /** @type {{question_id:string}} */ (row).question_id));
+      const excluded = new Set([...batch.itemIds, ...skipped.keys(), ...removedIds]);
+      const due = all.value.filter(item => !removedIds.has(item.questionId) && item.studiedAt !== null && item.dueAt !== null && Date.parse(item.dueAt) <= Date.parse(now));
+      const eligible = due.filter(item => !excluded.has(item.questionId));
+      if (!eligible.length) return { ok: false, error: { kind: "ReviewReplacementUnavailable" } };
+      const selection = selectKnowledgeBatch(eligible.map(item => ({ knowledgeId: item.questionId, sourceId: item.sourceId, questionId: item.questionId, viewCount: item.viewCount, lastAnswerCorrect: item.lastAnswerCorrect, scheduledDays: item.scheduledDays, preference: item.preference })), { count: 1, random, now });
+      if (!selection.ok) return selection;
+      const replacement = eligible.find(item => item.questionId === selection.value[0].questionId);
+      if (!replacement) throw new Error("Replacement quiz unavailable");
+      const nextBatch = { ...batch, itemIds: batch.itemIds.map(id => id === command.questionId ? replacement.questionId : id), status: "open", completedAt: null, revision: batch.revision + 1 };
+      const result = { questionId: command.questionId, batch: nextBatch, questions: [await publicQuestion(replacement, batch.batchId)], dueCount: due.length };
+      // Persist the replacement and replay together; concurrent refreshes/replacements cannot overwrite this batch.
+      const saved = await database.batch([
+        database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) SELECT ?, ?, 'review-replace', ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? AND revision = ? AND batch_id = (SELECT batch_id FROM learner_review_batches WHERE owner_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1))").bind(command.ownerId, command.idempotencyKey, JSON.stringify(result), now, command.ownerId, batch.batchId, batch.revision, command.ownerId),
+        database.prepare("UPDATE learner_review_batches SET question_ids_json = ?, status = 'open', completed_at = NULL, revision = revision + 1 WHERE owner_id = ? AND batch_id = ? AND revision = ? AND EXISTS (SELECT 1 FROM learner_batch_commands WHERE owner_id = ? AND idempotency_key = ? AND command_kind = 'review-replace')").bind(JSON.stringify(nextBatch.itemIds), command.ownerId, batch.batchId, batch.revision, command.ownerId, command.idempotencyKey),
+      ]);
+      if (!saved.every(changed)) return { ok: false, error: { kind: "ReviewAnswerNotAllowed" } };
+      dependencies.logger({ event: "learning-review-replaced", ownerId: command.ownerId, batchId: batch.batchId });
+      return { ok: true, value: result };
+    } catch {
+      dependencies.logger({ event: "learning-review-replace-failure", ownerId: command.ownerId, batchId: command.batchId, failureKind: "LearningBatchPersistenceFailed" });
       return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
     }
   }
@@ -776,6 +829,7 @@ export function createLearningBatchService(dependencies) {
     listKnowledge,
     answerReview,
     skipReview,
+    replaceReview,
     removeReview,
     setPreference,
     removeKnowledge,

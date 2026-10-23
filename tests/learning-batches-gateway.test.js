@@ -232,3 +232,17 @@ Deno.test("Delete quiz validates the exact question acknowledgement", async () =
     assertEquals((await gateway.removeReview("review:a", "q1", 1, "remove:q1")).ok, expected);
   }
 });
+
+Deno.test("Replacement validates the slot, answer-hidden question and batch identity", async () => {
+  const batch = { batchId: "review:a", learningDay: "2026-10-23", status: "open", itemIds: ["new"], revision: 2, createdAt: "2026-10-23T00:00:00Z", completedAt: null };
+  const question = { questionId: "new", knowledgeId: "k", title: "Synthetic source", prompt: "The home note is ____.", kind: "fill-blank", choices: null, blanks: [{ id: "blank-1" }], sourceAnchorIds: ["a"], revision: 1 };
+  const valid = { questionId: "old", batch, questions: [question], dueCount: 2 };
+  for (const [value, expected] of [[valid, true], [{ ...valid, questionId: "other" }, false], [{ ...valid, batch: { ...batch, batchId: "other" } }, false], [{ ...valid, questions: [] }, false], [{ ...valid, batch: { ...batch, itemIds: ["old"] } }, false], [{ ...valid, questions: [{ ...question, acceptedAnswers: ["tonic"] }] }, false]]) {
+    const gateway = new LearningBatchGatewayClient({ fetch: async (input, init) => {
+      assertEquals(String(input).endsWith("/review-batch/replace"), true);
+      assertEquals(JSON.stringify(JSON.parse(String(init?.body))), JSON.stringify({ batchId: "review:a", questionId: "old", questionRevision: 1, idempotencyKey: "replace:old" }));
+      return response({ result: value });
+    }, baseUrl: "https://app.example.test/", timeoutMs: 1000 });
+    assertEquals((await gateway.replaceReview("review:a", "old", 1, "replace:old")).ok, expected);
+  }
+});

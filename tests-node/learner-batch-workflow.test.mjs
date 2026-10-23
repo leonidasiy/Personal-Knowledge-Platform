@@ -411,3 +411,82 @@ test('Delete quiz requires an answer or skip and preserves the other quiz type, 
     } finally { f.db.close(); }
   }
 });
+
+test('replacing a skipped quiz preserves its slot, answers, schedules and reload state with idempotent replay', async () => {
+  const f = fixture(5);
+  try {
+    await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+    const review = f.value(await f.service.loadReview('owner', f.day()));
+    const question = review.questions[2];
+    f.value(await f.answer(review.batch, review.questions[0]));
+    f.value(await f.skip(review.batch, question));
+    const history = f.db.prepare('SELECT * FROM learner_review_answers').all();
+    const schedule = f.db.prepare('SELECT * FROM learner_question_state').all();
+    const replace = overrides => f.service.replaceReview({ ownerId: 'owner', batchId: review.batch.batchId, questionId: question.questionId, questionRevision: question.revision, idempotencyKey: 'replace:first', ...overrides });
+    for (const overrides of [{ ownerId: 'other' }, { questionId: review.questions[1].questionId }, { questionRevision: 99 }, { batchId: 'missing' }, { idempotencyKey: '' }]) assert.equal((await replace(overrides)).ok, false);
+    const replaced = f.value(await replace());
+    assert.equal(replaced.questions.length, 1);
+    const replacement = replaced.questions[0];
+    assert(!review.batch.itemIds.includes(replacement.questionId));
+    assert.equal('correctChoiceIds' in replacement, false);
+    assert.equal('acceptedAnswers' in replacement, false);
+    assert.deepEqual(replaced.batch.itemIds, review.batch.itemIds.map(id => id === question.questionId ? replacement.questionId : id));
+    assert.deepEqual(f.value(await replace()), replaced, 'same command returns the same random replacement');
+    assert.equal((await replace({ idempotencyKey: 'replace:other' })).ok, false, 'a removed slot cannot replace a second time');
+    assert.deepEqual(f.db.prepare('SELECT * FROM learner_review_answers').all(), history);
+    assert.deepEqual(f.db.prepare('SELECT * FROM learner_question_state').all(), schedule);
+    const reloaded = f.value(await f.service.loadReview('owner', f.day()));
+    assert.deepEqual(reloaded.batch, replaced.batch);
+    assert(!reloaded.questions.some(q => q.questionId === question.questionId));
+    assert(reloaded.questions.some(q => q.questionId === replacement.questionId));
+    assert.deepEqual(reloaded.skipped, []);
+    f.value(await f.skip(replaced.batch, replacement));
+    const next = f.value(await f.service.replaceReview({ ownerId: 'owner', batchId: replaced.batch.batchId, questionId: replacement.questionId, questionRevision: replacement.revision, idempotencyKey: 'replace:second' }));
+    assert.notEqual(next.questions[0].questionId, question.questionId, 'previously revealed cards cannot reappear in this batch');
+  } finally { f.db.close(); }
+});
+
+test('replacement reopens a skipped completed batch, excludes deleted and unavailable quizzes, and rejects superseded batches', async () => {
+  const f = fixture(5);
+  try {
+    await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+    const review = f.value(await f.service.loadReview('owner', f.day()));
+    for (const question of review.questions) f.value(await f.skip(review.batch, question));
+    const question = review.questions[0];
+    const command = { ownerId: 'owner', batchId: review.batch.batchId, questionId: question.questionId, questionRevision: question.revision, idempotencyKey: 'replace:completed' };
+    const replaced = f.value(await f.service.replaceReview(command));
+    assert.equal(replaced.batch.status, 'open');
+    assert.equal(replaced.batch.completedAt, null);
+    const replaySkip = f.value(await f.skip(review.batch, review.questions[1]));
+    assert.equal(replaySkip.completed, false, 'remaining skips do not prematurely complete the replacement');
+    const available = f.value(await f.service.loadReview('owner', f.day()));
+    const spare = available.questions.find(q => q.questionId === replaced.questions[0].questionId);
+    f.value(await f.skip(available.batch, spare));
+    f.db.prepare("UPDATE learner_knowledge_state SET due_at = '2099-01-01T00:00:00.000Z'").run();
+    const exhausted = await f.service.replaceReview({ ...command, questionId: spare.questionId, idempotencyKey: 'replace:exhausted' });
+    assert.equal(exhausted.error.kind, 'ReviewReplacementUnavailable');
+    assert.deepEqual(f.value(await f.service.loadReview('owner', f.day())).batch.itemIds, available.batch.itemIds);
+    f.db.prepare("UPDATE learner_knowledge_state SET due_at = '2026-01-01T00:00:00.000Z'").run();
+    const refreshed = f.value(await f.service.loadReview('owner', f.day(), true));
+    assert.notEqual(refreshed.batch.batchId, review.batch.batchId);
+    assert.equal((await f.service.replaceReview({ ...command, questionId: spare.questionId, idempotencyKey: 'replace:stale' })).ok, false);
+  } finally { f.db.close(); }
+});
+
+test('concurrent replacements cannot overwrite another slot or create duplicate replacement commands', async () => {
+  const f = fixture(5);
+  try {
+    await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+    const review = f.value(await f.service.loadReview('owner', f.day()));
+    const original = review.questions[0];
+    f.value(await f.skip(review.batch, original));
+    const command = { ownerId: 'owner', batchId: review.batch.batchId, questionId: original.questionId, questionRevision: original.revision, idempotencyKey: 'replace:race' };
+    const results = await Promise.all([f.service.replaceReview(command), f.service.replaceReview({ ...command, idempotencyKey: 'replace:race-other' })]);
+    assert.equal(results.filter(result => result.ok).length, 1);
+    assert.equal(f.db.prepare("SELECT COUNT(*) n FROM learner_batch_commands WHERE command_kind='review-replace'").get().n, 1);
+    const reloaded = f.value(await f.service.loadReview('owner', f.day()));
+    assert.equal(new Set(reloaded.batch.itemIds).size, 5);
+    assert.deepEqual(reloaded.batch.itemIds.slice(1), review.batch.itemIds.slice(1));
+    assert(!reloaded.batch.itemIds.includes(original.questionId));
+  } finally { f.db.close(); }
+});
