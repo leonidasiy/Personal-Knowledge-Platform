@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createLearningBatchService } from '../worker/learning-batches-d1.js';
 import { createJevAnswerGrader, JEV_GRADER_CONFIGURATION } from '../worker/jev-answer-grader.js';
 
-function fixture(count = 8) {
+function fixture(count = 8, random = () => 0.3) {
   const db = new DatabaseSync(':memory:');
   for (const file of readdirSync('worker/migrations').filter(file => file.endsWith('.sql')).sort()) db.exec(readFileSync(`worker/migrations/${file}`, 'utf8'));
   let clock = '2026-10-18T00:00:00.000Z', probability = 0.7, unavailable = false;
@@ -31,7 +31,7 @@ function fixture(count = 8) {
     db.prepare('INSERT INTO learning_generation_tasks VALUES(?,?,?,?,?,?,?,?,?)').run('owner', generationId, taskId, 1, knowledgeId, 'v1', 'published', 1, JSON.stringify(task));
     db.prepare('INSERT INTO knowledge_workflow_quizzes VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run('owner', `quiz-${index}`, 'run', knowledgeId, 'source', 1, `quiz-hash-${index}`, '{}', 9, 1, 'published', clock);
   }
-  const service = createLearningBatchService({ database, now: () => clock, random: () => 0.3, logger() {}, semanticGrader: async command => {
+  const service = createLearningBatchService({ database, now: () => clock, random, logger() {}, semanticGrader: async command => {
     await beforeGrade();
     const result = await grader.grade(command);
     return result.ok ? { ok: true, value: result.value.probabilities } : result;
@@ -488,5 +488,108 @@ test('concurrent replacements cannot overwrite another slot or create duplicate 
     assert.equal(new Set(reloaded.batch.itemIds).size, 5);
     assert.deepEqual(reloaded.batch.itemIds.slice(1), review.batch.itemIds.slice(1));
     assert(!reloaded.batch.itemIds.includes(original.questionId));
+  } finally { f.db.close(); }
+});
+
+test('one success leaves only its partner due; both successes wait for the next interval and another Feed study', async () => {
+  const f = fixture(1);
+  try {
+    const feed = f.value(await f.service.loadFeed('owner', f.day()));
+    assert.equal(feed.items.length, 1, 'A small due pool must not wait for five cards');
+    await f.complete(feed.batch);
+    const initial = f.value(await f.service.loadReview('owner', f.day()));
+    const choice = initial.questions.find(q => q.kind === 'single-choice');
+    f.value(await f.answer(initial.batch, choice));
+    assert.equal(f.db.prepare('SELECT scheduled_days FROM learner_knowledge_state').get().scheduled_days, 0);
+    let pending = f.value(await f.service.loadReview('owner', f.day(), true));
+    assert.equal(pending.dueCount, 1);
+    assert.deepEqual(pending.questions.map(q => q.kind), ['fill-blank']);
+    f.setProbability(0);
+    assert.equal(f.value(await f.answer(pending.batch, pending.questions[0])).correct, false);
+    assert.equal(f.db.prepare('SELECT scheduled_days FROM learner_knowledge_state').get().scheduled_days, 0);
+    pending = f.value(await f.service.loadReview('owner', f.day(), true));
+    assert.equal(pending.dueCount, 1);
+    f.setProbability(1);
+    f.value(await f.answer(pending.batch, pending.questions[0]));
+    assert.equal(f.db.prepare('SELECT scheduled_days FROM learner_knowledge_state').get().scheduled_days, 1);
+    assert.equal(f.value(await f.service.loadReview('owner', f.day(), true)).dueCount, 0);
+    assert.equal(f.value(await f.service.loadFeed('owner', f.day(), true)).items.length, 0);
+    assert.equal((await f.answer(initial.batch, choice, { idempotencyKey: 'stale-success' })).ok, false);
+    f.setClock('2026-10-19T00:00:00.000Z');
+    assert.equal(f.value(await f.service.loadReview('owner', f.day(), true)).dueCount, 0, 'Elapsed time alone cannot bypass Feed');
+    const repeat = f.value(await f.service.loadFeed('owner', f.day(), true));
+    assert.equal(repeat.items[0].knowledgeId, choice.knowledgeId);
+    assert.equal(repeat.items[0].questionLocked, true);
+    await f.complete(repeat.batch);
+    pending = f.value(await f.service.loadReview('owner', f.day(), true));
+    assert.equal(pending.dueCount, 2);
+    f.value(await f.answer(pending.batch, pending.questions[0]));
+    assert.equal(f.db.prepare('SELECT scheduled_days FROM learner_knowledge_state').get().scheduled_days, 1);
+    f.value(await f.answer(pending.batch, pending.questions[1]));
+    assert.equal(f.db.prepare('SELECT scheduled_days FROM learner_knowledge_state').get().scheduled_days, 2);
+    assert.equal(f.db.prepare('SELECT due_at FROM learner_knowledge_state').get().due_at, '2026-10-21T00:00:00.000Z');
+  } finally { f.db.close(); }
+});
+
+test('wrong answers at a longer interval neither demote nor postpone the remaining quiz', async () => {
+  const f = fixture(1);
+  try {
+    await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+    f.db.prepare('UPDATE learner_knowledge_state SET scheduled_days = 8').run();
+    let review = f.value(await f.service.loadReview('owner', f.day(), true));
+    const choice = review.questions.find(q => q.kind === 'single-choice');
+    f.value(await f.answer(review.batch, choice, { selectedChoiceIds: ['b'] }));
+    assert.equal(f.db.prepare('SELECT scheduled_days FROM learner_knowledge_state').get().scheduled_days, 8);
+    review = f.value(await f.service.loadReview('owner', f.day(), true));
+    assert.equal(review.dueCount, 2);
+    f.value(await f.answer(review.batch, review.questions.find(q => q.kind === 'single-choice')));
+    review = f.value(await f.service.loadReview('owner', f.day(), true));
+    assert.equal(review.dueCount, 1);
+    assert.equal(review.questions[0].kind, 'fill-blank');
+    f.value(await f.service.setPreference({ownerId:'owner',knowledgeId:choice.knowledgeId,choice:'more',idempotencyKey:'more'}));
+    assert.equal(f.db.prepare('SELECT scheduled_days FROM learner_knowledge_state').get().scheduled_days, 4);
+    review = f.value(await f.service.loadReview('owner', f.day(), true));
+    assert.equal(review.dueCount, 1, 'Preference preserves success in the current round');
+  } finally { f.db.close(); }
+});
+
+test('concurrent sibling successes promote once and stale refreshed batches cannot submit again', async () => {
+  const f = fixture(1);
+  try {
+    await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+    const review = f.value(await f.service.loadReview('owner', f.day(), true));
+    const old = f.value(await f.service.loadReview('owner', f.day(), true));
+    const fill = review.questions.find(q => q.kind === 'fill-blank');
+    const choice = review.questions.find(q => q.kind === 'single-choice');
+    f.setBeforeGrade(async () => { f.value(await f.answer(review.batch, choice)); });
+    f.value(await f.answer(review.batch, fill));
+    assert.equal(f.db.prepare('SELECT scheduled_days FROM learner_knowledge_state').get().scheduled_days, 1);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM learner_review_answers').get().n, 2);
+    assert.equal((await f.answer(old.batch, choice)).ok, false);
+  } finally { f.db.close(); }
+});
+
+
+test('Feed keeps its view-count bias while frequently viewed eligible cards can still be drawn', async () => {
+  let random = 0.15;
+  const f = fixture(6, () => random);
+  try {
+    await f.complete(f.value(await f.service.loadFeed('owner', f.day())).batch);
+    f.db.exec("UPDATE learner_knowledge_state SET view_count = 0; UPDATE learner_knowledge_state SET view_count = 20 WHERE knowledge_id = 'knowledge-0'");
+    let feed = f.value(await f.service.loadFeed('owner', f.day(), true));
+    assert.equal(feed.items[0].knowledgeId, 'knowledge-1', 'The weighted draw favors less-viewed cards');
+    random = 0;
+    feed = f.value(await f.service.loadFeed('owner', f.day(), true));
+    assert.equal(feed.items[0].knowledgeId, 'knowledge-0', 'A frequently viewed due card still has positive probability');
+  } finally { f.db.close(); }
+});
+
+
+test('Feed candidate pool includes knowledge beyond the former first-thousand cutoff', async () => {
+  const f = fixture(1001);
+  try {
+    const candidates = f.value(await f.service.listCandidates('owner', '2026-10-18T00:00:00.000Z'));
+    assert.equal(candidates.length, 1001);
+    assert(candidates.some(candidate => candidate.knowledgeId === 'knowledge-1000'));
   } finally { f.db.close(); }
 });

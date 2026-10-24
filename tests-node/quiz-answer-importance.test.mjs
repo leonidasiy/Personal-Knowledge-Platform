@@ -91,3 +91,11 @@ test('focused importance judgments cover every target and any weak target blocks
  assert.equal(normalizeQuizAnswerImportance({...valid,extra:true},answers).ok,false);
  const positive=normalizeQuizAnswerImportance({targets:['query','key','value'].map(answer=>({answer,important:true,reason:'A distinct attention vector role.'})),feedback:'Each target is central.'},['query','key','value']);assert(positive.ok&&positive.value.passed);
 });
+
+test('visual answerability is required at first generation, schema guidance and review', () => {
+  for (const prompt of [questionGeneratorPrompt, questionEvaluatorPrompt, quizPairSchema(true).schema.properties.canonicalAnswers.description]) {
+    assert(prompt.includes('Prefer a self-contained verbal question'));
+    assert(prompt.includes('Only when learningImageAvailable is true'));
+    assert(prompt.includes('Reviewers must reject missing visual context'));
+  }
+});

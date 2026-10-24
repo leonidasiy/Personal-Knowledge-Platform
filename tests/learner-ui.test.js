@@ -577,3 +577,13 @@ Deno.test("empty quiz answers show an inline prompt without submitting or losing
     for (const [key, descriptor] of Object.entries(originals)) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
   }
 });
+
+Deno.test("Review displays the knowledge point image with the same zoom controls as Feed", async () => {
+  const media = { assetId: "diagram", kind: "image", url: "/api/learning-media?assetId=diagram&variant=feed", attribution: "Associated source diagram" };
+  const controller = createLearnerController({ fetch: async () => response({ result: { ...review, questions: review.questions.map(question => ({ ...question, media })) } }), baseUrl: "https://app.example.test/", timeoutMs: 1000, escapeHtml: value => value, now: () => "2026-09-01T12:00:00.000Z", createId: () => "test", onChange: () => {} });
+  await controller.loadReview();
+  const html = controller.renderReview();
+  assert(html.includes('data-image-zoom') && html.includes('data-associated-media="true"'), "Review uses Feed's image viewer controls");
+  assert(html.includes(media.url) && html.includes(media.attribution), "The bound image and attribution render with the quiz");
+  assert(html.includes('data-remove-target="image"'), "Review can remove the image while keeping the quizzes");
+});

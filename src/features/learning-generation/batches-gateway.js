@@ -11,7 +11,7 @@ import { isSubjectId } from "../knowledge-subjects/public.js";
 /** @typedef {{ readonly id: string, readonly kind: "single-choice" | "multiple-choice", readonly prompt: string, readonly choices: readonly { readonly id: string, readonly label: string }[], readonly blanks: null }} LearningReviewChoiceVariant */
 /** @typedef {{ readonly id: string, readonly kind: "fill-blank", readonly prompt: string, readonly choices: null, readonly blanks: readonly { readonly id: string }[] }} LearningReviewFillBlankVariant */
 /** @typedef {LearningReviewChoiceVariant | LearningReviewFillBlankVariant} LearningReviewVariant */
-/** @typedef {{ readonly questionId: string, readonly knowledgeId: string, readonly title: string, readonly prompt: string, readonly kind: string, readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly blanks: readonly { readonly id: string }[] | null, readonly pairedVariants: readonly [LearningReviewChoiceVariant, LearningReviewFillBlankVariant] | readonly [LearningReviewFillBlankVariant, LearningReviewChoiceVariant] | null, readonly sourceAnchorIds: readonly string[], readonly revision: number }} LearningReviewQuestion */
+/** @typedef {{ readonly questionId: string, readonly knowledgeId: string, readonly media: LearningKnowledgeCard["media"], readonly title: string, readonly prompt: string, readonly kind: string, readonly choices: readonly { readonly id: string, readonly label: string }[] | null, readonly blanks: readonly { readonly id: string }[] | null, readonly pairedVariants: readonly [LearningReviewChoiceVariant, LearningReviewFillBlankVariant] | readonly [LearningReviewFillBlankVariant, LearningReviewChoiceVariant] | null, readonly sourceAnchorIds: readonly string[], readonly revision: number }} LearningReviewQuestion */
 /** @typedef {{ readonly correct: boolean, readonly score: number, readonly completed: boolean, readonly nextDueAt: string, readonly feedback: { readonly explanation: string, readonly correctAnswer: string, readonly components: readonly { readonly id: string, readonly correct: boolean, readonly correctAnswer: string }[] } }} LearningReviewAnswer */
 /** @typedef {{ readonly questionId: string, readonly completed: boolean, readonly feedback: { readonly explanation: string, readonly correctAnswer: string } }} LearningReviewSkip */
 /** @typedef {{ readonly batch: LearningBatchProjection | null, readonly questions: readonly LearningReviewQuestion[], readonly dueCount: number, readonly skipped: readonly LearningReviewSkip[] }} ReviewBatchProjection */
@@ -46,8 +46,13 @@ function parseCard(value) {
   const sourceClassification = value.sourceClassification === null ? null : record(value.sourceClassification) && isSubjectId(value.sourceClassification.mainSubject) && typeof value.sourceClassification.topic === "string" && value.sourceClassification.topic.trim() === value.sourceClassification.topic && value.sourceClassification.topic.length >= 1 && value.sourceClassification.topic.length <= 120 && !/[<>\x00-\x1f\x7f]/u.test(value.sourceClassification.topic) ? freeze({ mainSubject: value.sourceClassification.mainSubject, topic: value.sourceClassification.topic }) : undefined;
   if (sourceClassification === undefined || (sourceClassification === null && sourceClassificationRevision !== 0)) return null;
   const sourceUrl = /** @type {string} */ (value.sourceUrl);
-  const media = value.media === null ? null : record(value.media) && text(value.media.assetId) && text(value.media.kind) && text(value.media.url) && text(value.media.attribution) && (value.media.purpose === undefined || value.media.purpose === "illustration" || value.media.purpose === "evidence") ? freeze({ assetId: value.media.assetId, kind: value.media.kind, url: value.media.url, attribution: value.media.attribution, ...(value.media.purpose === undefined ? {} : { purpose: /** @type {"illustration" | "evidence"} */ (value.media.purpose) }) }) : undefined;
+  const media = parseMedia(value.media);
   return media === undefined ? null : freeze({ knowledgeId: value.knowledgeId, sourceId: value.sourceId, sourceRevision, questionId: value.questionId, title: value.title, summary: value.summary, sourceUrl, evidenceAnchorIds: freeze([...value.evidenceAnchorIds]), media, questionLocked: value.questionLocked, sourceClassification, sourceClassificationRevision });
+}
+
+/** @param {unknown} value @returns {LearningKnowledgeCard["media"] | undefined} */
+function parseMedia(value) {
+  return value === null ? null : record(value) && text(value.assetId) && text(value.kind) && text(value.url) && text(value.attribution) && (value.purpose === undefined || value.purpose === "illustration" || value.purpose === "evidence") ? freeze({ assetId: value.assetId, kind: value.kind, url: value.url, attribution: value.attribution, ...(value.purpose === undefined ? {} : { purpose: /** @type {"illustration" | "evidence"} */ (value.purpose) }) }) : undefined;
 }
 
 /** @param {unknown} value @returns {LearningReviewQuestion | null} */
@@ -56,8 +61,9 @@ function parseQuestion(value) {
   if (["explanation", "correctChoiceIds", "acceptedAnswers", "canonicalAnswers", "correctAnswer", "blankId", "isCorrect"].some((key) => Object.hasOwn(value, key))) return null;
   const choices = value.choices === null ? null : Array.isArray(value.choices) && value.choices.length > 0 && value.choices.every((choice) => record(choice) && exactKeys(choice, ["id", "label"]) && text(choice.id) && text(choice.label)) ? freeze(value.choices.map((choice) => freeze({ id: /** @type {string} */ (choice.id), label: /** @type {string} */ (choice.label) }))) : undefined;
   const blanks = value.blanks === undefined || value.blanks === null ? null : Array.isArray(value.blanks) && value.blanks.length >= 1 && value.blanks.length <= 4 && value.blanks.every((blank, index) => record(blank) && exactKeys(blank, ["id"]) && blank.id === `blank-${index + 1}`) ? freeze(value.blanks.map((blank) => freeze({ id: /** @type {string} */ (blank.id) }))) : undefined;
+  const media = parseMedia(value.media ?? null);
   const pairedVariants = value.pairedVariants === undefined || value.pairedVariants === null ? null : parsePairedVariants(value.pairedVariants);
-  return choices === undefined || blanks === undefined || pairedVariants === undefined ? null : freeze({ questionId: value.questionId, knowledgeId: value.knowledgeId, title: value.title, prompt: value.prompt, kind: value.kind, choices, blanks, pairedVariants, sourceAnchorIds: freeze([...value.sourceAnchorIds]), revision: value.revision });
+  return choices === undefined || blanks === undefined || pairedVariants === undefined || media === undefined ? null : freeze({ media, questionId: value.questionId, knowledgeId: value.knowledgeId, title: value.title, prompt: value.prompt, kind: value.kind, choices, blanks, pairedVariants, sourceAnchorIds: freeze([...value.sourceAnchorIds]), revision: value.revision });
 }
 
 /** @param {unknown} value @returns {readonly [LearningReviewChoiceVariant, LearningReviewFillBlankVariant] | readonly [LearningReviewFillBlankVariant, LearningReviewChoiceVariant] | undefined} */
@@ -67,7 +73,6 @@ function parsePairedVariants(value) {
   for (const raw of value) {
     // Public questions omit feedback until submission, just like the native projection.
     if (!record(raw) || !exactKeys(raw, ["id", "kind", "prompt", "choices", "blanks"]) || !text(raw.id) || !text(raw.prompt) || !["single-choice", "multiple-choice", "fill-blank"].includes(String(raw.kind))) return undefined;
-    if (["correctChoiceIds", "acceptedAnswers", "canonicalAnswers", "correctAnswer"].some((key) => Object.hasOwn(raw, key))) return undefined;
     if (raw.kind === "fill-blank") {
       if (raw.choices !== null || !Array.isArray(raw.blanks) || raw.blanks.length === 0) return undefined;
       const blanks = raw.blanks.map((blank) => record(blank) && exactKeys(blank, ["id"]) && text(blank.id) ? freeze({ id: blank.id }) : null);

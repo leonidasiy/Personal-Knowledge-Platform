@@ -102,7 +102,7 @@ function parseCandidate(value) {
 
 /** @param {LearnerCandidate} candidate @returns {Record<string, unknown>} */
 function publicCandidate(candidate) {
-  return { knowledgeId: candidate.knowledgeId, sourceId: candidate.sourceId, sourceRevision: candidate.sourceRevision, questionId: candidate.questionId, title: candidate.title, summary: candidate.summary, sourceUrl: candidate.sourceUrl, evidenceAnchorIds: candidate.evidenceAnchorIds, media: candidate.media, questionLocked: candidate.studiedAt === null, sourceClassification: candidate.sourceClassification, sourceClassificationRevision: candidate.sourceClassificationRevision };
+  return { knowledgeId: candidate.knowledgeId, sourceId: candidate.sourceId, sourceRevision: candidate.sourceRevision, questionId: candidate.questionId, title: candidate.title, summary: candidate.summary, sourceUrl: candidate.sourceUrl, evidenceAnchorIds: candidate.evidenceAnchorIds, media: candidate.media, questionLocked: candidate.studiedAt === null || candidate.dueAt !== null && Date.parse(candidate.studiedAt) < Date.parse(candidate.dueAt), sourceClassification: candidate.sourceClassification, sourceClassificationRevision: candidate.sourceClassificationRevision };
 }
 /** @param {LearnerCandidate} candidate @param {string} batchId @returns {Promise<Record<string, unknown>>} */
 async function publicQuestion(candidate, batchId) {
@@ -115,7 +115,7 @@ async function publicQuestion(candidate, batchId) {
     }));
     choices = Object.freeze(ranked.sort((a, b) => a.rank.localeCompare(b.rank)).map(item => item.choice));
   }
-  return { questionId: candidate.questionId, knowledgeId: candidate.knowledgeId, title: candidate.title, prompt: candidate.question.prompt, kind: candidate.question.kind, choices, blanks: candidate.question.blanks?.map((blank) => ({ id: blank.id })) ?? null, pairedVariants: candidate.question.pairedVariants?.map((variant) => ({ id: variant.id, kind: variant.kind, prompt: variant.prompt, choices: variant.choices, blanks: variant.blanks?.map((blank) => ({ id: blank.id })) ?? null })) ?? null, sourceAnchorIds: candidate.question.sourceAnchorIds, revision: candidate.question.revision };
+  return { questionId: candidate.questionId, knowledgeId: candidate.knowledgeId, title: candidate.title, prompt: candidate.question.prompt, kind: candidate.question.kind, choices, blanks: candidate.question.blanks?.map((blank) => ({ id: blank.id })) ?? null, pairedVariants: candidate.question.pairedVariants?.map((variant) => ({ id: variant.id, kind: variant.kind, prompt: variant.prompt, choices: variant.choices, blanks: variant.blanks?.map((blank) => ({ id: blank.id })) ?? null })) ?? null, sourceAnchorIds: candidate.question.sourceAnchorIds, revision: candidate.question.revision, media: candidate.media };
 }
 
 /** @param {PublicQuestion} question @returns {string | null} */
@@ -137,8 +137,8 @@ export function createLearningBatchService(dependencies) {
   async function candidates(ownerId, now) {
     if (!text(ownerId) || !iso(now)) return { ok: false, error: { kind: "LearningBatchCommandInvalid" } };
     try {
-      const result = await database.prepare("SELECT kp.point_json, kc.classification_json, kc.revision AS classification_revision, kp.knowledge_id, kp.source_id, s.revision AS source_revision, sc.main_subject AS source_main_subject, sc.topic AS source_topic, sc.classification_revision AS source_classification_revision, t.task_json, s.title AS source_title, s.canonical_url, COALESCE(ls.view_count, 0) AS view_count, ls.last_answer_correct, COALESCE(ls.scheduled_days, 0) AS scheduled_days, ls.due_at, ls.studied_at, COALESCE(ls.preference, pf.preference, 0) AS preference, kp.run_id, (SELECT json_group_array(json_object('media_binding', eligible.binding_json, 'media_original_digest', eligible.digest, 'asset_id', eligible.asset_id, 'media_kind', eligible.kind, 'media_attribution', eligible.attribution)) FROM (SELECT ma.binding_json, ma.digest, ma.asset_id, ma.kind, ma.attribution FROM knowledge_workflow_media_assets ma WHERE ma.owner_id = kp.owner_id AND ma.knowledge_id = kp.knowledge_id AND ma.run_id = kp.run_id AND ma.source_revision = kp.source_revision AND ma.binding_json IS NOT NULL AND ma.revoked_at IS NULL AND NOT (ma.kind = 'screenshot' AND EXISTS (SELECT 1 FROM knowledge_workflow_materials captured WHERE captured.owner_id = kp.owner_id AND captured.run_id = kp.run_id AND json_extract(captured.material_json, '$.fileName') = json_extract(captured.material_json, '$.sourceUrl') || ' — captured page.pdf.pkpi')) ORDER BY ma.asset_id ASC) eligible) AS media_candidates FROM extraction_knowledge_points kp JOIN knowledge_workflow_quizzes q ON q.owner_id = kp.owner_id AND q.knowledge_id = kp.knowledge_id AND q.run_id = kp.run_id AND q.source_id = kp.source_id AND q.source_revision = kp.source_revision AND q.status = 'published' JOIN learning_generation_tasks t ON t.owner_id = q.owner_id AND t.item_id = q.knowledge_id AND t.status = 'published' JOIN library_sources s ON s.owner_id = kp.owner_id AND s.source_id = kp.source_id AND s.state = 'active' LEFT JOIN knowledge_classifications kc ON kc.owner_id = kp.owner_id AND kc.knowledge_id = kp.knowledge_id LEFT JOIN source_classifications sc ON sc.owner_id = kp.owner_id AND sc.source_id = kp.source_id LEFT JOIN learner_knowledge_state ls ON ls.owner_id = kp.owner_id AND ls.knowledge_id = kp.knowledge_id LEFT JOIN learner_preference_feedback pf ON pf.owner_id = kp.owner_id AND pf.knowledge_id = kp.knowledge_id WHERE kp.owner_id = ? AND kp.source_revision = s.revision AND json_type(kp.point_json, '$.summary') = 'text' AND length(trim(json_extract(kp.point_json, '$.summary'), char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279))) > 0 AND EXISTS (SELECT 1 FROM knowledge_workflow_runs r WHERE r.owner_id = kp.owner_id AND r.run_id = kp.run_id AND r.source_id = kp.source_id AND r.source_revision = kp.source_revision AND r.state = 'completed') ORDER BY kp.created_at ASC, kp.knowledge_id ASC LIMIT ?").bind(ownerId, MAX_CANDIDATES).all();
-      if (!result.success || !Array.isArray(result.results) || result.results.length > MAX_CANDIDATES) return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
+      const result = await database.prepare("SELECT kp.point_json, kc.classification_json, kc.revision AS classification_revision, kp.knowledge_id, kp.source_id, s.revision AS source_revision, sc.main_subject AS source_main_subject, sc.topic AS source_topic, sc.classification_revision AS source_classification_revision, t.task_json, s.title AS source_title, s.canonical_url, COALESCE(ls.view_count, 0) AS view_count, ls.last_answer_correct, COALESCE(ls.scheduled_days, 0) AS scheduled_days, ls.due_at, ls.studied_at, COALESCE(ls.preference, pf.preference, 0) AS preference, kp.run_id, (SELECT json_group_array(json_object('media_binding', eligible.binding_json, 'media_original_digest', eligible.digest, 'asset_id', eligible.asset_id, 'media_kind', eligible.kind, 'media_attribution', eligible.attribution)) FROM (SELECT ma.binding_json, ma.digest, ma.asset_id, ma.kind, ma.attribution FROM knowledge_workflow_media_assets ma WHERE ma.owner_id = kp.owner_id AND ma.knowledge_id = kp.knowledge_id AND ma.run_id = kp.run_id AND ma.source_revision = kp.source_revision AND ma.binding_json IS NOT NULL AND ma.revoked_at IS NULL AND NOT (ma.kind = 'screenshot' AND EXISTS (SELECT 1 FROM knowledge_workflow_materials captured WHERE captured.owner_id = kp.owner_id AND captured.run_id = kp.run_id AND json_extract(captured.material_json, '$.fileName') = json_extract(captured.material_json, '$.sourceUrl') || ' — captured page.pdf.pkpi')) ORDER BY ma.asset_id ASC) eligible) AS media_candidates FROM extraction_knowledge_points kp JOIN knowledge_workflow_quizzes q ON q.owner_id = kp.owner_id AND q.knowledge_id = kp.knowledge_id AND q.run_id = kp.run_id AND q.source_id = kp.source_id AND q.source_revision = kp.source_revision AND q.status = 'published' JOIN learning_generation_tasks t ON t.owner_id = q.owner_id AND t.item_id = q.knowledge_id AND t.status = 'published' JOIN library_sources s ON s.owner_id = kp.owner_id AND s.source_id = kp.source_id AND s.state = 'active' LEFT JOIN knowledge_classifications kc ON kc.owner_id = kp.owner_id AND kc.knowledge_id = kp.knowledge_id LEFT JOIN source_classifications sc ON sc.owner_id = kp.owner_id AND sc.source_id = kp.source_id LEFT JOIN learner_knowledge_state ls ON ls.owner_id = kp.owner_id AND ls.knowledge_id = kp.knowledge_id LEFT JOIN learner_preference_feedback pf ON pf.owner_id = kp.owner_id AND pf.knowledge_id = kp.knowledge_id WHERE kp.owner_id = ? AND kp.source_revision = s.revision AND json_type(kp.point_json, '$.summary') = 'text' AND length(trim(json_extract(kp.point_json, '$.summary'), char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279))) > 0 AND EXISTS (SELECT 1 FROM knowledge_workflow_runs r WHERE r.owner_id = kp.owner_id AND r.run_id = kp.run_id AND r.source_id = kp.source_id AND r.source_revision = kp.source_revision AND r.state = 'completed') ORDER BY kp.created_at ASC, kp.knowledge_id ASC").bind(ownerId).all();
+      if (!result.success || !Array.isArray(result.results)) return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
       const parsed = [];
       for (const row of result.results) {
         let projected=row;
@@ -212,7 +212,7 @@ export function createLearningBatchService(dependencies) {
 
   /** @param {string} ownerId @param {string} day @param {readonly LearnerCandidate[]} all @param {string} idempotencyKey @returns {Promise<Result<unknown>>} */
   async function createFeed(ownerId, day, all, idempotencyKey) {
-    const selection = selectKnowledgeBatch(all, { count: MAX_BATCH_SIZE, random, now: dependencies.now() });
+    const selection = selectKnowledgeBatch(all, { count: Math.min(MAX_BATCH_SIZE, all.length), random, now: dependencies.now() });
     if (!selection.ok) return selection;
     const batchId = `feed:${ownerId}:${day}:${crypto.randomUUID()}`;
     const createdAt = dependencies.now();
@@ -235,9 +235,9 @@ export function createLearningBatchService(dependencies) {
     if (!current.ok) return current;
     if (!force && current.value !== null && current.value.learningDay === day && current.value.status === "open") {
       let batch = current.value;
-      const missing = batch.itemIds.filter(id => !all.value.some(candidate => candidate.knowledgeId === id));
+      const missing = batch.itemIds.filter(id => !all.value.some(candidate => candidate.knowledgeId === id && (candidate.dueAt === null || Date.parse(candidate.dueAt) <= Date.parse(now))));
       if (missing.length > 0) {
-        const available = all.value.filter(candidate => !batch.itemIds.includes(candidate.knowledgeId));
+        const available = all.value.filter(candidate => !batch.itemIds.includes(candidate.knowledgeId) && (candidate.dueAt === null || Date.parse(candidate.dueAt) <= Date.parse(now)));
         const replacement = available.length === 0 ? { ok: /** @type {const} */ (true), value: [] } : selectKnowledgeBatch(available, { count: Math.min(missing.length, available.length), random, now });
         if (!replacement.ok) return replacement;
         const replacements = replacement.value.map(candidate => candidate.knowledgeId);
@@ -254,11 +254,12 @@ export function createLearningBatchService(dependencies) {
     if (!force && current.value !== null && current.value.status === "open" && current.value.learningDay !== day) {
       dependencies.logger({ event: "learning-feed-incomplete-day-expired", ownerId, batchId: current.value.batchId });
     }
-    if (all.value.length < MAX_BATCH_SIZE) {
+    const eligible = all.value.filter(candidate => candidate.dueAt === null || Date.parse(candidate.dueAt) <= Date.parse(now));
+    if (eligible.length === 0) {
       dependencies.logger({ event: "learning-feed-batch-deferred", ownerId, itemCount: all.value.length, failureKind: "LearningBatchInsufficientCandidates" });
       return { ok: true, value: Object.freeze({ batch: null, items: Object.freeze([]) }) };
     }
-    return createFeed(ownerId, day, all.value, `feed:${ownerId}:${day}:${force || current.value !== null ? crypto.randomUUID() : "daily"}`);
+    return createFeed(ownerId, day, eligible, `feed:${ownerId}:${day}:${force || current.value !== null ? crypto.randomUUID() : "daily"}`);
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
@@ -274,7 +275,7 @@ export function createLearningBatchService(dependencies) {
     if (batch.status === "completed") return { ok: false, error: { kind: "LearningBatchAlreadyClosed" } };
     const now = dependencies.now();
     if (!iso(now)) return { ok: false, error: { kind: "LearningBatchClockInvalid" } };
-    const statements = batch.itemIds.map((knowledgeId) => database.prepare("INSERT INTO learner_knowledge_state (owner_id, knowledge_id, source_id, view_count, last_answer_correct, scheduled_days, due_at, studied_at, review_count, preference, updated_at) SELECT ?, ?, source_id, 1, NULL, 0, ?, ?, 0, 0, ? FROM extraction_knowledge_points WHERE owner_id = ? AND knowledge_id = ? ON CONFLICT(owner_id, knowledge_id) DO UPDATE SET view_count = learner_knowledge_state.view_count + 1, studied_at = COALESCE(learner_knowledge_state.studied_at, excluded.studied_at), due_at = COALESCE(learner_knowledge_state.due_at, excluded.due_at), updated_at = excluded.updated_at").bind(input.ownerId, knowledgeId, now, now, now, input.ownerId, knowledgeId));
+    const statements = batch.itemIds.map((knowledgeId) => database.prepare("INSERT INTO learner_knowledge_state (owner_id, knowledge_id, source_id, view_count, last_answer_correct, scheduled_days, due_at, studied_at, review_count, preference, updated_at) SELECT ?, ?, source_id, 1, NULL, 0, ?, ?, 0, 0, ? FROM extraction_knowledge_points WHERE owner_id = ? AND knowledge_id = ? ON CONFLICT(owner_id, knowledge_id) DO UPDATE SET view_count = learner_knowledge_state.view_count + 1, studied_at = excluded.studied_at, due_at = COALESCE(learner_knowledge_state.due_at, excluded.due_at), updated_at = excluded.updated_at").bind(input.ownerId, knowledgeId, now, now, now, input.ownerId, knowledgeId));
     statements.push(database.prepare("UPDATE learner_feed_batches SET status = 'completed', revision = revision + 1, completed_at = ? WHERE owner_id = ? AND batch_id = ? AND status = 'open'").bind(now, input.ownerId, input.batchId));
     const result = { ownerId: input.ownerId, batchId: input.batchId, status: "completed", unlockedQuestionIds: batch.itemIds };
     statements.push(database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) VALUES (?, ?, 'feed-complete', ?, ?)").bind(input.ownerId, input.idempotencyKey, JSON.stringify(result), now));
@@ -389,10 +390,10 @@ export function createLearningBatchService(dependencies) {
       if (!removed.success || removed.results.some(row => !record(row) || !text(row.question_id))) throw new Error("Removed quizzes unavailable");
       const removedIds = new Set(removed.results.map(row => /** @type {{question_id:string}} */ (row).question_id));
       const excluded = new Set([...batch.itemIds, ...skipped.keys(), ...removedIds]);
-      const due = all.value.filter(item => !removedIds.has(item.questionId) && item.studiedAt !== null && item.dueAt !== null && Date.parse(item.dueAt) <= Date.parse(now));
+      const due = all.value.filter(item => !removedIds.has(item.questionId) && reviewEligible(item, now));
       const eligible = due.filter(item => !excluded.has(item.questionId));
       if (!eligible.length) return { ok: false, error: { kind: "ReviewReplacementUnavailable" } };
-      const selection = selectKnowledgeBatch(eligible.map(item => ({ knowledgeId: item.questionId, sourceId: item.sourceId, questionId: item.questionId, viewCount: item.viewCount, lastAnswerCorrect: item.lastAnswerCorrect, scheduledDays: item.scheduledDays, preference: item.preference })), { count: 1, random, now });
+      const selection = selectKnowledgeBatch(eligible.map(item => ({ knowledgeId: item.questionId, sourceId: item.sourceId, questionId: item.questionId, viewCount: 0, lastAnswerCorrect: null, scheduledDays: item.scheduledDays, preference: 0 })), { count: 1, random, now });
       if (!selection.ok) return selection;
       const replacement = eligible.find(item => item.questionId === selection.value[0].questionId);
       if (!replacement) throw new Error("Replacement quiz unavailable");
@@ -434,12 +435,19 @@ export function createLearningBatchService(dependencies) {
       }
       return { ok: true, value: separated.map(candidate => {
         const state = states.get(candidate.questionId);
-        return state === undefined ? candidate : { ...candidate, scheduledDays: state.scheduled_days, dueAt: state.due_at, lastAnswerCorrect: state.last_answer_correct === null ? null : state.last_answer_correct === 1 };
+        return { ...candidate, lastAnswerCorrect: state === undefined || state.due_at !== candidate.dueAt || state.scheduled_days !== candidate.scheduledDays || state.last_answer_correct === null ? null : state.last_answer_correct === 1 };
       }) };
     } catch (error) {
       dependencies.logger({ event: "learning-review-schedules-failure", ownerId, failureKind: "LearningBatchPersistenceFailed" });
       return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
     }
+  }
+
+  /** @param {LearnerCandidate} candidate @param {string} now */
+  function reviewEligible(candidate, now) {
+    return candidate.studiedAt !== null && candidate.dueAt !== null &&
+      Date.parse(candidate.dueAt) <= Date.parse(now) && Date.parse(candidate.studiedAt) >= Date.parse(candidate.dueAt) &&
+      (candidate.pairedQuestionId === undefined || candidate.lastAnswerCorrect !== true);
   }
 
   /** @param {string} ownerId @param {string} day @param {boolean} [force] @returns {Promise<Result<unknown>>} */
@@ -465,9 +473,9 @@ export function createLearningBatchService(dependencies) {
       const itemIds = current.value.itemIds.filter(id => !removed.has(id));
       if (itemIds.length) return hydrateReview(ownerId, { ...current.value, itemIds }, available);
     }
-    const due = available.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now()));
+    const due = available.filter((candidate) => reviewEligible(candidate, dependencies.now()));
     if (due.length < 1) return { ok: true, value: Object.freeze({ batch: null, questions: Object.freeze([]), dueCount: 0 }) };
-    const selection = selectKnowledgeBatch(due.map((candidate) => ({ knowledgeId: candidate.questionId, sourceId: candidate.sourceId, questionId: candidate.questionId, viewCount: candidate.viewCount, lastAnswerCorrect: candidate.lastAnswerCorrect, scheduledDays: candidate.scheduledDays, preference: candidate.preference })), { count: Math.min(MAX_BATCH_SIZE, due.length), random, now: dependencies.now() });
+    const selection = selectKnowledgeBatch(due.map((candidate) => ({ knowledgeId: candidate.questionId, sourceId: candidate.sourceId, questionId: candidate.questionId, viewCount: 0, lastAnswerCorrect: null, scheduledDays: candidate.scheduledDays, preference: 0 })), { count: Math.min(MAX_BATCH_SIZE, due.length), random, now: dependencies.now() });
     if (!selection.ok) return selection;
     const byId = new Map(all.value.map((candidate) => [candidate.questionId, candidate]));
     const selected = selection.value.map((candidate) => byId.get(candidate.knowledgeId)).filter((candidate) => candidate !== undefined);
@@ -508,7 +516,7 @@ export function createLearningBatchService(dependencies) {
         return { ok: false, error: { kind: "LearningBatchPersistenceFailed" } };
       }
     }
-    return { ok: true, value: Object.freeze({ batch, skipped: Object.freeze([...skipped.values()].filter(item => batch.itemIds.includes(item.questionId))), questions: Object.freeze(await Promise.all(selected.filter(candidate => !answeredIds.has(candidate.questionId)).map(candidate => publicQuestion(candidate, batch.batchId)))), dueCount: all.filter((candidate) => candidate.studiedAt !== null && candidate.dueAt !== null && Date.parse(candidate.dueAt) <= Date.parse(dependencies.now())).length }) };
+    return { ok: true, value: Object.freeze({ batch, skipped: Object.freeze([...skipped.values()].filter(item => batch.itemIds.includes(item.questionId))), questions: Object.freeze(await Promise.all(selected.filter(candidate => !answeredIds.has(candidate.questionId) && (batch.status === "completed" || skipped.has(candidate.questionId) || reviewEligible(candidate, dependencies.now()))).map(candidate => publicQuestion(candidate, batch.batchId)))), dueCount: all.filter((candidate) => reviewEligible(candidate, dependencies.now())).length }) };
   }
 
   /** @param {unknown} command @returns {Promise<Result<unknown>>} */
@@ -589,8 +597,8 @@ export function createLearningBatchService(dependencies) {
       const correct = choiceCorrect && fillCorrect;
       const now = dependencies.now();
       if (!iso(now)) return fail("LearningBatchClockInvalid");
-      const nextDays = correct ? Math.min(365, Math.max(1, candidate.scheduledDays === 0 ? 1 : candidate.scheduledDays * 2)) : 1;
-      const dueAt = new Date(Date.parse(now) + nextDays * 86_400_000).toISOString();
+      const nextDays = correct ? Math.min(365, Math.max(1, candidate.scheduledDays === 0 ? 1 : candidate.scheduledDays * 2)) : candidate.scheduledDays;
+      const dueAt = correct ? new Date(Date.parse(now) + nextDays * 86_400_000).toISOString() : candidate.dueAt;
       const correctChoiceLabels = choiceVariant.correctChoiceIds.map((id) => choiceVariant.choices?.find((choice) => choice.id === id)?.label);
       if (correctChoiceLabels.some((label) => !text(label))) return fail("LearningPairInvalid");
       const feedback = { explanation: `${choiceVariant.explanation} ${blankVariant.explanation}`, correctAnswer: `${correctChoiceLabels.join(", ")}; ${fillBlanks.map((blank) => blank.acceptedAnswers[0]).join(", ")}`, components: [{ id: choiceVariant.id, correct: choiceCorrect, correctAnswer: correctChoiceLabels.join(", ") }, ...fillBlanks.map((blank, index) => ({ id: blank.id, correct: blankCorrect[index], correctAnswer: blank.acceptedAnswers[0] }))] };
@@ -636,8 +644,11 @@ export function createLearningBatchService(dependencies) {
     }
     const now = dependencies.now();
     const correct = score >= 0.7;
-    const nextDays = correct ? Math.min(365, Math.max(1, candidate.scheduledDays === 0 ? 1 : candidate.scheduledDays * 2)) : 1;
-    const dueAt = new Date(Date.parse(now) + nextDays * 86_400_000).toISOString();
+    if (candidate.pairedQuestionId !== undefined && !reviewEligible(candidate, now)) return fail("ReviewAnswerNotAllowed");
+    const siblings = all.value.filter(item => item.pairedQuestionId === candidate.pairedQuestionId && item.knowledgeId === candidate.knowledgeId);
+    const pairComplete = correct && (candidate.pairedQuestionId === undefined || siblings.every(item => item.questionId === candidate.questionId || item.lastAnswerCorrect === true));
+    const nextDays = pairComplete ? Math.min(365, Math.max(1, candidate.scheduledDays === 0 ? 1 : candidate.scheduledDays * 2)) : candidate.scheduledDays;
+    const dueAt = pairComplete ? new Date(Date.parse(now) + nextDays * 86_400_000).toISOString() : candidate.dueAt;
     const answerText = correctAnswer(candidate.question);
     if (answerText === null) return fail("ReviewAnswerNotSupported");
     const answer = { ownerId: command.ownerId, batchId: command.batchId, questionId: command.questionId, correct, score, nextDueAt: dueAt, feedback: { explanation: candidate.question.explanation, correctAnswer: answerText, components } };
@@ -652,17 +663,46 @@ export function createLearningBatchService(dependencies) {
       database.prepare("INSERT INTO learner_batch_commands (owner_id, idempotency_key, command_kind, result_json, created_at) SELECT ?, ?, 'review-answer', ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(command.ownerId, command.idempotencyKey, JSON.stringify(answer), now, command.ownerId, command.batchId, command.questionId),
     ];
     if (candidate.pairedQuestionId !== undefined) {
-      for (const sibling of separateQuestions(knowledge.value).filter(item => item.pairedQuestionId === candidate.pairedQuestionId)) {
-        if (sibling.dueAt === null) return fail("ProgressDataInvalid");
-        statements.push(database.prepare("INSERT INTO learner_question_state (owner_id, question_id, knowledge_id, last_answer_correct, scheduled_days, due_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?) ON CONFLICT(owner_id, question_id) DO NOTHING").bind(command.ownerId, sibling.questionId, sibling.knowledgeId, sibling.lastAnswerCorrect === null ? null : sibling.lastAnswerCorrect ? 1 : 0, sibling.scheduledDays, sibling.dueAt, command.ownerId, command.batchId, command.questionId));
+      if (candidate.dueAt === null) return fail("ProgressDataInvalid");
+      // The knowledge schedule owns the round; quiz rows retain successes only in that round.
+      const accepted = "EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)";
+      const answerScope = [command.ownerId, command.batchId, command.questionId];
+      statements.splice(1, 1);
+      for (const sibling of siblings) {
+        statements.push(database.prepare(`INSERT INTO learner_question_state (owner_id, question_id, knowledge_id, last_answer_correct, scheduled_days, due_at)
+          SELECT ?, ?, ?, NULL, ?, ? WHERE ${accepted}
+          ON CONFLICT(owner_id, question_id) DO UPDATE SET last_answer_correct = NULL, scheduled_days = excluded.scheduled_days, due_at = excluded.due_at
+          WHERE learner_question_state.scheduled_days != excluded.scheduled_days OR learner_question_state.due_at != excluded.due_at`).bind(command.ownerId, sibling.questionId, candidate.knowledgeId, candidate.scheduledDays, candidate.dueAt, ...answerScope));
       }
-      statements.push(database.prepare("UPDATE learner_question_state SET last_answer_correct = ?, scheduled_days = ?, due_at = ? WHERE owner_id = ? AND question_id = ? AND EXISTS (SELECT 1 FROM learner_review_answers WHERE owner_id = ? AND batch_id = ? AND question_id = ?)").bind(correct ? 1 : 0, nextDays, dueAt, command.ownerId, command.questionId, command.ownerId, command.batchId, command.questionId));
+      statements.push(database.prepare(`UPDATE learner_question_state SET last_answer_correct = ? WHERE owner_id = ? AND question_id = ? AND ${accepted}`).bind(correct ? 1 : 0, command.ownerId, command.questionId, ...answerScope));
+      const mastered = "(SELECT COUNT(*) FROM learner_question_state WHERE owner_id = learner_knowledge_state.owner_id AND question_id IN (?, ?) AND last_answer_correct = 1) = 2";
+      const ids = siblings.map(item => item.questionId);
+      if (ids.length !== 2) return fail("LearningPairInvalid");
+      statements.push(database.prepare(`UPDATE learner_knowledge_state SET
+        last_answer_correct = CASE WHEN ${mastered} THEN 1 ELSE 0 END,
+        due_at = CASE WHEN ${mastered} THEN strftime('%Y-%m-%dT%H:%M:%fZ', julianday(?) + MIN(365, MAX(1, scheduled_days * 2))) ELSE due_at END,
+        scheduled_days = CASE WHEN ${mastered} THEN MIN(365, MAX(1, scheduled_days * 2)) ELSE scheduled_days END,
+        review_count = review_count + 1, updated_at = ?
+        WHERE owner_id = ? AND knowledge_id = ? AND due_at = ? AND scheduled_days = ? AND ${accepted}`).bind(...ids, ...ids, now, ...ids, now, command.ownerId, candidate.knowledgeId, candidate.dueAt, candidate.scheduledDays, ...answerScope));
+      statements.push(database.prepare(`UPDATE learner_question_state SET last_answer_correct = NULL,
+        scheduled_days = (SELECT scheduled_days FROM learner_knowledge_state WHERE owner_id = ? AND knowledge_id = ?),
+        due_at = (SELECT due_at FROM learner_knowledge_state WHERE owner_id = ? AND knowledge_id = ?)
+        WHERE owner_id = ? AND question_id IN (?, ?) AND EXISTS (SELECT 1 FROM learner_knowledge_state WHERE owner_id = ? AND knowledge_id = ? AND due_at > ?) AND ${accepted}`).bind(command.ownerId, candidate.knowledgeId, command.ownerId, candidate.knowledgeId, command.ownerId, ...ids, command.ownerId, candidate.knowledgeId, now, ...answerScope));
+      // Reject stale batches after promotion and duplicate successes across refreshed batches.
+      statements[0] = database.prepare(`INSERT INTO learner_review_answers (owner_id, batch_id, question_id, selected_choice_ids_json, correct, score, answered_at, knowledge_id, elapsed_days, previous_correct)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM learner_review_batches WHERE owner_id = ? AND batch_id = ? AND status = 'open')
+        AND EXISTS (SELECT 1 FROM learner_knowledge_state WHERE owner_id = ? AND knowledge_id = ? AND due_at = ? AND scheduled_days = ? AND due_at <= studied_at AND due_at <= ?)
+        AND NOT EXISTS (SELECT 1 FROM learner_question_state WHERE owner_id = ? AND question_id = ? AND due_at = ? AND scheduled_days = ? AND last_answer_correct = 1)
+        AND NOT EXISTS (SELECT 1 FROM learner_batch_commands WHERE owner_id = ? AND command_kind = 'review-skip' AND json_extract(result_json, '$.batchId') = ? AND json_extract(result_json, '$.questionId') = ?)`)
+        .bind(command.ownerId, command.batchId, command.questionId, JSON.stringify(command.selectedChoiceIds), correct ? 1 : 0, score, now, candidate.knowledgeId, elapsedDays, candidate.lastAnswerCorrect === null ? null : candidate.lastAnswerCorrect ? 1 : 0, command.ownerId, command.batchId, command.ownerId, candidate.knowledgeId, candidate.dueAt, candidate.scheduledDays, now, command.ownerId, command.questionId, candidate.dueAt, candidate.scheduledDays, command.ownerId, command.batchId, command.questionId);
     }
     const written = await database.batch(statements);
     if (written.length !== statements.length || written.some((entry) => !entry.success)) return fail("LearningBatchPersistenceFailed");
     if (!changed(written[0])) return fail("ReviewAnswerNotAllowed");
     const completed = await completeReview(command.ownerId, batch, now);
-    const result = Object.freeze({ ...answer, completed });
+    const scheduled = candidate.pairedQuestionId === undefined ? null : await database.prepare("SELECT due_at FROM learner_knowledge_state WHERE owner_id = ? AND knowledge_id = ?").bind(command.ownerId, candidate.knowledgeId).first();
+    if (candidate.pairedQuestionId !== undefined && (!record(scheduled) || !iso(scheduled.due_at))) return fail("ProgressDataInvalid");
+    const result = Object.freeze({ ...answer, nextDueAt: record(scheduled) ? scheduled.due_at : answer.nextDueAt, completed });
     const savedReplay = await database.prepare("UPDATE learner_batch_commands SET result_json = ? WHERE owner_id = ? AND idempotency_key = ?").bind(JSON.stringify(result), command.ownerId, command.idempotencyKey).run();
     if (!changed(savedReplay)) return fail("LearningBatchPersistenceFailed");
     dependencies.logger({ event: "learning-review-answer-success", ownerId: command.ownerId, batchId: command.batchId });

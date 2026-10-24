@@ -21,7 +21,8 @@ const server = createServer((req, res) => {
 });
 let browser;
 const report = { fixture: 'Synthetic quizzes and HTTP responses; no real model evaluation.', checks: [], errors: [] };
-const question = id => ({ questionId: id, knowledgeId: `knowledge:${id}`, title: 'Synthetic music source', prompt: `Question ${id}: name the home note: ____.`, kind: 'fill-blank', choices: null, blanks: [{ id: 'blank-1' }], sourceAnchorIds: ['synthetic'], revision: 1 });
+const image = { assetId: 'synthetic-diagram', kind: 'image', url: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 180"><rect width="600" height="180" fill="#eee"/><circle cx="130" cy="90" r="40" fill="#777"/><path d="M200 90H400" stroke="#333" stroke-width="4"/><circle cx="470" cy="90" r="40" fill="#555"/></svg>'), attribution: 'Synthetic source diagram' };
+const question = id => ({ media: image, questionId: id, knowledgeId: `knowledge:${id}`, title: 'Synthetic music source', prompt: `Question ${id}: name the home note: ____.`, kind: 'fill-blank', choices: null, blanks: [{ id: 'blank-1' }], sourceAnchorIds: ['synthetic'], revision: 1 });
 const batch = { batchId: 'fixture-review', learningDay: '2026-10-23', status: 'open', itemIds: ['q1','q2','q3','q4','q5'], revision: 1, createdAt: '2026-10-23T00:00:00Z', completedAt: null };
 try {
   await mkdir(output, { recursive: true });
@@ -79,6 +80,20 @@ try {
       });
       await page.goto(`${origin}/#review`);
       await page.locator('[data-review-question="q5"]').waitFor();
+      const imageButton = page.locator('[data-review-question="q1"] [data-image-zoom]');
+      await imageButton.focus();
+      await imageButton.press('Enter');
+      const viewer = page.getByRole('dialog', { name: 'Image detail' });
+      await viewer.waitFor();
+      assert.equal(await viewer.locator('img').getAttribute('src'), image.url);
+      await viewer.getByRole('button', { name: 'Zoom in' }).press('Enter');
+      assert.equal(await viewer.getByRole('button', { name: 'Zoom out' }).getAttribute('aria-pressed'), 'true');
+      await page.keyboard.press('Escape');
+      await viewer.waitFor({ state: 'detached' });
+      assert.equal(await imageButton.evaluate(node => node === document.activeElement), true);
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.screenshot({ path: resolve(output, `${theme}-images.png`), fullPage: true });
+      report.checks.push(`${theme}/${width}: bound images, keyboard open/zoom/Escape, focus restored, no horizontal overflow`);
       const card = id => page.locator(`[data-review-question="${id}"]`);
       await card('q2').locator('input').fill('unsent draft');
       await card('q3').getByRole('button', { name: 'Skip', exact: true }).click();

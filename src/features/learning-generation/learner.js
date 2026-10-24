@@ -361,13 +361,8 @@ export function createLearnerController(dependencies) {
       onChange(undefined, key);
       return;
     }
-    if (target === "image" && feed.value) {
-      feed = { state: "success", error: null, value: { ...feed.value, items: feed.value.items.map(card => card.knowledgeId === knowledgeId ? { ...card, media: null } : card) } };
-      onChange(undefined, key);
-      onChange("Image removed. Knowledge point and quizzes kept.");
-      return;
-    }
     await Promise.all([loadFeed(), loadReview()]);
+    if (target === "image") onChange("Image removed. Knowledge point and quizzes kept.");
   }
 
   /** @param {LearningBatchGatewayFailure | null} failure */
@@ -409,11 +404,16 @@ export function createLearnerController(dependencies) {
     const presentation = subjectPresentation(classification?.mainSubject ?? null);
     const subject = presentation === null ? "" : ` data-subject="${escapeHtml(classification?.mainSubject ?? "")}"`;
     const mark = presentation === null ? "" : feedMarkup(44, presentation.path);
-    const hasImage = card.media !== null && !card.media.url.startsWith("/assets/fallback-media/");
-    const media = !hasImage || card.media === null ? "" : feedMarkup(42, escapeHtml(card.media.url), escapeHtml(card.media.attribution));
+    const media = renderMedia(card.media);
+    const hasImage = media !== "";
     const key = `remove:${card.knowledgeId}`;
     const removal = feedMarkup(43, escapeHtml(key), pending.has(key) ? "open" : "", escapeHtml(key), [["image", "Image only"], ["knowledge", "Knowledge point"]].map(([target, label]) => feedMarkup(48, target, escapeHtml(card.knowledgeId), pending.has(key) || target === "image" && !hasImage ? "disabled" : "", pending.has(key) ? "Removing…" : label)).join(""));
     return feedMarkup(40, subject, escapeHtml(card.knowledgeId), escapeHtml(card.knowledgeId), escapeHtml(card.knowledgeId), escapeHtml(card.knowledgeId), escapeHtml(card.summary), media, escapeHtml(sourceHref(card.sourceUrl)), escapeHtml(card.title), mark, escapeHtml(presentation?.label ?? "Unclassified"), classification ? `<p>${escapeHtml(classification.topic)}</p>` : "", classificationEditor(card), escapeHtml(sourceHref(card.sourceUrl)), escapeHtml(card.evidenceAnchorIds.join(", ")), preferences.get(card.knowledgeId) === "more" ? "spark-saved" : "", escapeHtml(card.knowledgeId), actionState(`preference:${card.knowledgeId}:more`), actionLabel(`preference:${card.knowledgeId}:more`, `${sparkIcon()}${preferences.get(card.knowledgeId) === "more" ? "Preference saved" : "More like this"}`, "Saving…"), escapeHtml(card.knowledgeId), actionState(`preference:${card.knowledgeId}:less`), actionLabel(`preference:${card.knowledgeId}:less`, preferences.get(card.knowledgeId) === "less" ? "Preference saved" : "Less like this", "Saving…"), removal);
+  }
+
+  /** @param {LearningKnowledgeCard["media"]} media */
+  function renderMedia(media) {
+    return media === null || media.url.startsWith("/assets/fallback-media/") ? "" : feedMarkup(42, escapeHtml(media.url), escapeHtml(media.attribution));
   }
 
   /** @param {LearningKnowledgeCard} card */
@@ -468,7 +468,9 @@ export function createLearnerController(dependencies) {
     const removal = answer === undefined && !completed ? "" : feedMarkup(38, escapeHtml(question.questionId), actionState(removeKey), busy ? "disabled" : "", actionLabel(removeKey, "Delete quiz", "Deleting…"));
     const replacement = !answer?.skipped ? "" : countdowns.has(question.questionId) ? countdownButton(question.questionId, "Replace quiz", "replace-review", question.questionId) : feedMarkup(39, escapeHtml(question.questionId), escapeHtml(question.questionId), busy ? 'disabled aria-busy="true"' : "", busy ? `${pendingSpark()}Finding a quiz…` : "Replace quiz");
     const height = replacementHeights.get(question.questionId);
-    return feedMarkup(28, height ? `style="min-height:${height}px"` : "", escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.questionId), escapeHtml(question.prompt), body + submitted + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback + replacement + removal);
+    const media = renderMedia(question.media);
+    const imageRemoval = media ? feedMarkup(48, "image", escapeHtml(question.knowledgeId), actionState(`remove:${question.knowledgeId}`), "Remove image") : "";
+    return feedMarkup(28, height ? `style="min-height:${height}px"` : "", escapeHtml(question.questionId), escapeHtml(question.title), escapeHtml(question.questionId), escapeHtml(question.prompt), media + imageRemoval + body + submitted + (failure ? feedMarkup(20, escapeHtml(friendly(failure))) : ""), feedback + replacement + removal);
   }
 
   /** @param {string} title @param {string} message @param {string} action @param {"h1"|"h2"} [heading] */

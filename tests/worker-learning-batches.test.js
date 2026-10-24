@@ -65,13 +65,18 @@ function rows(count = 5) {
 }
 
 Deno.test("native paired Review projection passes the gateway without pre-answer explanations or answer keys", async () => {
-  const entries = rows().map((entry, index) => ({
-    ...entry, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z",
+  const entries = await Promise.all(rows().map(async (entry, index) => {
+    const value = JSON.parse(entry.point_json);
+    const bytes = new TextEncoder().encode(JSON.stringify({ summary: value.summary, normalizedHash: value.normalizedHash, evidenceAnchors: value.evidenceAnchors }));
+    const factHash = `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("")}`;
+    const binding = { kind: "webpage-support", purpose: "evidence", ownerId: "owner-a", runId: "run-a", sourceRevision: 1, factHash, originalDigest: "sha256:original", imageId: "diagram-a", evidence: "The bound diagram shows the relationship." };
+    return {
+    ...entry, run_id: "run-a", media_candidates: JSON.stringify([{ asset_id: "diagram-a", media_kind: "image", media_attribution: "Associated source diagram", media_binding: JSON.stringify(binding), media_original_digest: "sha256:original" }]), studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z", asset_id: "diagram-a", media_kind: "image", media_attribution: "Associated source diagram",
     task_json: JSON.stringify({ id: `task-${index}`, kind: "paired", prompt: "Recall the supported relationship.", explanation: "Post-answer feedback only.", sourceAnchorIds: [`anchor-${index}`], choices: null, correctChoiceIds: null, revision: 1, pairedVariants: [
       { id: "choice-v1", kind: "single-choice", prompt: "Choose the supported relationship.", explanation: "Post-answer choice feedback.", choices: [{ id: "a", label: "Supported" }, { id: "b", label: "Unsupported" }], correctChoiceIds: ["a"] },
       { id: "fill-v1", kind: "fill-blank", prompt: "Name the ____.", explanation: "Post-answer blank feedback.", blanks: [{ id: "blank-1", acceptedAnswers: ["tonic"] }] },
     ] }),
-  }));
+  }; }));
   const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (new Database(entries))), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
   const projected = await service.loadReview("owner-a", "2026-08-19");
   assertEquals(projected.ok, true);
@@ -82,6 +87,8 @@ Deno.test("native paired Review projection passes the gateway without pre-answer
   if (!loaded.ok) return;
   assertEquals(loaded.value.questions.length, 5);
   for (const question of loaded.value.questions) {
+    assertEquals(question.media?.assetId, "diagram-a");
+    assertEquals(question.media?.url, "/api/learning-media?assetId=diagram-a&variant=feed");
     assertEquals(question.pairedVariants, null);
     assertEquals(question.questionId.includes(":choice-v1") || question.questionId.includes(":fill-v1"), true);
     for (const variant of question.pairedVariants ?? []) for (const field of ["explanation", "correctChoiceIds", "acceptedAnswers"]) assertEquals(Object.hasOwn(variant, field), false);
@@ -180,15 +187,15 @@ Deno.test("learner D1 service accepts evidence anchors produced by the extractor
   assertEquals(projection.items.every((item) => item.evidenceAnchorIds[0].includes("#fact-")), true);
 });
 
-Deno.test("learner D1 service returns an explicit empty Feed projection when fewer than five pairs are available", async () => {
+Deno.test("learner D1 service returns all eligible Feed cards when fewer than five pairs are available", async () => {
   const database = new Database(rows(3));
   const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
   const result = await service.loadFeed("owner-a", "2026-08-19");
   assertEquals(result.ok, true);
   if (!result.ok) return;
   const projection = /** @type {{ readonly batch: unknown, readonly items: readonly unknown[] }} */ (result.value);
-  assertEquals(projection.batch, null);
-  assertEquals(projection.items.length, 0);
+  assertEquals(projection.batch !== null, true);
+  assertEquals(projection.items.length, 3);
 });
 
 Deno.test("learner D1 service returns an empty Review projection when no studied knowledge is due", async () => {
@@ -204,7 +211,7 @@ Deno.test("learner D1 service returns an empty Review projection when no studied
 });
 
 Deno.test("learner D1 review projection withholds explanations and answer keys before an attempt", async () => {
-  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
   const database = new Database(due);
   const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
   const result = await service.loadReview("owner-a", "2026-08-19");
@@ -217,7 +224,7 @@ Deno.test("learner D1 review projection withholds explanations and answer keys b
 });
 
 Deno.test("learner D1 answer returns the stored explanation and correct choice only after a valid attempt", async () => {
-  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
   const database = new Database(due);
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
   database.answerCount = 1;
@@ -225,7 +232,7 @@ Deno.test("learner D1 answer returns the stored explanation and correct choice o
   const result = await service.answerReview({ ownerId: "owner-a", batchId: "review:owner-a:2026-08-19", questionId: "task-0", selectedChoiceIds: ["choice-1"], answerText: null, blankAnswers: null, confidence: 80, idempotencyKey: "answer-1" });
   const persisted = database.written.find(s => s.query.startsWith("INSERT INTO learner_review_answers"));
   assertEquals(persisted?.query.includes("confidence"), false);
-  assertEquals(JSON.stringify(persisted?.bindings.slice(7, 10)), JSON.stringify(["knowledge-0", 1, null]));
+  assertEquals(JSON.stringify(persisted?.bindings.slice(7, 10)), JSON.stringify(["knowledge-0", 0, null]));
   assertEquals(result.ok, true);
   if (!result.ok) return;
   const answer = /** @type {{ readonly feedback: { readonly explanation: string, readonly correctAnswer: string } }} */ (result.value);
@@ -233,8 +240,8 @@ Deno.test("learner D1 answer returns the stored explanation and correct choice o
   assertEquals(answer.feedback.correctAnswer, "Correct");
 });
 
-Deno.test("multi-blank review scores each part, keeps partial review short, and hides keys before submission", async () => {
-  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
+Deno.test("multi-blank review scores each part, keeps failed recall due, and hides keys before submission", async () => {
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
   due[0].task_json = JSON.stringify({ id: "task-0", kind: "fill-blank", prompt: "A ____ resolves to the ____.", explanation: "The dominant resolves to the tonic.", sourceAnchorIds: ["anchor-0"], choices: null, correctChoiceIds: null, acceptedAnswers: null, blankId: null, blanks: [{ id: "blank-1", acceptedAnswers: ["dominant"] }, { id: "blank-2", acceptedAnswers: ["tonic"] }], revision: 1 });
   const database = new Database(due);
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
@@ -252,7 +259,7 @@ Deno.test("multi-blank review scores each part, keeps partial review short, and 
   const answer = /** @type {{ readonly score: number, readonly correct: boolean, readonly nextDueAt: string, readonly feedback: { readonly components: readonly { readonly correct: boolean }[] } }} */ (result.value);
   assertEquals(answer.score, 0.5);
   assertEquals(answer.correct, false);
-  assertEquals(answer.nextDueAt, "2026-08-20T00:00:00.000Z");
+  assertEquals(answer.nextDueAt, "2026-08-19T00:00:00.000Z");
   assertEquals(answer.feedback.components[0].correct, true);
   assertEquals(answer.feedback.components[1].correct, false);
   assertEquals(database.queries.some((query) => query.includes("INSERT INTO learner_review_answers") && query.includes("score")), true);
@@ -264,7 +271,7 @@ Deno.test("multi-blank review scores each part, keeps partial review short, and 
 });
 
 Deno.test("unavailable semantic grading leaves an uncertain fill response pending without writing an attempt", async () => {
-  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" }));
   due[0].task_json = JSON.stringify({ id: "task-0", kind: "fill-blank", prompt: "Name the target.", explanation: "The target is tonic.", sourceAnchorIds: ["anchor-0"], choices: null, correctChoiceIds: null, acceptedAnswers: ["tonic"], blankId: "blank-1", revision: 1 });
   const database = new Database(due);
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
@@ -276,7 +283,7 @@ Deno.test("unavailable semantic grading leaves an uncertain fill response pendin
 });
 
 Deno.test("legacy single-blank answers and semantic equivalents remain gradeable", async () => {
-  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z", scheduled_days: 2 }));
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z", scheduled_days: 2 }));
   due[0].task_json = JSON.stringify({ id: "task-0", kind: "fill-blank", prompt: "Name the home note.", explanation: "The tonic is the home note.", sourceAnchorIds: ["anchor-0"], choices: null, correctChoiceIds: null, acceptedAnswers: ["tonic"], blankId: "blank-1", revision: 1 });
   const database = new Database(due);
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
@@ -292,7 +299,7 @@ Deno.test("legacy single-blank answers and semantic equivalents remain gradeable
 });
 
 Deno.test("multi-select requires exact set equality and wrong selections do not extend the interval", async () => {
-  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z", scheduled_days: 2 }));
+  const due = rows().map((row) => ({ ...row, studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z", scheduled_days: 2 }));
   due[0].task_json = JSON.stringify({ id: "task-0", kind: "multiple-choice", prompt: "Which relationships hold?", explanation: "The source supports A and B.", sourceAnchorIds: ["anchor-0"], choices: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }], correctChoiceIds: ["a", "b"], acceptedAnswers: null, blankId: null, revision: 1 });
   const database = new Database(due);
   database.reviewRow = { batch_id: "review:owner-a:2026-08-19", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
@@ -304,7 +311,7 @@ Deno.test("multi-select requires exact set equality and wrong selections do not 
   const answer = /** @type {{ readonly score: number, readonly correct: boolean, readonly nextDueAt: string }} */ (result.value);
   assertEquals(answer.score, 0);
   assertEquals(answer.correct, false);
-  assertEquals(answer.nextDueAt, "2026-08-20T00:00:00.000Z");
+  assertEquals(answer.nextDueAt, "2026-08-19T00:00:00.000Z");
 });
 
 Deno.test("learner D1 deletion preserves batch and answer history while removing paired descendants", async () => {
@@ -342,7 +349,7 @@ Deno.test("learner D1 full generated-content reset preserves durable more-or-les
 
 Deno.test("reloading an open Review batch resumes only unanswered questions", async () => {
   for (const answeredRows of [[], [{ question_id: "task-0" }], [{ question_id: "task-0" }, { question_id: "task-1" }]]) {
-    const database = new Database(rows().map(row => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" })));
+    const database = new Database(rows().map(row => ({ ...row, studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" })));
     database.reviewRow = { batch_id: "review:resume", learning_day: "2026-08-19", status: "open", item_ids_json: JSON.stringify(["task-0", "task-1", "task-2"]), revision: 1, created_at: "2026-08-19T00:00:00.000Z", completed_at: null };
     database.answeredRows = answeredRows;
     const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
@@ -369,7 +376,7 @@ Deno.test("a new day replaces unfinished Feed and Review batches without erasing
       return await super.first(query, bindings);
     }
   }
-  const database = new PriorDayDatabase(rows(8).map(row => ({ ...row, studied_at: "2026-08-18T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" })));
+  const database = new PriorDayDatabase(rows(8).map(row => ({ ...row, studied_at: "2026-08-19T00:00:00.000Z", due_at: "2026-08-19T00:00:00.000Z" })));
   database.reviewRow = previous;
   const service = createLearningBatchService({ database: /** @type {import("../worker/learning-batches-d1.js").D1DatabasePort} */ (/** @type {unknown} */ (database)), now: () => "2026-08-19T00:00:00.000Z", random: () => 0.1, logger: () => {} });
   for (const load of [() => service.loadFeed("owner-a", "2026-08-19"), () => service.loadReview("owner-a", "2026-08-19")]) {
